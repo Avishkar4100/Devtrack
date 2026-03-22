@@ -140,6 +140,9 @@ process.on('unhandledRejection', (reason) => {
 
 process.on('uncaughtException', (error) => {
   logger.error(`Uncaught Exception: ${error.stack || error.message}`);
+  if (error?.code === 'EADDRINUSE') {
+    process.exit(1);
+  }
 });
 
 module.exports = { app, server, io };

@@ -101,6 +101,7 @@ const StorySchema = new mongoose.Schema(
       ref: 'Document',
     },
     labels: [String],
+    startDate: { type: Date },
     dueDate: { type: Date },
     estimatedHours: { type: Number, default: 0 },
     loggedHours: { type: Number, default: 0 },
