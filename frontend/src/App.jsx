@@ -7,22 +7,24 @@ import RegisterPage from '@/pages/Register'
 import ResetPasswordPage from '@/pages/ResetPassword'
 import AuthCallbackPage from '@/pages/AuthCallback'
 import VerifyEmailPage from '@/pages/VerifyEmail'
-import DashboardPage from '@/pages/Dashboard'
+import OverviewPage from '@/pages/Overview'
 import ProjectsPage from '@/pages/Projects'
-import ProjectDetailPage from '@/pages/ProjectDetail'
-import StoriesPage from '@/pages/Stories'
-import DocumentsPage from '@/pages/Documents'
+import ProjectWorkspacePage from '@/pages/ProjectWorkspace'
 import SettingsPage from '@/pages/Settings'
-import SprintsPage from '@/pages/Sprints'
+import InsightsPage from '@/pages/Insights'
+import WorkspacePage from '@/pages/Workspace'
+import AIPlannerPage from '@/pages/AIPlanner'
 
-const ProtectedRoute = ({ children }) => {
+const UserRoute = ({ children }) => {
   const { token } = useAuthStore()
-  return token ? children : <Navigate to="/login" replace />
+  if (!token) return <Navigate to="/login" replace />
+  return children
 }
 
 const PublicRoute = ({ children }) => {
   const { token } = useAuthStore()
-  return !token ? children : <Navigate to="/dashboard" replace />
+  if (!token) return children
+  return <Navigate to="/overview" replace />
 }
 
 export default function App() {
@@ -42,15 +44,17 @@ export default function App() {
       {/* OAuth callback — handles token from backend redirect */}
       <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
-      {/* Protected app */}
-      <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-        <Route path="dashboard" element={<DashboardPage />} />
+      {/* User application (non-admin roles only) */}
+      <Route path="/" element={<UserRoute><Layout /></UserRoute>}>
+        <Route path="overview" element={<OverviewPage />} />
         <Route path="projects" element={<ProjectsPage />} />
-        <Route path="projects/:id" element={<ProjectDetailPage />} />
-        <Route path="projects/:id/stories" element={<StoriesPage />} />
-        <Route path="projects/:id/documents" element={<DocumentsPage />} />
-        <Route path="projects/:id/sprints" element={<SprintsPage />} />
+        <Route path="projects/:id" element={<ProjectWorkspacePage />} />
+        <Route path="ai-planner" element={<AIPlannerPage />} />
+        <Route path="workspace" element={<WorkspacePage />} />
+        <Route path="progress" element={<Navigate to="/insights" replace />} />
+        <Route path="insights" element={<InsightsPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="dashboard" element={<Navigate to="/overview" replace />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

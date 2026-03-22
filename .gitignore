@@ -9,10 +9,7 @@ __pycache__/
 node_modules/
 
 # Environment files (API keys - NEVER commit these)
-.env
-.env.local
-.env.production
-.env.*.local
+
 
 # Build output
 dist/

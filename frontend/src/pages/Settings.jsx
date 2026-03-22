@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   UserCircleIcon, KeyIcon, CodeBracketIcon, LinkIcon,
   CheckCircleIcon, XCircleIcon, EyeIcon, EyeSlashIcon,
@@ -85,6 +85,24 @@ export default function SettingsPage() {
   const [jiraTestStatus, setJiraTestStatus] = useState(null)
   const [activeTab, setActiveTab] = useState('profile')
 
+  useQuery({
+    queryKey: ['auth-me-settings'],
+    queryFn: async () => (await api.get('/auth/me')).data.data,
+    onSuccess: (freshUser) => {
+      updateUser(freshUser)
+      setProfile((prev) => ({ ...prev, name: freshUser?.name || prev.name }))
+      setJira((prev) => ({
+        ...prev,
+        jiraEmail: freshUser?.jiraEmail || prev.jiraEmail,
+        jiraDomain: freshUser?.jiraDomain || prev.jiraDomain,
+      }))
+      setGithub((prev) => ({
+        ...prev,
+        githubUsername: freshUser?.githubUsername || prev.githubUsername,
+      }))
+    },
+  })
+
   const profileMutation = useMutation({
     mutationFn: (body) => api.put('/auth/profile', body),
     onSuccess: ({ data }) => { updateUser(data.data); toast.success('Profile updated!') },
@@ -92,7 +110,12 @@ export default function SettingsPage() {
 
   const integrationsMutation = useMutation({
     mutationFn: (body) => api.put('/auth/integrations', body),
-    onSuccess: ({ data }) => { updateUser(data.data); toast.success('Integration saved!') },
+    onSuccess: ({ data }) => {
+      updateUser(data.data)
+      setJira((prev) => ({ ...prev, jiraApiToken: '' }))
+      setGithub((prev) => ({ ...prev, githubToken: '' }))
+      toast.success('Integration saved!')
+    },
   })
 
   const testJiraMutation = useMutation({
@@ -212,11 +235,20 @@ export default function SettingsPage() {
                 <Field label="Jira API Token" hint="Generate at id.atlassian.com → Security → API tokens. Leave blank to keep existing.">
                   <SecretInput value={jira.jiraApiToken} onChange={e => setJira({ ...jira, jiraApiToken:e.target.value })} placeholder="Enter new API token..." name="jiraApiToken" />
                 </Field>
-                {(user?.jiraEmail || jiraTestStatus) && (
+                {(user?.jiraEmail || user?.hasJiraToken || jiraTestStatus) && (
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <StatusChip status={jiraTestStatus || 'default'} />
-                    {!jiraTestStatus && user?.jiraDomain && <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>for {user.jiraDomain}</span>}
+                    <StatusChip status={jiraTestStatus || (user?.hasJiraToken && user?.jiraEmail && user?.jiraDomain ? 'success' : 'default')} />
+                    {!jiraTestStatus && (
+                      <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>
+                        {user?.hasJiraToken ? 'API token saved' : 'API token missing'}{user?.jiraDomain ? ` for ${user.jiraDomain}` : ''}
+                      </span>
+                    )}
                   </div>
+                )}
+                {user?.jiraTokenPreview && (
+                  <Field label="Saved Jira Token (masked)">
+                    <input type="text" value={user.jiraTokenPreview} className="input" disabled style={{ opacity:0.85 }} />
+                  </Field>
                 )}
                 <div style={{ display:'flex', justifyContent:'flex-end', gap:'10px' }}>
                   <motion.button type="button" onClick={() => testJiraMutation.mutate()} disabled={testJiraMutation.isPending || !jira.jiraEmail} className="btn-secondary"
@@ -241,11 +273,18 @@ export default function SettingsPage() {
                 <Field label="Personal Access Token" hint="Needs repo and read:user scopes. Leave blank to keep existing.">
                   <SecretInput value={github.githubToken} onChange={e => setGithub({ ...github, githubToken:e.target.value })} placeholder="ghp_..." name="githubToken" />
                 </Field>
-                {user?.githubUsername && (
+                {(user?.githubUsername || user?.hasGithubToken) && (
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <StatusChip status="success" />
-                    <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>Connected as @{user.githubUsername}</span>
+                    <StatusChip status={user?.hasGithubToken ? 'success' : 'default'} />
+                    <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>
+                      {user?.hasGithubToken ? 'PAT saved' : 'PAT missing'}{user?.githubUsername ? ` as @${user.githubUsername}` : ''}
+                    </span>
                   </div>
+                )}
+                {user?.githubTokenPreview && (
+                  <Field label="Saved GitHub Token (masked)">
+                    <input type="text" value={user.githubTokenPreview} className="input" disabled style={{ opacity:0.85 }} />
+                  </Field>
                 )}
                 <div style={{ display:'flex', justifyContent:'flex-end' }}>
                   <motion.button type="submit" disabled={integrationsMutation.isPending} className="btn-primary"

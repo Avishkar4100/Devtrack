@@ -8,9 +8,7 @@ const AuditLog = require('../models/AuditLog');
 // @route   GET /api/projects
 // @access  Private
 const getProjects = async (req, res) => {
-  const projects = await Project.find({
-    $or: [{ owner: req.user.id }, { 'members.user': req.user.id }],
-  })
+  const projects = await Project.find({})
     .populate('owner', 'name email avatar')
     .populate('members.user', 'name email avatar')
     .sort('-createdAt');
@@ -31,6 +29,7 @@ const getProject = async (req, res) => {
   }
 
   const isMember =
+    req.user.role === 'manager' ||
     project.owner._id.toString() === req.user.id ||
     project.members.some((m) => m.user._id.toString() === req.user.id);
 
@@ -45,18 +44,34 @@ const getProject = async (req, res) => {
 // @route   POST /api/projects
 // @access  Private
 const createProject = async (req, res) => {
+  const canCreateInDev = process.env.NODE_ENV === 'development' && req.user.role === 'manager';
+  if (req.user.role !== 'scrum_master' && !canCreateInDev) {
+    return res.status(403).json({ success: false, message: 'Only Scrum Master can create projects' });
+  }
+
   const { name, description, key, budget, deadline, technology, color, tags } = req.body;
+
+  const fallbackKey = (name || 'PROJECT')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 10) || 'PROJECT';
+
+  const defaultRepoOwner = (process.env.GITHUB_REPO_OWNER || '').trim();
+  const defaultRepoName = (process.env.GITHUB_REPO_NAME || '').trim();
+  const defaultGithubRepo = defaultRepoOwner && defaultRepoName ? `${defaultRepoOwner}/${defaultRepoName}` : undefined;
 
   const project = await Project.create({
     name,
     description,
-    key: key.toUpperCase(),
+    key: (key || fallbackKey).toUpperCase(),
     owner: req.user.id,
     budget,
     deadline,
     technology,
     color,
     tags,
+    githubRepo: defaultGithubRepo,
+    githubConnected: Boolean(defaultGithubRepo),
   });
 
   await AuditLog.create({
@@ -81,7 +96,7 @@ const updateProject = async (req, res) => {
   let project = await Project.findById(req.params.id);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
-  if (project.owner.toString() !== req.user.id && req.user.role !== 'admin') {
+  if (req.user.role !== 'scrum_master' || project.owner.toString() !== req.user.id) {
     return res.status(403).json({ success: false, message: 'Not authorized to update this project' });
   }
 
@@ -111,7 +126,7 @@ const deleteProject = async (req, res) => {
   const project = await Project.findById(req.params.id);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
-  if (project.owner.toString() !== req.user.id && req.user.role !== 'admin') {
+  if (req.user.role !== 'scrum_master' || project.owner.toString() !== req.user.id) {
     return res.status(403).json({ success: false, message: 'Not authorized to delete this project' });
   }
 
@@ -128,7 +143,7 @@ const inviteMember = async (req, res) => {
   const project = await Project.findById(req.params.id);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
-  if (project.owner.toString() !== req.user.id && req.user.role !== 'admin') {
+  if (req.user.role !== 'scrum_master' || project.owner.toString() !== req.user.id) {
     return res.status(403).json({ success: false, message: 'Not authorized' });
   }
 
@@ -145,7 +160,7 @@ const inviteMember = async (req, res) => {
     return res.status(400).json({ success: false, message: 'User is already a member of this project' });
   }
 
-  project.members.push({ user: userToInvite._id, role: role || 'developer' });
+  project.members.push({ user: userToInvite._id, role: role || 'manager' });
   await project.save();
 
   await AuditLog.create({

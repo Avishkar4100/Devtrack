@@ -1,9 +1,137 @@
+const fs = require('fs');
+const path = require('path');
 const Epic = require('../models/Epic');
 const Story = require('../models/Story');
 const Project = require('../models/Project');
 const Document = require('../models/Document');
+const Sprint = require('../models/Sprint');
+const Commit = require('../models/Commit');
 const AuditLog = require('../models/AuditLog');
 const aiService = require('../services/aiService');
+
+const readSnippetFromDocument = (filePath, maxChars = 4000) => {
+  try {
+    const resolved = path.resolve(filePath);
+    if (!fs.existsSync(resolved)) return '';
+    const text = fs.readFileSync(resolved, 'utf-8');
+    return (text || '').slice(0, maxChars).trim();
+  } catch (_) {
+    return '';
+  }
+};
+
+const buildVectorlessContextGraph = async (projectId) => {
+  const [project, docs, epics, stories, sprints, commits] = await Promise.all([
+    Project.findById(projectId).lean(),
+    Document.find({ project: projectId, isActive: true }).sort({ createdAt: -1 }).limit(3).lean(),
+    Epic.find({ project: projectId }).sort({ createdAt: -1 }).limit(20).lean(),
+    Story.find({ project: projectId }).sort({ updatedAt: -1 }).limit(200).lean(),
+    Sprint.find({ project: projectId }).sort({ createdAt: -1 }).limit(20).lean(),
+    Commit.find({ projectId }).sort({ date: -1 }).limit(40).lean(),
+  ]);
+
+  const docNodes = docs.map((doc) => ({
+    id: doc._id.toString(),
+    type: 'document',
+    title: doc.name,
+    status: doc.status,
+    snippet: readSnippetFromDocument(doc.filePath),
+  }));
+
+  const epicNodes = epics.map((epic) => ({
+    id: epic._id.toString(),
+    type: 'epic',
+    title: epic.title,
+    status: epic.status,
+    sprint: epic.sprint,
+    priority: epic.priority,
+  }));
+
+  const storyNodes = stories.map((story) => ({
+    id: story._id.toString(),
+    type: story.type || 'story',
+    title: story.title,
+    status: story.status,
+    sprint: story.sprint,
+    priority: story.priority,
+    codeStatus: story.codeStatus,
+    epicId: story.epic ? story.epic.toString() : null,
+    parentStoryId: story.parentStory ? story.parentStory.toString() : null,
+  }));
+
+  const sprintNodes = sprints.map((sprint) => ({
+    id: sprint._id.toString(),
+    type: 'sprint',
+    name: sprint.name,
+    status: sprint.status,
+    startDate: sprint.startDate,
+    endDate: sprint.endDate,
+    goal: sprint.goal,
+  }));
+
+  const commitNodes = commits.map((commit) => ({
+    id: commit._id.toString(),
+    type: 'commit',
+    sha: commit.sha,
+    message: commit.message,
+    author: commit.author,
+    date: commit.date,
+    filesChanged: commit.filesChanged,
+  }));
+
+  const edges = [];
+  storyNodes.forEach((story) => {
+    if (story.epicId) edges.push({ from: story.epicId, to: story.id, relation: 'contains' });
+    if (story.parentStoryId) edges.push({ from: story.parentStoryId, to: story.id, relation: 'parent_of' });
+  });
+
+  const stats = {
+    totalStories: storyNodes.length,
+    doneStories: storyNodes.filter((s) => s.status === 'done').length,
+    inProgressStories: storyNodes.filter((s) => s.status === 'in_progress').length,
+    backlogStories: storyNodes.filter((s) => s.sprint === 'backlog').length,
+    activeSprints: sprintNodes.filter((s) => s.status === 'active').length,
+    recentCommits: commitNodes.length,
+  };
+
+  return {
+    project: {
+      id: project?._id?.toString(),
+      name: project?.name,
+      key: project?.key,
+      status: project?.status,
+      completionPercentage: project?.completionPercentage || 0,
+    },
+    nodes: {
+      documents: docNodes,
+      epics: epicNodes,
+      stories: storyNodes,
+      sprints: sprintNodes,
+      commits: commitNodes,
+    },
+    edges,
+    stats,
+  };
+};
+
+const buildSrsOnlyContext = async (projectId) => {
+  const docs = await Document.find({ project: projectId, isActive: true, status: 'processed' })
+    .sort({ createdAt: -1 })
+    .limit(2)
+    .lean();
+
+  const docContexts = docs.map((doc) => ({
+    id: doc._id.toString(),
+    name: doc.name,
+    fileType: doc.fileType,
+    snippet: readSnippetFromDocument(doc.filePath, 12000),
+  }));
+
+  return {
+    source: 'srs_only',
+    documents: docContexts,
+  };
+};
 
 // @desc    Get epics and stories for a project
 // @route   GET /api/stories/project/:projectId
@@ -54,12 +182,31 @@ const generateStories = async (req, res) => {
     });
   }
 
+  const [totalStories, completedStories, activeSprint] = await Promise.all([
+    Story.countDocuments({ project: project._id, type: { $in: ['story', 'task'] } }),
+    Story.countDocuments({ project: project._id, type: { $in: ['story', 'task'] }, status: 'done' }),
+    Sprint.findOne({ project: project._id, status: 'active' }).sort({ updatedAt: -1 }),
+  ]);
+  const pendingStories = Math.max(totalStories - completedStories, 0);
+
+  const projectStateContext = [
+    'Current project state:',
+    `- Completed tasks: ${completedStories}`,
+    `- Pending: ${pendingStories}`,
+    `- Current sprint: ${activeSprint?.name || 'No active sprint'}`,
+  ].join('\n');
+
+  const contextGraph = await buildVectorlessContextGraph(project._id);
+  const graphContext = `\n\nVectorless project graph context:\n${JSON.stringify(contextGraph)}`;
+
+  const enhancedContext = [additionalContext, projectStateContext, graphContext].filter(Boolean).join('\n\n');
+
   const result = await aiService.generateStories({
     projectId: project._id.toString(),
     projectName: project.name,
     moduleName,
     documentId,
-    additionalContext,
+    additionalContext: enhancedContext,
     budget: project.budget,
     deadline: project.deadline,
   });
@@ -75,6 +222,47 @@ const generateStories = async (req, res) => {
   });
 
   res.status(200).json({ success: true, data: result });
+};
+
+// @desc    Suggest next planning prompts using vectorless context graph
+// @route   POST /api/stories/suggest/:projectId
+// @access  Private (Manager/Scrum Master)
+const suggestStories = async (req, res) => {
+  const { moduleName, userInput } = req.body;
+  if (!moduleName) {
+    return res.status(400).json({ success: false, message: 'Module name is required' });
+  }
+
+  const project = await Project.findById(req.params.projectId);
+  if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+
+  const contextGraph = await buildSrsOnlyContext(project._id);
+
+  if (!contextGraph.documents.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'No processed SRS found. Upload and process SRS before requesting suggestions.',
+    });
+  }
+
+  const result = await aiService.suggestStories({
+    projectId: project._id.toString(),
+    projectName: project.name,
+    moduleName,
+    userInput: userInput || '',
+    contextGraph,
+  });
+
+  res.status(200).json({
+    success: true,
+    data: {
+      suggestions: result.suggestions || [],
+      contextSummary: {
+        source: contextGraph.source,
+        documentCount: contextGraph.documents.length,
+      },
+    },
+  });
 };
 
 // @desc    Save/approve generated stories
@@ -275,6 +463,7 @@ module.exports = {
   getStoriesByProject,
   getEpics,
   generateStories,
+  suggestStories,
   saveGeneratedStories,
   createStory,
   updateStory,

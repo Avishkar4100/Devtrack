@@ -30,8 +30,8 @@ const ProjectSchema = new mongoose.Schema(
         user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         role: {
           type: String,
-          enum: ['scrum_master', 'developer', 'viewer'],
-          default: 'developer',
+          enum: ['scrum_master', 'manager'],
+          default: 'manager',
         },
         joinedAt: { type: Date, default: Date.now },
       },

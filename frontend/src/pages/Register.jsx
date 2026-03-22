@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { BoltIcon, EyeIcon, EyeSlashIcon, SunIcon, MoonIcon } from '@heroicons/react/24/outline'
 import { useAuthStore } from '@/store/authStore'
 import api from '@/lib/api'
+import { appLogger } from '@/lib/logger'
 import toast from 'react-hot-toast'
 import { motion, AnimatePresence } from 'framer-motion'
 import gsap from 'gsap'
@@ -112,14 +113,12 @@ function AuthThemeToggle() {
 }
 
 const ROLES = [
-  { value:'developer',       label:'Developer',       icon:'💻', sub:'Build & ship code' },
-  { value:'product_manager', label:'Product Manager', icon:'📋', sub:'Define the roadmap' },
-  { value:'scrum_master',    label:'Scrum Master',    icon:'🏃', sub:'Facilitate sprints' },
-  { value:'designer',        label:'Designer',        icon:'🎨', sub:'Craft the experience' },
+  { value:'manager',      label:'Manager',      icon:'📋', sub:'Track delivery and risks' },
+  { value:'scrum_master', label:'Scrum Master', icon:'🏃', sub:'Manage backlog and sprint flow' },
 ]
 
 export default function RegisterPage() {
-  const [form, setForm] = useState({ name:'', email:'', password:'', role:'developer' })
+  const [form, setForm] = useState({ name:'', email:'', password:'', role:'manager' })
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
   const [focusedField, setFocusedField] = useState(null)
@@ -134,9 +133,27 @@ export default function RegisterPage() {
     setLoading(true)
     try {
       const { data } = await api.post('/auth/register', form)
-      setAuth(data.user, data.token)
-      toast.success(`Welcome to DevTrack, ${data.user.name}!`)
-      navigate('/dashboard')
+      appLogger.info('Registration response received', {
+        email: form.email,
+        requiresVerification: data.requiresVerification,
+      })
+
+      if (data.requiresVerification) {
+        const params = new URLSearchParams({ email: data.email || form.email })
+        if (data.devOTP) params.set('devOTP', data.devOTP)
+        toast.success(data.message || 'Account created. Verify your email to continue.')
+        navigate(`/verify-email?${params.toString()}`)
+        return
+      }
+
+      if (data.user && data.token) {
+        setAuth(data.user, data.token)
+        toast.success(`Welcome to DevTrack, ${data.user.name}!`)
+        navigate('/overview')
+        return
+      }
+
+      throw new Error('Unexpected register response from server')
     } catch (err) { toast.error(err.response?.data?.message || 'Registration failed') }
     finally { setLoading(false) }
   }

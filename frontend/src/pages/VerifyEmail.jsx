@@ -63,7 +63,7 @@ export default function VerifyEmailPage() {
       if (data.success && data.token) {
         setAuth(data.user, data.token)
         toast.success('Email verified! Welcome to DevTrack 🎉')
-        navigate('/dashboard')
+        navigate('/overview')
       }
     } catch (err) {
       toast.error(err.response?.data?.message || 'Invalid code. Please try again.')

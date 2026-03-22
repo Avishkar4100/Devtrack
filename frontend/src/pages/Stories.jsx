@@ -30,7 +30,16 @@ export default function StoriesPage() {
   const [generateForm, setGenerateForm] = useState({ moduleName: '', additionalContext: '' })
   const [generatedResult, setGeneratedResult] = useState(null)
   const [showPushJira, setShowPushJira] = useState(false)
+  const [jiraProjectKey, setJiraProjectKey] = useState('')
   const [filter, setFilter] = useState('all')
+
+  const { data: project } = useQuery({
+    queryKey: ['project', projectId],
+    queryFn: async () => {
+      const { data } = await api.get(`/projects/${projectId}`)
+      return data.data
+    },
+  })
 
   // Check for processed SRS documents
   const { data: documents = [] } = useQuery({
@@ -99,8 +108,24 @@ export default function StoriesPage() {
     mutationFn: (body) => api.post(`/jira/push/${projectId}`, body),
     onSuccess: ({ data }) => {
       qc.invalidateQueries(['stories', projectId])
-      toast.success(`Pushed ${data.data.stories.length} stories to Jira!`)
+      qc.invalidateQueries(['epics', projectId])
+      toast.success(`Pushed ${data.data.epics.length} epics and ${data.data.stories.length} stories to Jira`) 
       setShowPushJira(false)
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.message || 'Failed to push to Jira')
+    },
+  })
+
+  const connectJiraMutation = useMutation({
+    mutationFn: (body) => api.post(`/jira/connect/${projectId}`, body),
+    onSuccess: ({ data }) => {
+      qc.invalidateQueries(['project', projectId])
+      toast.success(data.message || 'Jira connected successfully')
+      setJiraProjectKey(data.data?.jiraProjectKey || '')
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.message || 'Failed to connect Jira project')
     },
   })
 
@@ -116,6 +141,7 @@ export default function StoriesPage() {
 
   const unpushedEpicIds = epics.filter((e) => !e.pushedToJira).map((e) => e._id)
   const unpushedStoryIds = stories.filter((s) => !s.pushedToJira && s.status === 'approved').map((s) => s._id)
+  const jiraConnected = Boolean(project?.jiraConnected && project?.jiraProjectKey)
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -136,7 +162,7 @@ export default function StoriesPage() {
             <>
               <motion.button onClick={() => setShowPushJira(true)} className="btn-secondary btn-sm"
                 whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}>
-                <ArrowUpTrayIcon className="w-4 h-4" /> Push to Jira
+                <ArrowUpTrayIcon className="w-4 h-4" /> {jiraConnected ? 'Push to Jira' : 'Connect Jira'}
               </motion.button>
               <motion.button onClick={() => setShowGenerate(true)} className="btn-primary btn-sm"
                 whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}>
@@ -384,22 +410,56 @@ export default function StoriesPage() {
       <AnimatePresence>
         {showPushJira && (
           <Modal title="Push to Jira" onClose={() => setShowPushJira(false)}>
-          <p className="text-sm text-gray-600 mb-4">
-            Push {unpushedEpicIds.length} unpushed epics and {unpushedStoryIds.length} approved stories to Jira.
-          </p>
-          {unpushedEpicIds.length === 0 && unpushedStoryIds.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-4">All stories are already pushed to Jira.</p>
-          ) : (
-            <div className="flex gap-3">
-              <button onClick={() => setShowPushJira(false)} className="btn-secondary flex-1">Cancel</button>
-              <button
-                onClick={() => pushJiraMutation.mutate({ epicIds: unpushedEpicIds, storyIds: unpushedStoryIds })}
-                disabled={pushJiraMutation.isPending}
-                className="btn-primary flex-1"
-              >
-                {pushJiraMutation.isPending ? 'Pushing...' : '🔗 Push to Jira'}
-              </button>
+          {!jiraConnected ? (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600">
+                This project is not connected to Jira yet. Enter your Jira project key to connect first.
+              </p>
+              <div>
+                <label className="input-label">Jira Project Key</label>
+                <input
+                  type="text"
+                  value={jiraProjectKey}
+                  onChange={(e) => setJiraProjectKey(e.target.value.toUpperCase())}
+                  className="input"
+                  placeholder="Example: DEV"
+                />
+                <p className="text-xs text-gray-500 mt-1">Save Jira credentials in Settings first, then connect the project key here.</p>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => setShowPushJira(false)} className="btn-secondary flex-1">Cancel</button>
+                <button
+                  onClick={() => connectJiraMutation.mutate({ jiraProjectKey })}
+                  disabled={connectJiraMutation.isPending || !jiraProjectKey.trim()}
+                  className="btn-primary flex-1"
+                >
+                  {connectJiraMutation.isPending ? 'Connecting...' : 'Connect Jira'}
+                </button>
+              </div>
             </div>
+          ) : (
+            <>
+              <p className="text-sm text-gray-600 mb-2">
+                Connected project key: <strong>{project?.jiraProjectKey}</strong>
+              </p>
+              <p className="text-sm text-gray-600 mb-4">
+                Push {unpushedEpicIds.length} unpushed epics and {unpushedStoryIds.length} approved stories to Jira.
+              </p>
+              {unpushedEpicIds.length === 0 && unpushedStoryIds.length === 0 ? (
+                <p className="text-gray-400 text-sm text-center py-4">All stories are already pushed to Jira.</p>
+              ) : (
+                <div className="flex gap-3">
+                  <button onClick={() => setShowPushJira(false)} className="btn-secondary flex-1">Cancel</button>
+                  <button
+                    onClick={() => pushJiraMutation.mutate({ epicIds: unpushedEpicIds, storyIds: unpushedStoryIds })}
+                    disabled={pushJiraMutation.isPending}
+                    className="btn-primary flex-1"
+                  >
+                    {pushJiraMutation.isPending ? 'Pushing...' : 'Push to Jira'}
+                  </button>
+                </div>
+              )}
+            </>
           )}
           </Modal>
         )}

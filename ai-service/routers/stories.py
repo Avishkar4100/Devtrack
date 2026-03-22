@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 from services.rag_service import RAGService
 from services.llm_service import LLMService
 
@@ -17,6 +17,14 @@ class GenerateStoriesRequest(BaseModel):
     additional_context: Optional[str] = None
     budget: Optional[float] = None
     deadline: Optional[str] = None
+
+
+class SuggestStoriesRequest(BaseModel):
+    project_id: str
+    project_name: str
+    module_name: str
+    user_input: Optional[str] = None
+    context_graph: Dict[str, Any]
 
 
 @router.post("/generate")
@@ -47,3 +55,14 @@ async def generate_stories(req: GenerateStoriesRequest):
     )
 
     return {"success": True, **result}
+
+
+@router.post("/suggest")
+async def suggest_stories(req: SuggestStoriesRequest):
+    suggestions = llm_service.suggest_planner_prompts(
+        project_name=req.project_name,
+        module_name=req.module_name,
+        user_input=req.user_input or "",
+        context_graph=req.context_graph,
+    )
+    return {"success": True, "suggestions": suggestions}

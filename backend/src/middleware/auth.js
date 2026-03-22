@@ -1,6 +1,17 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+const normalizeRole = (role) => {
+  if (!role) return 'manager';
+  const map = {
+    product_manager: 'manager',
+    developer: 'manager',
+    designer: 'manager',
+    admin: 'manager',
+  };
+  return map[role] || role;
+};
+
 const protect = async (req, res, next) => {
   let token;
 
@@ -23,6 +34,8 @@ const protect = async (req, res, next) => {
     if (!req.user.isActive) {
       return res.status(401).json({ success: false, message: 'Account has been deactivated' });
     }
+
+    req.user.role = normalizeRole(req.user.role);
 
     next();
   } catch (error) {

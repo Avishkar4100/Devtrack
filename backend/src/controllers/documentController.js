@@ -1,13 +1,19 @@
 const path = require('path');
+const fs = require('fs');
 const multer = require('multer');
 const Document = require('../models/Document');
 const Project = require('../models/Project');
 const AuditLog = require('../models/AuditLog');
 const aiService = require('../services/aiService');
 
+const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
 // Multer config
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
+  destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     cb(null, `${unique}${path.extname(file.originalname)}`);

@@ -2,9 +2,54 @@ const axios = require('axios');
 const crypto = require('crypto');
 const Project = require('../models/Project');
 const Story = require('../models/Story');
+const Commit = require('../models/Commit');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const aiService = require('../services/aiService');
+
+const getDefaultRepoFromEnv = () => {
+  const owner = (process.env.GITHUB_REPO_OWNER || '').trim();
+  const name = (process.env.GITHUB_REPO_NAME || '').trim();
+  if (!owner || !name) return '';
+  return `${owner}/${name}`;
+};
+
+const getAutoRepoFromGitHub = async (userId) => {
+  if (!userId) return '';
+
+  const user = await User.findById(userId).select('+githubToken githubUsername');
+  if (!user?.githubToken) return '';
+
+  const headers = { Authorization: `token ${user.githubToken}`, 'User-Agent': 'DevTrack-App' };
+
+  try {
+    const response = await axios.get('https://api.github.com/user/repos?sort=updated&per_page=20&type=owner', { headers });
+    const repos = Array.isArray(response.data) ? response.data : [];
+
+    const preferredRepo =
+      repos.find((repo) => !repo.archived && !repo.fork && repo.full_name) ||
+      repos.find((repo) => !repo.archived && repo.full_name) ||
+      repos.find((repo) => repo.full_name);
+
+    return preferredRepo?.full_name || '';
+  } catch (error) {
+    return '';
+  }
+};
+
+const ensureProjectGitHubLink = async (project, userId) => {
+  if (!project) return null;
+  if (project.githubConnected && project.githubRepo) return project;
+
+  const fallbackRepo = getDefaultRepoFromEnv() || (await getAutoRepoFromGitHub(userId));
+  if (!fallbackRepo) return project;
+
+  project.githubRepo = fallbackRepo;
+  project.githubBranch = project.githubBranch || 'main';
+  project.githubConnected = true;
+  await project.save();
+  return project;
+};
 
 const getGitHubHeaders = async (userId) => {
   const user = await User.findById(userId).select('+githubToken');
@@ -16,21 +61,43 @@ const getGitHubHeaders = async (userId) => {
   return { Authorization: `token ${user.githubToken}`, 'User-Agent': 'DevTrack-App' };
 };
 
+const persistCommit = async ({ projectId, commit, filesChanged = 0 }) => {
+  if (!commit?.sha) return;
+
+  await Commit.updateOne(
+    { projectId, sha: commit.sha },
+    {
+      $set: {
+        projectId,
+        sha: commit.sha,
+        message: commit.commit?.message || '',
+        author: commit.commit?.author?.name || 'Unknown',
+        date: commit.commit?.author?.date ? new Date(commit.commit.author.date) : new Date(),
+        filesChanged,
+      },
+    },
+    { upsert: true }
+  );
+};
+
 // @desc    Connect GitHub repo to project
 // @route   POST /api/github/connect/:projectId
 // @access  Private
 const connectRepo = async (req, res) => {
   const { githubRepo, githubBranch } = req.body;
-  if (!githubRepo) return res.status(400).json({ success: false, message: 'GitHub repo (owner/repo) is required' });
+  const resolvedRepo = githubRepo || getDefaultRepoFromEnv() || (await getAutoRepoFromGitHub(req.user.id));
+  if (!resolvedRepo) {
+    return res.status(400).json({ success: false, message: 'GitHub repo (owner/repo) is required' });
+  }
 
   const headers = await getGitHubHeaders(req.user.id);
 
   // Verify repo access
-  await axios.get(`https://api.github.com/repos/${githubRepo}`, { headers });
+  await axios.get(`https://api.github.com/repos/${resolvedRepo}`, { headers });
 
   const project = await Project.findByIdAndUpdate(
     req.params.projectId,
-    { githubRepo, githubBranch: githubBranch || 'main', githubConnected: true },
+    { githubRepo: resolvedRepo, githubBranch: githubBranch || 'main', githubConnected: true },
     { new: true }
   );
 
@@ -40,7 +107,7 @@ const connectRepo = async (req, res) => {
     action: 'github_connected',
     entity: 'project',
     entityId: project._id,
-    details: { githubRepo, githubBranch },
+    details: { githubRepo: resolvedRepo, githubBranch },
     ipAddress: req.ip,
   });
 
@@ -51,15 +118,38 @@ const connectRepo = async (req, res) => {
 // @route   GET /api/github/commits/:projectId
 // @access  Private
 const getCommits = async (req, res) => {
-  const project = await Project.findById(req.params.projectId);
-  if (!project?.githubConnected) {
-    return res.status(400).json({ success: false, message: 'GitHub not connected for this project' });
+  let project = await Project.findById(req.params.projectId);
+  project = await ensureProjectGitHubLink(project, req.user.id);
+  if (!project?.githubConnected || !project.githubRepo) {
+    return res.status(200).json({ success: true, data: [], message: 'No repository linked yet for this project' });
   }
 
   const headers = await getGitHubHeaders(req.user.id);
   const response = await axios.get(
     `https://api.github.com/repos/${project.githubRepo}/commits?sha=${project.githubBranch}&per_page=20`,
     { headers }
+  );
+
+  // Persist commit activity for insight generation.
+  await Promise.all(
+    response.data.map(async (commit) => {
+      let filesChanged = 0;
+      try {
+        const detail = await axios.get(
+          `https://api.github.com/repos/${project.githubRepo}/commits/${commit.sha}`,
+          { headers }
+        );
+        filesChanged = detail.data?.files?.length || 0;
+      } catch (error) {
+        filesChanged = 0;
+      }
+
+      await persistCommit({
+        projectId: project._id,
+        commit,
+        filesChanged,
+      });
+    })
   );
 
   res.status(200).json({ success: true, data: response.data });
@@ -69,9 +159,10 @@ const getCommits = async (req, res) => {
 // @route   POST /api/github/analyze/:projectId
 // @access  Private
 const triggerAnalysis = async (req, res) => {
-  const project = await Project.findById(req.params.projectId);
-  if (!project?.githubConnected) {
-    return res.status(400).json({ success: false, message: 'GitHub not connected' });
+  let project = await Project.findById(req.params.projectId);
+  project = await ensureProjectGitHubLink(project, req.user.id);
+  if (!project?.githubConnected || !project.githubRepo) {
+    return res.status(200).json({ success: true, message: 'No repository linked; analysis skipped' });
   }
 
   const headers = await getGitHubHeaders(req.user.id);
@@ -92,6 +183,12 @@ const triggerAnalysis = async (req, res) => {
     `https://api.github.com/repos/${project.githubRepo}/commits/${latestCommit.sha}`,
     { headers }
   );
+
+  await persistCommit({
+    projectId: project._id,
+    commit: latestCommit,
+    filesChanged: commitRes.data?.files?.length || 0,
+  });
 
   const changedFiles = commitRes.data.files.map((f) => ({
     filename: f.filename,

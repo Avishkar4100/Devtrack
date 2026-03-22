@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from routers import documents, stories, github_analysis
+from routers import documents, stories, github_analysis, jira
 
 app = FastAPI(
     title="DevTrack AI Microservice",
@@ -25,6 +25,7 @@ app.add_middleware(
 app.include_router(documents.router, prefix="/documents", tags=["Documents"])
 app.include_router(stories.router, prefix="/stories", tags=["Stories"])
 app.include_router(github_analysis.router, prefix="/github", tags=["GitHub Analysis"])
+app.include_router(jira.router, prefix="/jira", tags=["Jira"])
 
 
 @app.get("/")

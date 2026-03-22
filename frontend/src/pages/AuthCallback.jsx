@@ -36,7 +36,7 @@ export default function AuthCallbackPage() {
         const user = JSON.parse(decodeURIComponent(userStr))
         setAuth(user, token)
         toast.success(`Welcome, ${user.name}! 🎉`)
-        navigate('/dashboard', { replace: true })
+        navigate('/overview', { replace: true })
       } catch {
         toast.error('Authentication failed. Please try again.')
         navigate('/login', { replace: true })

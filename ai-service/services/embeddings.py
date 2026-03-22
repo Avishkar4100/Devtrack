@@ -23,12 +23,24 @@ class EmbeddingService:
     def __init__(self):
         self._collection_cache = {}
         self._ef = None
+        self.model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+        self.model_provider = os.getenv("EMBEDDING_PROVIDER", "sentence-transformers").lower()
 
     def _get_ef(self):
-        """Lazy-load ChromaDB's default local embedding function."""
+        """Lazy-load embedding function with model-first strategy and safe fallback."""
         if self._ef is None:
-            from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
-            self._ef = DefaultEmbeddingFunction()
+            from chromadb.utils.embedding_functions import (
+                DefaultEmbeddingFunction,
+                SentenceTransformerEmbeddingFunction,
+            )
+
+            if self.model_provider in ("sentence-transformers", "sentence_transformers", "st"):
+                try:
+                    self._ef = SentenceTransformerEmbeddingFunction(model_name=self.model_name)
+                except Exception:
+                    self._ef = DefaultEmbeddingFunction()
+            else:
+                self._ef = DefaultEmbeddingFunction()
         return self._ef
 
     def _get_chroma_collection(self, namespace: str):

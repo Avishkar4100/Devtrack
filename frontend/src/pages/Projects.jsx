@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { PlusIcon, FolderIcon, MagnifyingGlassIcon, TrashIcon } from '@heroicons/react/24/outline'
 import api from '@/lib/api'
 import { useProjectStore } from '@/store/projectStore'
+import { useAuthStore } from '@/store/authStore'
 import { getProgressColor, formatDate, generateProjectKey } from '@/lib/utils'
 import toast from 'react-hot-toast'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -13,6 +14,8 @@ const PROJECT_COLORS = ['#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '
 export default function ProjectsPage() {
   const qc = useQueryClient()
   const { setProjects, setCurrentProject } = useProjectStore()
+  const { user } = useAuthStore()
+  const isScrumMaster = user?.role === 'scrum_master'
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', key: '', color: '#6366f1', budget: '', deadline: '', technology: '', status: 'active' })
@@ -44,6 +47,19 @@ export default function ProjectsPage() {
     },
   })
 
+  const createTestMutation = useMutation({
+    mutationFn: () => api.post('/projects', {
+      name: 'Test Project',
+      key: `TEST${Date.now().toString().slice(-4)}`,
+      description: 'Temporary debug seed project',
+      status: 'active',
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries(['projects'])
+      toast.success('Test project created')
+    },
+  })
+
   const resetForm = () => setForm({ name: '', description: '', key: '', color: '#6366f1', budget: '', deadline: '', technology: '', status: 'active' })
 
   const handleNameChange = (name) => {
@@ -68,11 +84,13 @@ export default function ProjectsPage() {
             {projects.length === 1 ? 'project' : 'projects'}
           </p>
         </div>
-        <motion.button onClick={() => setShowCreate(true)} className="btn-primary"
-          whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}>
-          <PlusIcon className="w-4 h-4" />
-          New Project
-        </motion.button>
+        {isScrumMaster && (
+          <motion.button onClick={() => setShowCreate(true)} className="btn-primary"
+            whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}>
+            <PlusIcon className="w-4 h-4" />
+            New Project
+          </motion.button>
+        )}
       </motion.div>
 
       {/* Search */}
@@ -109,11 +127,19 @@ export default function ProjectsPage() {
             <FolderIcon className="w-8 h-8" style={{ color: '#818cf8' }} />
           </motion.div>
           <p className="font-semibold mb-1" style={{ color: '#e2e8f0' }}>No projects found</p>
-          <p className="text-sm mb-6" style={{ color: '#475569' }}>Create your first project to get started</p>
-          <motion.button onClick={() => setShowCreate(true)} className="btn-primary"
-            whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}>
-            <PlusIcon className="w-4 h-4" /> Create Project
-          </motion.button>
+          <p className="text-sm mb-6" style={{ color: '#475569' }}>No projects available yet</p>
+          <div className="flex gap-2 justify-center">
+            {isScrumMaster && (
+              <motion.button onClick={() => setShowCreate(true)} className="btn-primary"
+                whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}>
+                <PlusIcon className="w-4 h-4" /> Create Project
+              </motion.button>
+            )}
+            <motion.button onClick={() => createTestMutation.mutate()} className="btn-secondary"
+              whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }} disabled={createTestMutation.isPending}>
+              {createTestMutation.isPending ? 'Creating...' : 'Create Test Project'}
+            </motion.button>
+          </div>
         </motion.div>
       ) : (
         <motion.div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4"
@@ -121,6 +147,7 @@ export default function ProjectsPage() {
           variants={{ show: { transition: { staggerChildren: 0.07 } } }}>
           {filtered.map((project) => (
             <ProjectCard key={project._id} project={project}
+              canDelete={isScrumMaster}
               onDelete={() => deleteMutation.mutate(project._id)}
               onSelect={() => setCurrentProject(project)} />
           ))}
@@ -129,7 +156,7 @@ export default function ProjectsPage() {
 
       {/* Create modal */}
       <AnimatePresence>
-        {showCreate && (
+        {showCreate && isScrumMaster && (
           <Modal title="Create New Project" onClose={() => { setShowCreate(false); resetForm() }}>
             <form onSubmit={(e) => { e.preventDefault(); createMutation.mutate(form) }} className="space-y-4">
               <div>
@@ -200,7 +227,7 @@ export default function ProjectsPage() {
   )
 }
 
-const ProjectCard = ({ project, onDelete, onSelect }) => (
+const ProjectCard = ({ project, onDelete, onSelect, canDelete }) => (
   <motion.div
     variants={{ hidden: { opacity: 0, y: 20, scale: 0.96 }, show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.4, ease: [0.16, 1, 0.3, 1] } } }}
     whileHover={{ y: -4, boxShadow: `0 12px 40px ${project.color || '#6366f1'}20` }}
@@ -221,14 +248,16 @@ const ProjectCard = ({ project, onDelete, onSelect }) => (
           <p className="text-xs font-medium" style={{ color: '#475569' }}>{project.key}</p>
         </div>
       </div>
-      <motion.button onClick={(e) => { e.preventDefault(); onDelete() }}
-        className="btn-ghost btn-sm p-1 opacity-0 group-hover:opacity-100"
-        style={{ color: '#f43f5e' }}
-        whileHover={{ scale: 1.15, background: 'rgba(244,63,94,0.12)' }}
-        whileTap={{ scale: 0.9 }}
-        transition={{ duration: 0.15 }}>
-        <TrashIcon className="w-4 h-4" />
-      </motion.button>
+      {canDelete && (
+        <motion.button onClick={(e) => { e.preventDefault(); onDelete() }}
+          className="btn-ghost btn-sm p-1 opacity-0 group-hover:opacity-100"
+          style={{ color: '#f43f5e' }}
+          whileHover={{ scale: 1.15, background: 'rgba(244,63,94,0.12)' }}
+          whileTap={{ scale: 0.9 }}
+          transition={{ duration: 0.15 }}>
+          <TrashIcon className="w-4 h-4" />
+        </motion.button>
+      )}
     </div>
 
     <p className="text-xs mb-3 line-clamp-2 min-h-[2.5rem] leading-relaxed" style={{ color: '#475569' }}>

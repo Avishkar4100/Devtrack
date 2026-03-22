@@ -21,6 +21,8 @@ const AuditLogSchema = new mongoose.Schema(
         'story_edited',
         'story_deleted',
         'stories_pushed_jira',
+        'jira_connected',
+        'jira_synced_to_local',
         'github_connected',
         'github_push_analyzed',
         'code_status_updated',

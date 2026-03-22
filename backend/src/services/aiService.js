@@ -2,6 +2,7 @@ const axios = require('axios');
 const logger = require('../config/logger');
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+const AI_INGEST_TIMEOUT_MS = Number(process.env.AI_INGEST_TIMEOUT_MS || 600000);
 
 const aiClient = axios.create({
   baseURL: AI_SERVICE_URL,
@@ -20,7 +21,7 @@ const ingestDocument = async ({ documentId, filePath, fileType, namespace, proje
       file_type: fileType,
       namespace,
       project_id: projectId,
-    });
+    }, { timeout: AI_INGEST_TIMEOUT_MS });
     return response.data;
   } catch (error) {
     logger.error(`AI Service - ingestDocument error: ${error.message}`);
@@ -78,6 +79,25 @@ const analyzeCode = async ({ projectId, changedFiles, stories, commitSha, commit
     if (error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET') {
       return { results: [], mock: true };
     }
+    throw error;
+  }
+};
+
+/**
+ * Generate next-step planner suggestions from vectorless project context graph
+ */
+const suggestStories = async ({ projectId, projectName, moduleName, userInput, contextGraph }) => {
+  try {
+    const response = await aiClient.post('/stories/suggest', {
+      project_id: projectId,
+      project_name: projectName,
+      module_name: moduleName,
+      user_input: userInput,
+      context_graph: contextGraph,
+    });
+    return response.data;
+  } catch (error) {
+    logger.error(`AI Service - suggestStories error: ${error.message}`);
     throw error;
   }
 };
@@ -174,4 +194,4 @@ const getMockStories = (moduleName, projectName) => {
   };
 };
 
-module.exports = { ingestDocument, generateStories, analyzeCode };
+module.exports = { ingestDocument, generateStories, analyzeCode, suggestStories };

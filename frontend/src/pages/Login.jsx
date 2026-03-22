@@ -136,7 +136,7 @@ export default function LoginPage() {
       const { data } = await api.post('/auth/login', form)
       setAuth(data.user, data.token)
       toast.success(`Welcome back, ${data.user.name}!`)
-      navigate('/dashboard')
+      navigate('/overview')
     } catch (err) { toast.error(err.response?.data?.message || 'Invalid email or password') }
     finally { setLoading(false) }
   }

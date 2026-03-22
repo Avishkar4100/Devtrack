@@ -111,6 +111,62 @@ Status guide:
 - "not_started": No evidence of implementation in changes"""
 
 
+JIRA_SUMMARY_PROMPT = """You are a technical program manager AI.
+
+Project: {project_key}
+Issue Snapshot:
+{issues_text}
+
+Return ONLY valid JSON with this shape:
+{{
+  "summary": "2-4 sentence project summary",
+  "topRisks": ["risk 1", "risk 2"],
+  "nextActions": ["action 1", "action 2", "action 3"]
+}}
+
+Rules:
+- Keep concise and practical.
+- Mention blockers, overdue/aging work, and priority imbalance.
+- Do not include markdown."""
+
+
+PLANNER_SUGGEST_PROMPT = """You are an Agile planning copilot for a project that may be at very early stage.
+
+Project: {project_name}
+Module: {module_name}
+User Input: {user_input}
+
+Vectorless context graph JSON:
+{context_graph}
+
+Task:
+Generate practical NEXT planning suggestions grounded ONLY in the provided context.
+
+Critical behavior:
+- If context indicates startup/initiation state (for example source=srs_only, no jira/commit progress), produce startup suggestions first.
+- Startup suggestions should focus on: MVP slicing from SRS, first epic/story breakdown, dependency/risk spikes only if present in SRS, and clear acceptance criteria setup.
+- Do NOT produce mid-project/maintenance suggestions (refactor technical debt, performance tuning, phase-2 module planning) unless explicitly supported by the context.
+- Do NOT invent domains/integrations (FHIR, WebRTC, payments, mobile, etc.) unless present in SRS/context.
+- Prefer requirement-grounded wording. If SRS has requirement IDs (FR-*, NFR-*), reference them naturally.
+
+Return ONLY valid JSON:
+{{
+    "suggestions": [
+        "Short actionable suggestion 1",
+        "Short actionable suggestion 2",
+        "Short actionable suggestion 3",
+        "Short actionable suggestion 4"
+    ]
+}}
+
+Output rules:
+- 6 to 8 suggestions
+- Each suggestion must be one sentence, 10-22 words, begin with an action verb
+- Keep suggestions backlog/planning oriented and immediately actionable
+- No markdown, no extra keys, JSON only
+"""
+
+
 class LLMService:
     """
     Uses OpenRouter (https://openrouter.ai) which provides FREE AI models.
@@ -233,3 +289,54 @@ class LLMService:
             return json.loads(raw)
         except json.JSONDecodeError:
             return {"status": "not_started", "reasoning": "Analysis failed", "evidence": []}
+
+    def suggest_planner_prompts(self, project_name: str, module_name: str, user_input: str, context_graph: Dict[str, Any]) -> List[str]:
+        prompt = PLANNER_SUGGEST_PROMPT.format(
+            project_name=project_name,
+            module_name=module_name,
+            user_input=user_input or "",
+            context_graph=json.dumps(context_graph),
+        )
+        raw = self._call_llm(prompt, temperature=0.2).strip()
+
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+
+        try:
+            parsed = json.loads(raw)
+            suggestions = parsed.get("suggestions", [])
+            if isinstance(suggestions, list):
+                return [str(s).strip() for s in suggestions if str(s).strip()][:8]
+            return []
+        except Exception:
+            return []
+
+    def summarize_jira_project(self, project_key: str, issues: List[Dict[str, Any]]) -> Dict[str, Any]:
+        issues_text = "\n".join(
+            f"- {i.get('key', 'N/A')} | {i.get('type', 'Unknown')} | {i.get('status', 'Unknown')} | {i.get('priority', 'Unknown')} | {i.get('summary', '')}"
+            for i in issues[:120]
+        ) or "No issues provided"
+
+        prompt = JIRA_SUMMARY_PROMPT.format(project_key=project_key, issues_text=issues_text)
+        raw = self._call_llm(prompt, temperature=0.2).strip()
+
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+
+        try:
+            result = json.loads(raw)
+            return {
+                "summary": result.get("summary", ""),
+                "topRisks": result.get("topRisks", []),
+                "nextActions": result.get("nextActions", []),
+            }
+        except Exception:
+            return {
+                "summary": "Unable to generate AI Jira summary.",
+                "topRisks": [],
+                "nextActions": [],
+            }

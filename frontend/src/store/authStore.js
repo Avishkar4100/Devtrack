@@ -19,8 +19,8 @@ export const useAuthStore = create(
         window.location.href = '/login'
       },
 
-      isAdmin: () => get().user?.role === 'admin',
-      isScrumMaster: () => ['admin', 'scrum_master'].includes(get().user?.role),
+      isManager: () => get().user?.role === 'manager',
+      isScrumMaster: () => get().user?.role === 'scrum_master',
     }),
     {
       name: 'devtrack-auth',

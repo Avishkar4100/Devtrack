@@ -4,7 +4,7 @@
   "scripts": {
     "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
-    "dev:ai": "c:/Users/aghul/Desktop/AI-POWERDDEVTRACK/.venv/Scripts/python.exe ai-service/main.py",
+    "dev:ai": ".\\.venv\\Scripts\\python.exe ai-service/main.py",
     "dev:all": "concurrently -k -n backend,frontend,ai -c cyan,magenta,green \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev:ai\"",
     "test:backend": "npm --prefix backend test"
   },

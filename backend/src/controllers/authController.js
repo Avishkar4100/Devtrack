@@ -3,6 +3,38 @@ const axios = require('axios');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const { sendEmail, resetPasswordEmail, otpEmail } = require('../services/email');
+const logger = require('../config/logger');
+
+const maskEmail = (email) => {
+  if (!email || typeof email !== 'string' || !email.includes('@')) return 'unknown';
+  const [name, domain] = email.split('@');
+  if (!name) return `***@${domain}`;
+  if (name.length <= 2) return `${name[0]}***@${domain}`;
+  return `${name.slice(0, 2)}***@${domain}`;
+};
+
+const maskSecret = (value) => {
+  if (!value || typeof value !== 'string') return '';
+  if (value.length <= 8) return '*'.repeat(value.length);
+  return `${value.slice(0, 4)}${'*'.repeat(Math.max(4, value.length - 8))}${value.slice(-4)}`;
+};
+
+const toSafeUserPayload = (user) => ({
+  id: user._id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  avatar: user.avatar,
+  jiraEmail: user.jiraEmail,
+  jiraDomain: user.jiraDomain,
+  githubUsername: user.githubUsername,
+  hasJiraToken: Boolean(user.jiraApiToken),
+  hasGithubToken: Boolean(user.githubToken),
+  jiraTokenPreview: maskSecret(user.jiraApiToken || ''),
+  githubTokenPreview: maskSecret(user.githubToken || ''),
+  lastLogin: user.lastLogin,
+  createdAt: user.createdAt,
+});
 
 // Verify email deliverability via AbstractAPI Email Reputation
 const verifyEmailDeliverability = async (email) => {
@@ -24,7 +56,7 @@ const verifyEmailDeliverability = async (email) => {
   } catch (err) {
     if (err.message.startsWith('The email') || err.message.startsWith('Disposable')) throw err;
     // Network/API errors — fail open (don't block registration)
-    console.warn('AbstractAPI email check failed (fail-open):', err.message);
+    logger.warn(`AbstractAPI email check failed (fail-open): ${err.message}`);
   }
 };
 
@@ -33,15 +65,21 @@ const verifyEmailDeliverability = async (email) => {
 // @access  Public
 const register = async (req, res) => {
   const { name, email, password, role } = req.body;
+  logger.info(`Register attempt: ${maskEmail(email)} role=${role || 'manager'}`);
 
   if (!name || !email || !password) {
+    logger.warn(`Register validation failed (missing fields): ${maskEmail(email)}`);
     return res.status(400).json({ success: false, message: 'Please provide name, email and password' });
   }
+
+  const allowedRoles = ['manager', 'scrum_master'];
+  const normalizedRole = allowedRoles.includes(role) ? role : 'manager';
 
   // Level 2: AbstractAPI — verify the mailbox actually exists
   try {
     await verifyEmailDeliverability(email);
   } catch (err) {
+    logger.warn(`Register blocked by email deliverability check for ${maskEmail(email)}: ${err.message}`);
     return res.status(400).json({ success: false, message: err.message });
   }
 
@@ -54,8 +92,10 @@ const register = async (req, res) => {
       existingUser.emailOTPExpire = Date.now() + 10 * 60 * 1000;
       await existingUser.save({ validateBeforeSave: false });
       try { await sendEmail({ to: email, subject: 'DevTrack — Verify your email', html: otpEmail(otp, name) }); } catch (_) {}
+      logger.info(`Register existing unverified user, OTP resent: ${maskEmail(email)}`);
       return res.status(200).json({ success: true, requiresVerification: true, email, message: 'OTP resent. Please verify your email.' });
     }
+    logger.warn(`Register rejected, email already registered: ${maskEmail(email)}`);
     return res.status(400).json({ success: false, message: 'Email already registered' });
   }
 
@@ -64,18 +104,21 @@ const register = async (req, res) => {
     name,
     email,
     password,
-    role: role || 'developer',
+    role: normalizedRole,
     isEmailVerified: false,
     emailOTP: otp,
     emailOTPExpire: Date.now() + 10 * 60 * 1000,
   });
+  logger.info(`Register user created: ${maskEmail(email)} id=${user._id}`);
 
   try {
     await sendEmail({ to: email, subject: 'DevTrack — Verify your email', html: otpEmail(otp, name) });
+    logger.info(`Register OTP email sent: ${maskEmail(email)}`);
   } catch (err) {
-    console.error('OTP email error:', err.message);
+    logger.error(`Register OTP email failed for ${maskEmail(email)}: ${err.message}`);
     // In dev, return the OTP directly so developer can test without email
     if (process.env.NODE_ENV === 'development') {
+      logger.warn(`Register continuing in development with devOTP for ${maskEmail(email)}`);
       return res.status(200).json({ success: true, requiresVerification: true, email, devOTP: otp, message: 'Email could not be sent. Use devOTP to verify.' });
     }
   }
@@ -88,11 +131,12 @@ const register = async (req, res) => {
 // @access  Public
 const verifyEmail = async (req, res) => {
   const { email, otp } = req.body;
+  logger.info(`Verify email attempt: ${maskEmail(email)}`);
   if (!email || !otp) return res.status(400).json({ success: false, message: 'Email and OTP are required.' });
 
   const user = await User.findOne({ email });
   if (!user) return res.status(400).json({ success: false, message: 'Account not found.' });
-  if (user.isEmailVerified) return sendTokenResponse(user, 200, res);
+  if (user.isEmailVerified) return await sendTokenResponse(user, 200, res);
 
   if (!user.emailOTP || user.emailOTP !== otp.toString()) {
     return res.status(400).json({ success: false, message: 'Invalid OTP. Please check your email or request a new code.' });
@@ -107,7 +151,9 @@ const verifyEmail = async (req, res) => {
   user.lastLogin = Date.now();
   await user.save({ validateBeforeSave: false });
 
-  sendTokenResponse(user, 200, res);
+  logger.info(`Verify email success: ${maskEmail(email)} id=${user._id}`);
+
+  await sendTokenResponse(user, 200, res);
 };
 
 // @desc    Resend OTP
@@ -115,6 +161,7 @@ const verifyEmail = async (req, res) => {
 // @access  Public
 const resendOTP = async (req, res) => {
   const { email } = req.body;
+  logger.info(`Resend OTP attempt: ${maskEmail(email)}`);
   if (!email) return res.status(400).json({ success: false, message: 'Email is required.' });
 
   const user = await User.findOne({ email });
@@ -128,8 +175,9 @@ const resendOTP = async (req, res) => {
 
   try {
     await sendEmail({ to: email, subject: 'DevTrack — New verification code', html: otpEmail(otp, user.name) });
+    logger.info(`Resend OTP email sent: ${maskEmail(email)}`);
   } catch (err) {
-    console.error('OTP resend error:', err.message);
+    logger.error(`Resend OTP email failed for ${maskEmail(email)}: ${err.message}`);
     if (process.env.NODE_ENV === 'development') {
       return res.status(200).json({ success: true, devOTP: otp, message: 'Email failed. Use devOTP.' });
     }
@@ -143,6 +191,7 @@ const resendOTP = async (req, res) => {
 // @access  Public
 const login = async (req, res) => {
   const { email, password } = req.body;
+  logger.info(`Login attempt: ${maskEmail(email)}`);
 
   if (!email || !password) {
     return res.status(400).json({ success: false, message: 'Please provide email and password' });
@@ -167,15 +216,59 @@ const login = async (req, res) => {
   }
   await user.save({ validateBeforeSave: false });
 
-  sendTokenResponse(user, 200, res);
+  logger.info(`Login success: ${maskEmail(email)} id=${user._id}`);
+
+  await sendTokenResponse(user, 200, res);
+};
+
+// @desc    Admin login user
+// @route   POST /api/auth/admin-login
+// @access  Public
+const adminLogin = async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ success: false, message: 'Please provide email and password' });
+  }
+
+  const envAdminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  const envAdminPassword = process.env.ADMIN_PASSWORD || '';
+  if (!envAdminEmail || !envAdminPassword) {
+    return res.status(500).json({ success: false, message: 'Admin credentials are not configured in environment variables.' });
+  }
+
+  if (email.toLowerCase().trim() !== envAdminEmail || password !== envAdminPassword) {
+    return res.status(401).json({ success: false, message: 'Invalid admin credentials' });
+  }
+
+  let user = await User.findOne({ email: envAdminEmail }).select('+password');
+  if (!user) {
+    user = await User.create({
+      name: 'Platform Admin',
+      email: envAdminEmail,
+      password: envAdminPassword,
+      role: 'admin',
+      isEmailVerified: true,
+    });
+  }
+
+  if (user.role !== 'admin') {
+    user.role = 'admin';
+  }
+
+  user.lastLogin = Date.now();
+  await user.save({ validateBeforeSave: false });
+
+  logger.info(`Admin login success: ${maskEmail(envAdminEmail)} id=${user._id}`);
+  await sendTokenResponse(user, 200, res);
 };
 
 // @desc    Get current user
 // @route   GET /api/auth/me
 // @access  Private
 const getMe = async (req, res) => {
-  const user = await User.findById(req.user.id);
-  res.status(200).json({ success: true, data: user });
+  const user = await User.findById(req.user.id).select('+jiraApiToken +githubToken');
+  res.status(200).json({ success: true, data: toSafeUserPayload(user) });
 };
 
 // @desc    Update profile
@@ -205,16 +298,27 @@ const updateIntegrations = async (req, res) => {
   const { jiraApiToken, jiraEmail, jiraDomain, githubToken, githubUsername } = req.body;
 
   const user = await User.findById(req.user.id).select('+jiraApiToken +githubToken');
+  const normalizeDomain = (value = '') =>
+    value
+      .trim()
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/+$/g, '');
 
   if (jiraApiToken !== undefined) user.jiraApiToken = jiraApiToken;
   if (jiraEmail !== undefined) user.jiraEmail = jiraEmail;
-  if (jiraDomain !== undefined) user.jiraDomain = jiraDomain;
+  if (jiraDomain !== undefined) user.jiraDomain = normalizeDomain(jiraDomain);
   if (githubToken !== undefined) user.githubToken = githubToken;
   if (githubUsername !== undefined) user.githubUsername = githubUsername;
 
   await user.save({ validateBeforeSave: false });
 
-  res.status(200).json({ success: true, message: 'Integration credentials updated successfully' });
+  logger.info(`Integration settings updated for ${maskEmail(user.email)}`);
+
+  res.status(200).json({
+    success: true,
+    message: 'Integration credentials updated successfully',
+    data: toSafeUserPayload(user),
+  });
 };
 
 // @desc    Logout
@@ -255,7 +359,7 @@ const forgotPassword = async (req, res) => {
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
     await user.save({ validateBeforeSave: false });
-    console.error('Email error:', err.message);
+    logger.error(`Forgot password email failed for ${maskEmail(email)}: ${err.message}`);
     // In dev, still return the URL so developer can test
     if (process.env.NODE_ENV === 'development') {
       return res.status(200).json({
@@ -292,7 +396,7 @@ const resetPassword = async (req, res) => {
   user.resetPasswordExpire = undefined;
   await user.save();
 
-  sendTokenResponse(user, 200, res);
+  await sendTokenResponse(user, 200, res);
 };
 
 // @desc    Redirect to GitHub OAuth
@@ -359,7 +463,7 @@ const githubCallback = async (req, res) => {
     }));
     res.redirect(`${frontendUrl}/auth/callback?token=${token}&user=${userData}`);
   } catch (err) {
-    console.error('GitHub OAuth error:', err.message);
+    logger.error(`GitHub OAuth error: ${err.message}`);
     res.redirect(`${frontendUrl}/login?error=github_auth_failed`);
   }
 };
@@ -427,34 +531,24 @@ const googleCallback = async (req, res) => {
     }));
     res.redirect(`${frontendUrl}/auth/callback?token=${token}&user=${userData}`);
   } catch (err) {
-    console.error('Google OAuth error:', err.message);
+    logger.error(`Google OAuth error: ${err.message}`);
     res.redirect(`${frontendUrl}/login?error=google_auth_failed`);
   }
 };
 
-const sendTokenResponse = (user, statusCode, res) => {
+const sendTokenResponse = async (user, statusCode, res) => {
   const token = user.getSignedJwtToken();
+  const hydratedUser = await User.findById(user._id).select('+jiraApiToken +githubToken');
 
   res.status(statusCode).json({
     success: true,
     token,
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      avatar: user.avatar,
-      jiraEmail: user.jiraEmail,
-      jiraDomain: user.jiraDomain,
-      githubUsername: user.githubUsername,
-      lastLogin: user.lastLogin,
-      createdAt: user.createdAt,
-    },
+    user: toSafeUserPayload(hydratedUser || user),
   });
 };
 
 module.exports = {
-  register, login, getMe, updateProfile, updateIntegrations, logout,
+  register, login, adminLogin, getMe, updateProfile, updateIntegrations, logout,
   forgotPassword, resetPassword,
   verifyEmail, resendOTP,
   githubOAuth, githubCallback,

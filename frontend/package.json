@@ -2,6 +2,7 @@
   "name": "devtrack-frontend",
   "version": "1.0.0",
   "description": "DevTrack AI-Powered IT Project Management - Frontend",
+  "type": "module",
   "private": true,
   "scripts": {
     "dev": "vite",

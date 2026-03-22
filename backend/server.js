@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const { randomUUID } = require('crypto');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -24,12 +25,21 @@ const jiraRoutes = require('./src/routes/jira');
 const githubRoutes = require('./src/routes/github');
 const dashboardRoutes = require('./src/routes/dashboard');
 const sprintRoutes = require('./src/routes/sprints');
+const insightRoutes = require('./src/routes/insightRoutes');
 
 // Connect to MongoDB
 connectDB();
 
 const app = express();
 const server = http.createServer(app);
+
+morgan.token('id', (req) => req.requestId || '-');
+
+app.use((req, res, next) => {
+  req.requestId = req.headers['x-request-id'] || randomUUID();
+  res.setHeader('x-request-id', req.requestId);
+  next();
+});
 
 // Socket.io setup
 const io = new Server(server, {
@@ -65,9 +75,11 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Logging
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-}
+app.use(morgan(':id :method :url :status :response-time ms - :res[content-length]', {
+  stream: {
+    write: (message) => logger.info(message.trim()),
+  },
+}));
 
 // Static files (uploaded documents)
 app.use('/uploads', express.static('uploads'));
@@ -91,6 +103,7 @@ app.use('/api/jira', jiraRoutes);
 app.use('/api/github', githubRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/sprints', sprintRoutes);
+app.use('/api/insights', insightRoutes);
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
@@ -117,6 +130,14 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   logger.info(`🚀 DevTrack Backend running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.error(`Unhandled Rejection: ${reason?.stack || reason}`);
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error(`Uncaught Exception: ${error.stack || error.message}`);
 });
 
 module.exports = { app, server, io };

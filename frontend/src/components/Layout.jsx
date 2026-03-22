@@ -1,13 +1,16 @@
 import { Outlet, NavLink } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '@/store/authStore'
+import { useProjectStore } from '@/store/projectStore'
+import api from '@/lib/api'
 import {
-  HomeIcon, FolderIcon, DocumentTextIcon, CogIcon, ArrowRightOnRectangleIcon,
+  HomeIcon, FolderIcon, CogIcon, ArrowRightOnRectangleIcon,
   BellIcon, ChevronUpDownIcon, Bars3Icon, XMarkIcon,
-  RocketLaunchIcon, CodeBracketIcon, ChartBarIcon, BoltIcon,
+  BoltIcon,
+  SparklesIcon,
   SunIcon, MoonIcon,
 } from '@heroicons/react/24/outline'
-import { useState } from 'react'
-import { useProjectStore } from '@/store/projectStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '@/store/themeStore'
 
@@ -28,7 +31,6 @@ function ThemeToggle() {
     >
       <AnimatePresence mode="wait" initial={false}>
         <motion.span key={theme}
-          initial={{ rotate: -45, opacity: 0, scale: 0.6 }}
           animate={{ rotate: 0, opacity: 1, scale: 1 }}
           exit={{ rotate: 45, opacity: 0, scale: 0.6 }}
           transition={{ duration: 0.2 }}
@@ -45,9 +47,49 @@ function ThemeToggle() {
 
 export default function Layout() {
   const { user, logout } = useAuthStore()
-  const { currentProject } = useProjectStore()
+  const {
+    projects,
+    setProjects,
+    selectedProjectId,
+    setSelectedProjectId,
+    selectedJiraProjectKey,
+    setSelectedJiraProjectKey,
+  } = useProjectStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const avatarLetter = user?.name?.[0]?.toUpperCase()
+
+  const { data: fetchedProjectsData } = useQuery({
+    queryKey: ['layout-projects'],
+    queryFn: async () => (await api.get('/projects')).data.data || [],
+  })
+
+  const { data: jiraProjects = [] } = useQuery({
+    queryKey: ['layout-jira-projects'],
+    queryFn: async () => (await api.get('/jira/server/projects')).data.data || [],
+  })
+
+  const fetchedProjects = useMemo(() => fetchedProjectsData || [], [fetchedProjectsData])
+
+  useEffect(() => {
+    if (!fetchedProjectsData) return
+
+    const sameLength = projects.length === fetchedProjects.length
+    const sameIds = sameLength && projects.every((p, idx) => p?._id === fetchedProjects[idx]?._id)
+    if (sameIds) return
+
+    setProjects(fetchedProjects)
+  }, [fetchedProjectsData, fetchedProjects, projects, setProjects])
+
+  useEffect(() => {
+    if (!selectedProjectId && fetchedProjects.length > 0) {
+      setSelectedProjectId(fetchedProjects[0]._id)
+    }
+  }, [fetchedProjects, selectedProjectId, setSelectedProjectId])
+
+  const activeProject = useMemo(
+    () => projects.find((p) => p._id === selectedProjectId) || null,
+    [projects, selectedProjectId]
+  )
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-page)' }}>
@@ -90,8 +132,10 @@ export default function Layout() {
         {/* Navigation */}
         <nav className="flex-1 px-2.5 py-3 overflow-y-auto no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {[
-            { to: '/dashboard', end: true, Icon: HomeIcon, label: 'Dashboard' },
-            { to: '/projects', end: false, Icon: FolderIcon, label: 'Projects' },
+            { to: '/overview', end: true, Icon: HomeIcon, label: 'Overview' },
+            { to: '/ai-planner', end: false, Icon: SparklesIcon, label: 'AI Planner' },
+            { to: '/workspace', end: false, Icon: FolderIcon, label: 'Workspace' },
+            { to: '/progress', end: false, Icon: BoltIcon, label: 'Progress' },
           ].map(({ to, end, Icon, label }, i) => (
             <motion.div key={to} initial={{ opacity: 0, x: -14 }} animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.07 + 0.1, duration: 0.35, ease: [0.16, 1, 0.3, 1] }}>
@@ -116,55 +160,44 @@ export default function Layout() {
             </motion.div>
           ))}
 
-          {currentProject && (
-            <AnimatePresence>
-              <motion.div className="pt-3 pb-1"
-                initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.3 }}>
-                <div className="mx-3 mb-2 flex items-center gap-2">
-                  <div className="flex-1 h-px" style={{ background:'linear-gradient(90deg, rgba(99,102,241,0.2), transparent)' }} />
-                  <p className="text-[10px] font-bold uppercase tracking-widest shrink-0" style={{ color:'#6366f1' }}>
-                    {currentProject.name.length > 14 ? currentProject.name.slice(0, 14) + '\u2026' : currentProject.name}
-                  </p>
-                  <div className="flex-1 h-px" style={{ background:'linear-gradient(90deg, transparent, rgba(99,102,241,0.2))' }} />
-                </div>
-                {[
-                  { to: `/projects/${currentProject._id}`, end: true, Icon: ChartBarIcon, label: 'Overview' },
-                  { to: `/projects/${currentProject._id}/stories`, end: false, Icon: RocketLaunchIcon, label: 'Stories' },
-                  { to: `/projects/${currentProject._id}/documents`, end: false, Icon: DocumentTextIcon, label: 'Documents' },
-                  { to: `/projects/${currentProject._id}/sprints`, end: false, Icon: CodeBracketIcon, label: 'Sprints' },
-                ].map(({ to, end, Icon, label }, i) => (
-                  <motion.div key={to} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.06, duration: 0.3, ease: [0.16, 1, 0.3, 1] }}>
-                    <NavLink to={to} end={end} className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}>
-                      {({ isActive }) => (
-                        <>
-                          <Icon className="w-4 h-4 shrink-0" />
-                          <span className="flex-1">{label}</span>
-                          {isActive && (
-                            <span style={{ position: 'relative', width: '7px', height: '7px', display: 'flex', marginRight: '2px' }}>
-                              <motion.span
-                                style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: '#6366f1', opacity: 0.5 }}
-                                animate={{ scale: [1, 1.8, 1], opacity: [0.5, 0, 0.5] }}
-                                transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
-                              />
-                              <span style={{ position: 'relative', width: '7px', height: '7px', borderRadius: '50%', background: '#818cf8', display: 'block' }} />
-                            </span>
-                          )}
-                        </>
-                      )}
-                    </NavLink>
-                  </motion.div>
+          <div className="mt-3 p-2.5 rounded-xl" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-card)' }}>
+            <p className="text-[11px] uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>Workspace Context</p>
+            <div className="space-y-2">
+              <select
+                className="input"
+                value={selectedProjectId}
+                onChange={(e) => setSelectedProjectId(e.target.value)}
+                aria-label="Select active project"
+              >
+                <option value="">Select Project</option>
+                {projects.map((p) => (
+                  <option key={p._id} value={p._id}>{p.key} - {p.name}</option>
                 ))}
-              </motion.div>
-            </AnimatePresence>
-          )}
+              </select>
+              <select
+                className="input"
+                value={selectedJiraProjectKey}
+                onChange={(e) => setSelectedJiraProjectKey(e.target.value)}
+                aria-label="Select Jira project"
+              >
+                <option value="">Select Jira Project</option>
+                {jiraProjects.map((jp) => (
+                  <option key={jp.id || jp.key} value={jp.key}>{jp.key} - {jp.name}</option>
+                ))}
+              </select>
+              {activeProject && (
+                <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  Active: {activeProject.name}
+                </p>
+              )}
+            </div>
+          </div>
         </nav>
 
         {/* Bottom nav */}
         <div className="px-2.5 pb-2.5 space-y-0.5"
              style={{ borderTop: '1px solid var(--border)', paddingTop: '10px' }}>
-          <NavLink to="/settings" className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}>
+          <NavLink to="/settings" end={false} className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}>
             <CogIcon className="w-4 h-4 shrink-0" />
             <span>Settings</span>
           </NavLink>

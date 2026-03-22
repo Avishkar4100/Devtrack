@@ -5,6 +5,7 @@ import {
   RocketLaunchIcon, DocumentTextIcon, CodeBracketIcon, ChartBarIcon,
   UserGroupIcon, LinkIcon, CalendarIcon, CurrencyDollarIcon,
   CheckCircleIcon, ClockIcon, ExclamationCircleIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline'
 import api from '@/lib/api'
 import { useProjectStore } from '@/store/projectStore'
@@ -125,6 +126,9 @@ export default function ProjectDetailPage() {
           </Link>
           <Link to={`/projects/${id}/sprints`} className="btn-secondary btn-sm">
             <CodeBracketIcon className="w-4 h-4" /> Sprints
+          </Link>
+          <Link to={`/projects/${id}/insights`} className="btn-secondary btn-sm">
+            <SparklesIcon className="w-4 h-4" /> Insights
           </Link>
         </div>
       </div>
