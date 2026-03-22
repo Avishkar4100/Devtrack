@@ -20,7 +20,7 @@ export default function AIPlannerPage() {
   const [srsFile, setSrsFile] = useState(null)
   const [selectedSuggestionChips, setSelectedSuggestionChips] = useState([])
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
-  const [suggestions, setSuggestions] = useState([])
+  const [suggestions, setSuggestions] = useState({ epics: [], stories: [], tasks: [] })
   const [backlogDraft, setBacklogDraft] = useState({ epics: [], stories: [], tasks: [], subtasks: [] })
   const [latestDocumentStatus, setLatestDocumentStatus] = useState(null)
   const [plannerChat, setPlannerChat] = useState([
@@ -156,12 +156,35 @@ export default function AIPlannerPage() {
       return response.data.data || { suggestions: [] }
     },
     onSuccess: (data) => {
-      const list = Array.isArray(data.suggestions) ? data.suggestions : []
-      setSuggestions(list)
+      const structured = data?.structuredSuggestions || {}
+      setSuggestions({
+        epics: Array.isArray(structured.epics) ? structured.epics : [],
+        stories: Array.isArray(structured.stories) ? structured.stories : [],
+        tasks: Array.isArray(structured.tasks) ? structured.tasks : [],
+      })
       setSuggestionsOpen(true)
     },
     onError: (error) => toast.error(error?.message || 'Failed to fetch suggestions'),
   })
+
+  const hasSuggestions = (suggestions.epics?.length || 0) + (suggestions.stories?.length || 0) + (suggestions.tasks?.length || 0) > 0
+
+  const renderSuggestionGroup = (title, prefix, items = []) => {
+    if (!items.length) return null
+    return (
+      <div className="space-y-1">
+        <p className="text-[11px] uppercase tracking-wide text-slate-400 px-1">{title}</p>
+        {items.map((s, idx) => {
+          const value = `${prefix}: ${s}`
+          return (
+            <button key={`${prefix}-${idx}-${s}`} className="w-full text-left px-2 py-1.5 rounded-md hover:bg-slate-800 text-sm text-slate-200" onClick={() => addSuggestionChip(value)}>
+              {value}
+            </button>
+          )
+        })}
+      </div>
+    )
+  }
 
   const generateBacklog = useMutation({
     mutationFn: async () => {
@@ -353,13 +376,11 @@ export default function AIPlannerPage() {
                 {generateBacklog.isPending ? 'Generating...' : 'Generate Backlog'}
               </button>
             </div>
-            {suggestionsOpen && suggestions.length > 0 && (
+            {suggestionsOpen && hasSuggestions && (
               <div className="rounded-md border border-slate-700 bg-slate-950/80 p-2 space-y-1">
-                {suggestions.map((s, idx) => (
-                  <button key={`${s}-${idx}`} className="w-full text-left px-2 py-1.5 rounded-md hover:bg-slate-800 text-sm text-slate-200" onClick={() => addSuggestionChip(s)}>
-                    {s}
-                  </button>
-                ))}
+                {renderSuggestionGroup('Epics', 'EPIC', suggestions.epics)}
+                {renderSuggestionGroup('Stories', 'STORY', suggestions.stories)}
+                {renderSuggestionGroup('Tasks', 'TASK', suggestions.tasks)}
               </div>
             )}
           </div>

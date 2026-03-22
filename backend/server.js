@@ -26,6 +26,7 @@ const githubRoutes = require('./src/routes/github');
 const dashboardRoutes = require('./src/routes/dashboard');
 const sprintRoutes = require('./src/routes/sprints');
 const insightRoutes = require('./src/routes/insightRoutes');
+const adminRoutes = require('./src/routes/admin');
 
 // Connect to MongoDB
 connectDB();
@@ -104,6 +105,7 @@ app.use('/api/github', githubRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/sprints', sprintRoutes);
 app.use('/api/insights', insightRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Socket.io connection handling
 io.on('connection', (socket) => {

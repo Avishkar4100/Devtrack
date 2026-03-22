@@ -35,6 +35,10 @@ const normalizeAIConfig = (cfg, userId, index = 0) => {
     cfg.deepseekModel = 'deepseek-chat';
     changed = true;
   }
+  if (!cfg.maxTokens || Number(cfg.maxTokens) < 4096) {
+    cfg.maxTokens = 4096;
+    changed = true;
+  }
   if (changed && userId) {
     cfg.updatedBy = userId;
   }

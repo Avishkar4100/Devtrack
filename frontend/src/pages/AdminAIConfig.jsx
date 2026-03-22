@@ -16,7 +16,7 @@ const defaultForm = {
   deepseekUrl: '',
   deepseekModel: 'deepseek-chat',
   temperature: 0.2,
-  maxTokens: 2048,
+  maxTokens: 4096,
 }
 
 const toForm = (cfg) => ({
@@ -27,7 +27,7 @@ const toForm = (cfg) => ({
   deepseekUrl: cfg.deepseekUrl || '',
   deepseekModel: cfg.deepseekModel || 'deepseek-chat',
   temperature: cfg.temperature ?? 0.2,
-  maxTokens: cfg.maxTokens ?? 2048,
+  maxTokens: cfg.maxTokens ?? 4096,
 })
 
 export default function AdminAIConfigPage() {

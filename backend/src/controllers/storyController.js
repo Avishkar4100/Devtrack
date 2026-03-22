@@ -253,10 +253,23 @@ const suggestStories = async (req, res) => {
     contextGraph,
   });
 
+  const structuredSuggestions = {
+    epics: Array.isArray(result?.suggestions?.epics) ? result.suggestions.epics : [],
+    stories: Array.isArray(result?.suggestions?.stories) ? result.suggestions.stories : [],
+    tasks: Array.isArray(result?.suggestions?.tasks) ? result.suggestions.tasks : [],
+  };
+
+  const flatSuggestions = [
+    ...structuredSuggestions.epics.map((s) => `EPIC: ${s}`),
+    ...structuredSuggestions.stories.map((s) => `STORY: ${s}`),
+    ...structuredSuggestions.tasks.map((s) => `TASK: ${s}`),
+  ];
+
   res.status(200).json({
     success: true,
     data: {
-      suggestions: result.suggestions || [],
+      suggestions: flatSuggestions,
+      structuredSuggestions,
       contextSummary: {
         source: contextGraph.source,
         documentCount: contextGraph.documents.length,

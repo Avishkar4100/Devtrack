@@ -1,5 +1,6 @@
 const axios = require('axios');
 const logger = require('../config/logger');
+const AIConfig = require('../models/AIConfig');
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 const AI_INGEST_TIMEOUT_MS = Number(process.env.AI_INGEST_TIMEOUT_MS || 600000);
@@ -9,6 +10,21 @@ const aiClient = axios.create({
   timeout: 120000, // 2 minutes for AI ops
   headers: { 'Content-Type': 'application/json' },
 });
+
+const getActiveAIConfigPayload = async () => {
+  const cfg = await AIConfig.findOne({ isActive: true }).lean();
+  if (!cfg) return null;
+
+  return {
+    provider: cfg.provider,
+    openrouterKeyName: cfg.openrouterKeyName,
+    openrouterModel: cfg.openrouterModel,
+    deepseekUrl: cfg.deepseekUrl,
+    deepseekModel: cfg.deepseekModel,
+    temperature: cfg.temperature,
+    maxTokens: cfg.maxTokens,
+  };
+};
 
 /**
  * Ingest a document into the vector store
@@ -39,6 +55,7 @@ const ingestDocument = async ({ documentId, filePath, fileType, namespace, proje
  */
 const generateStories = async ({ projectId, projectName, moduleName, documentId, additionalContext, budget, deadline }) => {
   try {
+    const aiConfig = await getActiveAIConfigPayload();
     const response = await aiClient.post('/stories/generate', {
       project_id: projectId,
       project_name: projectName,
@@ -47,6 +64,7 @@ const generateStories = async ({ projectId, projectName, moduleName, documentId,
       additional_context: additionalContext,
       budget,
       deadline: deadline ? new Date(deadline).toISOString() : null,
+      ai_config: aiConfig,
     });
     return response.data;
   } catch (error) {
@@ -88,12 +106,14 @@ const analyzeCode = async ({ projectId, changedFiles, stories, commitSha, commit
  */
 const suggestStories = async ({ projectId, projectName, moduleName, userInput, contextGraph }) => {
   try {
+    const aiConfig = await getActiveAIConfigPayload();
     const response = await aiClient.post('/stories/suggest', {
       project_id: projectId,
       project_name: projectName,
       module_name: moduleName,
       user_input: userInput,
       context_graph: contextGraph,
+      ai_config: aiConfig,
     });
     return response.data;
   } catch (error) {

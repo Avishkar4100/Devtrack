@@ -37,7 +37,7 @@ const AIConfigSchema = new mongoose.Schema(
     },
     maxTokens: {
       type: Number,
-      default: 2048,
+      default: 4096,
       min: 128,
       max: 32768,
     },

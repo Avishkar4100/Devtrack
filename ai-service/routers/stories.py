@@ -17,6 +17,7 @@ class GenerateStoriesRequest(BaseModel):
     additional_context: Optional[str] = None
     budget: Optional[float] = None
     deadline: Optional[str] = None
+    ai_config: Optional[Dict[str, Any]] = None
 
 
 class SuggestStoriesRequest(BaseModel):
@@ -25,6 +26,7 @@ class SuggestStoriesRequest(BaseModel):
     module_name: str
     user_input: Optional[str] = None
     context_graph: Dict[str, Any]
+    ai_config: Optional[Dict[str, Any]] = None
 
 
 @router.post("/generate")
@@ -52,6 +54,7 @@ async def generate_stories(req: GenerateStoriesRequest):
         context=context_text,
         additional_context=req.additional_context or "",
         constraints=constraints,
+        ai_config=req.ai_config,
     )
 
     return {"success": True, **result}
@@ -64,5 +67,6 @@ async def suggest_stories(req: SuggestStoriesRequest):
         module_name=req.module_name,
         user_input=req.user_input or "",
         context_graph=req.context_graph,
+        ai_config=req.ai_config,
     )
     return {"success": True, "suggestions": suggestions}

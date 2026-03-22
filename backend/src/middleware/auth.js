@@ -7,7 +7,6 @@ const normalizeRole = (role) => {
     product_manager: 'manager',
     developer: 'manager',
     designer: 'manager',
-    admin: 'manager',
   };
   return map[role] || role;
 };
