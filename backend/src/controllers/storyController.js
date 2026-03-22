@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const mongoose = require('mongoose');
 const Epic = require('../models/Epic');
 const Story = require('../models/Story');
 const Project = require('../models/Project');
@@ -146,6 +147,7 @@ const getStoriesByProject = async (req, res) => {
   const stories = await Story.find(filter)
     .populate('epic', 'title epicKey color')
     .populate('assignee', 'name email avatar')
+    .populate('parentStory', 'title storyKey')
     .populate('reporter', 'name email avatar')
     .sort({ order: 1, createdAt: -1 });
 
@@ -271,6 +273,16 @@ const suggestStories = async (req, res) => {
 const saveGeneratedStories = async (req, res) => {
   const { epics, stories, tasks, subtasks } = req.body;
 
+  const normalizeAssignee = (value) => (
+    value && mongoose.Types.ObjectId.isValid(value) ? value : undefined
+  );
+
+  const normalizeDate = (value) => {
+    if (!value) return undefined;
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  };
+
   const project = await Project.findById(req.params.projectId);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
@@ -302,6 +314,7 @@ const saveGeneratedStories = async (req, res) => {
     const epicRef = storyData.epicTempId
       ? epicMap[storyData.epicTempId]
       : savedEpics[0]?._id;
+    const parentRef = storyData.parentTempId ? storyTempMap[storyData.parentTempId] : undefined;
 
     // Sanitize sprint/priority to valid enum values
     const validSprints = ['S1', 'S2', 'S3', 'S4', 'backlog'];
@@ -325,6 +338,10 @@ const saveGeneratedStories = async (req, res) => {
       storyKey: `${project.key}-${Date.now()}-${storyIdx++}`,
       aiGenerated: true,
       status: 'approved',
+      assignee: normalizeAssignee(storyData.assignee),
+      parentStory: parentRef,
+      startDate: normalizeDate(storyData.startDate),
+      dueDate: normalizeDate(storyData.dueDate),
       reporter: req.user.id,
     });
     savedStories.push(story);
@@ -356,6 +373,9 @@ const saveGeneratedStories = async (req, res) => {
       storyKey: `${project.key}-SUB-${Date.now()}-${storyIdx++}`,
       aiGenerated: true,
       status: 'approved',
+      assignee: normalizeAssignee(sub.assignee),
+      startDate: normalizeDate(sub.startDate),
+      dueDate: normalizeDate(sub.dueDate),
       reporter: req.user.id,
     });
   }
@@ -385,7 +405,7 @@ const updateStory = async (req, res) => {
   const story = await Story.findByIdAndUpdate(req.params.id, req.body, {
     new: true,
     runValidators: true,
-  }).populate('assignee', 'name email avatar').populate('epic', 'title');
+  }).populate('assignee', 'name email avatar').populate('epic', 'title').populate('parentStory', 'title storyKey');
 
   if (!story) return res.status(404).json({ success: false, message: 'Story not found' });
 

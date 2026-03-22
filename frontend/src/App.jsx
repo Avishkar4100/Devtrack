@@ -14,6 +14,12 @@ import SettingsPage from '@/pages/Settings'
 import InsightsPage from '@/pages/Insights'
 import WorkspacePage from '@/pages/Workspace'
 import AIPlannerPage from '@/pages/AIPlanner'
+import AdminLoginPage from '@/pages/AdminLogin'
+import AdminLayout from '@/components/AdminLayout'
+import AdminOverviewPage from '@/pages/AdminOverview'
+import AdminAIConfigPage from '@/pages/AdminAIConfig'
+import AdminOrganizationsPage from '@/pages/AdminOrganizations'
+import AdminProjectsPage from '@/pages/AdminProjects'
 
 const UserRoute = ({ children }) => {
   const { token } = useAuthStore()
@@ -27,6 +33,19 @@ const PublicRoute = ({ children }) => {
   return <Navigate to="/overview" replace />
 }
 
+const AdminRoute = ({ children }) => {
+  const { token, user } = useAuthStore()
+  if (!token) return <Navigate to="/admin/login" replace />
+  if (user?.role !== 'admin') return <Navigate to="/overview" replace />
+  return children
+}
+
+const AdminPublicRoute = ({ children }) => {
+  const { token, user } = useAuthStore()
+  if (token && user?.role === 'admin') return <Navigate to="/admin/overview" replace />
+  return children
+}
+
 export default function App() {
   return (
     <Routes>
@@ -34,6 +53,7 @@ export default function App() {
       <Route path="/" element={<PublicRoute><HomePage /></PublicRoute>} />
       <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
       <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
+      <Route path="/admin/login" element={<AdminPublicRoute><AdminLoginPage /></AdminPublicRoute>} />
 
       {/* Password reset — public, no auth needed */}
       <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
@@ -55,6 +75,13 @@ export default function App() {
         <Route path="insights" element={<InsightsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="dashboard" element={<Navigate to="/overview" replace />} />
+      </Route>
+
+      <Route path="/admin" element={<AdminRoute><AdminLayout /></AdminRoute>}>
+        <Route path="overview" element={<AdminOverviewPage />} />
+        <Route path="ai-config" element={<AdminAIConfigPage />} />
+        <Route path="organizations" element={<AdminOrganizationsPage />} />
+        <Route path="projects" element={<AdminProjectsPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

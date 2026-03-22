@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js",
+    "dev": "node scripts/kill-port.js 5000 && nodemon server.js",
+    "dev:clean": "node scripts/kill-port.js 5000 && nodemon server.js",
     "test": "jest --passWithNoTests"
   },
   "dependencies": {

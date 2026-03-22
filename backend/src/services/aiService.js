@@ -98,6 +98,12 @@ const suggestStories = async ({ projectId, projectName, moduleName, userInput, c
     return response.data;
   } catch (error) {
     logger.error(`AI Service - suggestStories error: ${error.message}`);
+    const isServiceDown = error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET';
+    if (isServiceDown) {
+      const err = new Error('AI suggestion service is unavailable. Start ai-service and try Suggest again.');
+      err.code = 'AI_SERVICE_UNAVAILABLE';
+      throw err;
+    }
     throw error;
   }
 };

@@ -80,16 +80,18 @@ export default function Layout() {
     setProjects(fetchedProjects)
   }, [fetchedProjectsData, fetchedProjects, projects, setProjects])
 
-  useEffect(() => {
-    if (!selectedProjectId && fetchedProjects.length > 0) {
-      setSelectedProjectId(fetchedProjects[0]._id)
-    }
-  }, [fetchedProjects, selectedProjectId, setSelectedProjectId])
-
   const activeProject = useMemo(
     () => projects.find((p) => p._id === selectedProjectId) || null,
     [projects, selectedProjectId]
   )
+
+  useEffect(() => {
+    if (!activeProject) return
+    const connectedJiraKey = activeProject.jiraProjectKey || ''
+    if (connectedJiraKey && selectedJiraProjectKey !== connectedJiraKey) {
+      setSelectedJiraProjectKey(connectedJiraKey)
+    }
+  }, [activeProject, selectedJiraProjectKey, setSelectedJiraProjectKey])
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-page)' }}>
@@ -169,7 +171,7 @@ export default function Layout() {
                 onChange={(e) => setSelectedProjectId(e.target.value)}
                 aria-label="Select active project"
               >
-                <option value="">Select Project</option>
+                <option value="">Local Project</option>
                 {projects.map((p) => (
                   <option key={p._id} value={p._id}>{p.key} - {p.name}</option>
                 ))}

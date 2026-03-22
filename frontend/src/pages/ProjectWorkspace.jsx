@@ -36,6 +36,24 @@ const getCommitMessage = (commit) => {
 
 const normalize = (v = '') => v.toLowerCase().replace(/[^a-z0-9]/g, '')
 
+const makeTempId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+
+const normalizeGeneratedItems = (rows = [], prefix) =>
+  rows.map((row) => ({
+    ...row,
+    tempId: row.tempId || makeTempId(prefix),
+    parentTempId: row.parentTempId || '',
+    startDate: row.startDate ? new Date(row.startDate).toISOString().slice(0, 10) : '',
+    dueDate: row.dueDate ? new Date(row.dueDate).toISOString().slice(0, 10) : '',
+    assignee: row.assignee || '',
+  }))
+
+const toDateInput = (value) => {
+  if (!value) return ''
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
+}
+
 export default function ProjectWorkspacePage() {
   const { id } = useParams()
   const queryClient = useQueryClient()
@@ -45,8 +63,9 @@ export default function ProjectWorkspacePage() {
   const [activeTab, setActiveTab] = useState('overview')
   const [moduleName, setModuleName] = useState('Core Module')
   const [storyPrompt, setStoryPrompt] = useState('')
-  const [generatedResult, setGeneratedResult] = useState(null)
   const [generatedJsonText, setGeneratedJsonText] = useState('')
+  const [plannerDraftView, setPlannerDraftView] = useState('json')
+  const [generatedBacklogDraft, setGeneratedBacklogDraft] = useState({ epics: [], stories: [], tasks: [], subtasks: [] })
   const [plannerInput, setPlannerInput] = useState('')
   const [plannerChat, setPlannerChat] = useState([
     { role: 'assistant', text: 'Upload SRS, ask for suggestions, review generated backlog, then push to Jira.' },
@@ -58,7 +77,16 @@ export default function ProjectWorkspacePage() {
 
   const [newStory, setNewStory] = useState({ title: '', type: 'story', priority: 'medium', sprint: 'backlog', epic: '' })
   const [editingStoryId, setEditingStoryId] = useState('')
-  const [editingDraft, setEditingDraft] = useState({ title: '', status: 'approved', priority: 'medium', sprint: 'backlog' })
+  const [editingDraft, setEditingDraft] = useState({
+    title: '',
+    status: 'approved',
+    priority: 'medium',
+    sprint: 'backlog',
+    assignee: '',
+    parentStory: '',
+    startDate: '',
+    dueDate: '',
+  })
 
   const { data: project, isLoading: loadingProject } = useQuery({
     queryKey: ['project', id],
@@ -120,7 +148,16 @@ export default function ProjectWorkspacePage() {
   })
 
   const updateStory = useMutation({
-    mutationFn: async () => (await api.put(`/stories/${editingStoryId}`, editingDraft)).data,
+    mutationFn: async () => {
+      const payload = {
+        ...editingDraft,
+        assignee: editingDraft.assignee || undefined,
+        parentStory: editingDraft.parentStory || null,
+        startDate: editingDraft.startDate || null,
+        dueDate: editingDraft.dueDate || null,
+      }
+      return (await api.put(`/stories/${editingStoryId}`, payload)).data
+    },
     onSuccess: () => {
       setEditingStoryId('')
       queryClient.invalidateQueries({ queryKey: ['stories', id] })
@@ -147,8 +184,15 @@ export default function ProjectWorkspacePage() {
       return response.data.data
     },
     onSuccess: (data) => {
-      setGeneratedResult(data || null)
-      setGeneratedJsonText(JSON.stringify(data || {}, null, 2))
+      const normalized = {
+        epics: normalizeGeneratedItems(data?.epics || [], 'epic'),
+        stories: normalizeGeneratedItems(data?.stories || [], 'story'),
+        tasks: normalizeGeneratedItems(data?.tasks || [], 'task'),
+        subtasks: normalizeGeneratedItems(data?.subtasks || [], 'subtask'),
+      }
+      setGeneratedBacklogDraft(normalized)
+      setGeneratedJsonText(JSON.stringify(normalized, null, 2))
+      setPlannerDraftView('landing')
       toast.success('AI backlog draft generated')
     },
   })
@@ -156,15 +200,17 @@ export default function ProjectWorkspacePage() {
   const saveGenerated = useMutation({
     mutationFn: async () => {
       const response = await api.post(`/stories/save/${id}`, {
-        epics: generatedResult?.epics || [],
-        stories: generatedResult?.stories || [],
-        tasks: generatedResult?.tasks || [],
-        subtasks: generatedResult?.subtasks || [],
+        epics: generatedBacklogDraft?.epics || [],
+        stories: generatedBacklogDraft?.stories || [],
+        tasks: generatedBacklogDraft?.tasks || [],
+        subtasks: generatedBacklogDraft?.subtasks || [],
       })
       return response.data.data
     },
     onSuccess: () => {
-      setGeneratedResult(null)
+      setGeneratedBacklogDraft({ epics: [], stories: [], tasks: [], subtasks: [] })
+      setGeneratedJsonText('')
+      setPlannerDraftView('json')
       setStoryPrompt('')
       queryClient.invalidateQueries({ queryKey: ['epics', id] })
       queryClient.invalidateQueries({ queryKey: ['stories', id] })
@@ -198,7 +244,10 @@ export default function ProjectWorkspacePage() {
   const pushToJira = useMutation({
     mutationFn: async () => {
       const epicIds = epics.map((e) => e._id)
-      const storyIds = stories.filter((s) => s.type !== 'subtask').map((s) => s._id)
+      const storyIds = [
+        ...stories.filter((s) => s.type !== 'subtask').map((s) => s._id),
+        ...stories.filter((s) => s.type === 'subtask').map((s) => s._id),
+      ]
       return (await api.post(`/jira/push/${id}`, { epicIds, storyIds })).data
     },
     onSuccess: () => {
@@ -232,26 +281,35 @@ export default function ProjectWorkspacePage() {
 
   const confirmPlannerDraft = useMutation({
     mutationFn: async () => {
-      let parsed = {}
-      try {
-        parsed = JSON.parse(generatedJsonText || '{}')
-      } catch (_) {
-        throw new Error('Invalid JSON. Please fix JSON before confirm.')
+      const missingAssigneeTitles = [
+        ...(generatedBacklogDraft.stories || []),
+        ...(generatedBacklogDraft.tasks || []),
+        ...(generatedBacklogDraft.subtasks || []),
+      ]
+        .filter((item) => !item.assignee)
+        .map((item) => item.title)
+
+      if (missingAssigneeTitles.length) {
+        throw new Error('Select assignee for all generated stories/tasks/subtasks before confirm and push')
       }
 
       await api.post(`/stories/save/${id}`, {
-        epics: parsed?.epics || [],
-        stories: parsed?.stories || [],
-        tasks: parsed?.tasks || [],
-        subtasks: parsed?.subtasks || [],
+        epics: generatedBacklogDraft?.epics || [],
+        stories: generatedBacklogDraft?.stories || [],
+        tasks: generatedBacklogDraft?.tasks || [],
+        subtasks: generatedBacklogDraft?.subtasks || [],
       })
 
       const freshEpics = (await api.get(`/stories/epics/${id}`)).data.data || []
       const freshStories = (await api.get(`/stories/project/${id}`)).data.data || []
+      const orderedStoryIds = [
+        ...freshStories.filter((s) => s.type !== 'subtask').map((s) => s._id),
+        ...freshStories.filter((s) => s.type === 'subtask').map((s) => s._id),
+      ]
 
       await api.post(`/jira/push/${id}`, {
         epicIds: freshEpics.map((e) => e._id),
-        storyIds: freshStories.filter((s) => s.type !== 'subtask').map((s) => s._id),
+        storyIds: orderedStoryIds,
       })
     },
     onSuccess: () => {
@@ -301,6 +359,118 @@ export default function ProjectWorkspacePage() {
   }, [project])
 
   const openStories = stories.filter((s) => s.status !== 'done').length
+
+  const availableAssignees = useMemo(() => {
+    const map = new Map()
+    if (project?.owner?._id) {
+      map.set(project.owner._id, {
+        id: project.owner._id,
+        label: `${project.owner.name || 'Owner'} (Owner)`,
+      })
+    }
+    ;(project?.members || []).forEach((member) => {
+      const memberId = member?.user?._id
+      if (!memberId) return
+      const role = (member?.role || 'member').replace('_', ' ')
+      map.set(memberId, {
+        id: memberId,
+        label: `${member?.user?.name || 'Member'} (${role})`,
+      })
+    })
+    return [...map.values()]
+  }, [project])
+
+  const generatedStoriesByEpic = useMemo(() => {
+    const map = new Map()
+    ;[...(generatedBacklogDraft.stories || []), ...(generatedBacklogDraft.tasks || [])].forEach((item) => {
+      const key = item.epicTempId || 'ungrouped'
+      const rows = map.get(key) || []
+      rows.push(item)
+      map.set(key, rows)
+    })
+    return map
+  }, [generatedBacklogDraft.stories, generatedBacklogDraft.tasks])
+
+  const generatedParentCandidates = useMemo(
+    () => ([...(generatedBacklogDraft.stories || []), ...(generatedBacklogDraft.tasks || [])]),
+    [generatedBacklogDraft.stories, generatedBacklogDraft.tasks],
+  )
+
+  const existingParentCandidates = useMemo(
+    () => (stories || []).filter((item) => item.type !== 'subtask'),
+    [stories],
+  )
+
+  const getAssigneeLabel = (assignee) => {
+    if (!assignee) return 'Unassigned'
+    if (typeof assignee === 'string') {
+      return availableAssignees.find((a) => a.id === assignee)?.label || 'Unassigned'
+    }
+    return assignee.name || assignee.email || 'Assigned'
+  }
+
+  const hasGeneratedBacklog = useMemo(
+    () =>
+      generatedBacklogDraft.epics.length > 0
+      || generatedBacklogDraft.stories.length > 0
+      || generatedBacklogDraft.tasks.length > 0
+      || generatedBacklogDraft.subtasks.length > 0,
+    [generatedBacklogDraft],
+  )
+
+  const updateGeneratedByTempId = (collection, tempId, field, value) => {
+    setGeneratedBacklogDraft((prev) => {
+      const updated = {
+        ...prev,
+        [collection]: prev[collection].map((item) => item.tempId === tempId ? { ...item, [field]: value } : item),
+      }
+
+      setGeneratedJsonText(JSON.stringify(updated, null, 2))
+      return updated
+    })
+  }
+
+  const removeGeneratedByTempId = (collection, tempId) => {
+    setGeneratedBacklogDraft((prev) => {
+      const next = { ...prev }
+
+      if (collection === 'epics') {
+        next.epics = prev.epics.filter((e) => e.tempId !== tempId)
+        const removedParentIds = [
+          ...prev.stories.filter((s) => s.epicTempId === tempId).map((s) => s.tempId),
+          ...prev.tasks.filter((t) => t.epicTempId === tempId).map((t) => t.tempId),
+        ]
+        next.stories = prev.stories.filter((s) => s.epicTempId !== tempId)
+        next.tasks = prev.tasks.filter((t) => t.epicTempId !== tempId)
+        next.subtasks = prev.subtasks.filter((st) => !removedParentIds.includes(st.parentTempId))
+      } else if (collection === 'stories' || collection === 'tasks') {
+        next[collection] = prev[collection].filter((row) => row.tempId !== tempId)
+        next.subtasks = prev.subtasks.filter((st) => st.parentTempId !== tempId)
+      } else {
+        next[collection] = prev[collection].filter((row) => row.tempId !== tempId)
+      }
+
+      setGeneratedJsonText(JSON.stringify(next, null, 2))
+      return next
+    })
+  }
+
+  const applyGeneratedJsonText = () => {
+    try {
+      const parsed = JSON.parse(generatedJsonText || '{}')
+      const normalized = {
+        epics: normalizeGeneratedItems(parsed?.epics || [], 'epic'),
+        stories: normalizeGeneratedItems(parsed?.stories || [], 'story'),
+        tasks: normalizeGeneratedItems(parsed?.tasks || [], 'task'),
+        subtasks: normalizeGeneratedItems(parsed?.subtasks || [], 'subtask'),
+      }
+      setGeneratedBacklogDraft(normalized)
+      toast.success('JSON changes applied to generated backlog')
+    } catch (_) {
+      toast.error('Invalid JSON. Fix JSON before applying changes.')
+    }
+  }
+
   const sprintRows = useMemo(() => {
     const bucket = new Map()
     stories.forEach((s) => {
@@ -413,7 +583,7 @@ export default function ProjectWorkspacePage() {
           </div>
 
           <div className="card p-4 space-y-3">
-            <h3 className="text-base font-semibold">Generate Backlog JSON</h3>
+            <h3 className="text-base font-semibold">Generate Backlog Draft</h3>
             <textarea
               value={storyPrompt}
               onChange={(e) => setStoryPrompt(e.target.value)}
@@ -428,21 +598,157 @@ export default function ProjectWorkspacePage() {
             />
             <div className="flex flex-wrap gap-2">
               <button className="btn-primary" onClick={() => generateStories.mutate()} disabled={generateStories.isPending || !storyPrompt.trim() || !moduleName.trim()}>
-                {generateStories.isPending ? 'Generating...' : 'Generate JSON'}
+                {generateStories.isPending ? 'Generating...' : 'Generate'}
               </button>
-              <button className="btn-secondary" onClick={() => confirmPlannerDraft.mutate()} disabled={confirmPlannerDraft.isPending || !generatedJsonText.trim()}>
+              <button className="btn-secondary" onClick={() => confirmPlannerDraft.mutate()} disabled={confirmPlannerDraft.isPending || !hasGeneratedBacklog}>
                 {confirmPlannerDraft.isPending ? 'Confirming...' : 'Confirm and Push to Jira'}
               </button>
-              <button className="btn-secondary" onClick={() => saveGenerated.mutate()} disabled={saveGenerated.isPending || !generatedResult}>
+              <button className="btn-secondary" onClick={() => saveGenerated.mutate()} disabled={saveGenerated.isPending || !hasGeneratedBacklog}>
                 Save Draft Only
               </button>
             </div>
-            <textarea
-              value={generatedJsonText}
-              onChange={(e) => setGeneratedJsonText(e.target.value)}
-              className="input min-h-[260px] font-mono text-xs"
-              placeholder="Generated JSON (epics/stories/tasks/subtasks) appears here for editing"
-            />
+
+            {!!hasGeneratedBacklog && (
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className={`px-3 py-1.5 rounded-md text-sm border ${plannerDraftView === 'landing' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-900/50 border-slate-700 text-slate-300'}`}
+                  onClick={() => setPlannerDraftView('landing')}
+                >
+                  Landing View
+                </button>
+                <button
+                  className={`px-3 py-1.5 rounded-md text-sm border ${plannerDraftView === 'json' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-900/50 border-slate-700 text-slate-300'}`}
+                  onClick={() => setPlannerDraftView('json')}
+                >
+                  JSON View
+                </button>
+              </div>
+            )}
+
+            {plannerDraftView === 'landing' && hasGeneratedBacklog && (
+              <div className="space-y-3 max-h-[360px] overflow-auto pr-1">
+                {generatedBacklogDraft.epics.map((epic) => (
+                  <div key={epic.tempId} className="rounded-md border border-slate-700 p-3 bg-slate-950/35">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <p className="text-xs text-indigo-300">Epic</p>
+                      <button className="text-xs text-rose-300 hover:text-rose-200" onClick={() => removeGeneratedByTempId('epics', epic.tempId)}>Remove</button>
+                    </div>
+                    <input className="input mb-2" value={epic.title || ''} onChange={(e) => updateGeneratedByTempId('epics', epic.tempId, 'title', e.target.value)} placeholder="Epic title" />
+                    <textarea className="input min-h-[56px] mb-2" value={epic.description || ''} onChange={(e) => updateGeneratedByTempId('epics', epic.tempId, 'description', e.target.value)} placeholder="Epic description" />
+
+                    <div className="space-y-2 ml-3 border-l border-slate-700 pl-3">
+                      {(generatedStoriesByEpic.get(epic.tempId) || []).map((item) => (
+                        <div key={item.tempId} className="rounded-md border border-slate-700 p-2 bg-slate-900/40">
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <p className="text-xs text-cyan-300">{item.type || 'story'}</p>
+                            <button className="text-xs text-rose-300 hover:text-rose-200" onClick={() => removeGeneratedByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId)}>Remove</button>
+                          </div>
+                          <input className="input mb-2" value={item.title || ''} onChange={(e) => updateGeneratedByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId, 'title', e.target.value)} placeholder="Title" />
+                          <select
+                            className="input mb-2"
+                            value={item.parentTempId || ''}
+                            onChange={(e) => updateGeneratedByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId, 'parentTempId', e.target.value)}
+                          >
+                            <option value="">Parent: none</option>
+                            {generatedParentCandidates.filter((candidate) => candidate.tempId !== item.tempId).map((candidate) => (
+                              <option key={candidate.tempId} value={candidate.tempId}>{candidate.type || 'story'} - {candidate.title}</option>
+                            ))}
+                          </select>
+                          <select
+                            className="input mb-2"
+                            value={item.assignee || ''}
+                            onChange={(e) => updateGeneratedByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId, 'assignee', e.target.value)}
+                          >
+                            <option value="">Select assignee</option>
+                            {availableAssignees.map((assignee) => (
+                              <option key={assignee.id} value={assignee.id}>{assignee.label}</option>
+                            ))}
+                          </select>
+                          <div className="grid grid-cols-2 gap-2 mb-2">
+                            <input
+                              type="date"
+                              className="input"
+                              value={item.startDate || ''}
+                              onChange={(e) => updateGeneratedByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId, 'startDate', e.target.value)}
+                            />
+                            <input
+                              type="date"
+                              className="input"
+                              value={item.dueDate || ''}
+                              onChange={(e) => updateGeneratedByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId, 'dueDate', e.target.value)}
+                            />
+                          </div>
+                          <textarea className="input min-h-[48px]" value={item.description || ''} onChange={(e) => updateGeneratedByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId, 'description', e.target.value)} placeholder="Description" />
+
+                          <div className="space-y-1 mt-2 ml-3 border-l border-slate-700 pl-3">
+                            {(generatedBacklogDraft.subtasks || []).filter((st) => st.parentTempId === item.tempId).map((st) => (
+                              <div key={st.tempId} className="rounded-md border border-slate-700 p-2 bg-slate-900/40">
+                                <div className="flex items-center justify-between gap-2 mb-2">
+                                  <p className="text-xs text-emerald-300">subtask</p>
+                                  <button className="text-xs text-rose-300 hover:text-rose-200" onClick={() => removeGeneratedByTempId('subtasks', st.tempId)}>Remove</button>
+                                </div>
+                                <input className="input mb-2" value={st.title || ''} onChange={(e) => updateGeneratedByTempId('subtasks', st.tempId, 'title', e.target.value)} placeholder="Subtask title" />
+                                <select
+                                  className="input mb-2"
+                                  value={st.parentTempId || ''}
+                                  onChange={(e) => updateGeneratedByTempId('subtasks', st.tempId, 'parentTempId', e.target.value)}
+                                >
+                                  <option value="">Select parent story/task</option>
+                                  {generatedParentCandidates.filter((candidate) => candidate.tempId !== st.tempId).map((candidate) => (
+                                    <option key={candidate.tempId} value={candidate.tempId}>{candidate.type || 'story'} - {candidate.title}</option>
+                                  ))}
+                                </select>
+                                <select
+                                  className="input mb-2"
+                                  value={st.assignee || ''}
+                                  onChange={(e) => updateGeneratedByTempId('subtasks', st.tempId, 'assignee', e.target.value)}
+                                >
+                                  <option value="">Select assignee</option>
+                                  {availableAssignees.map((assignee) => (
+                                    <option key={assignee.id} value={assignee.id}>{assignee.label}</option>
+                                  ))}
+                                </select>
+                                <div className="grid grid-cols-2 gap-2 mb-2">
+                                  <input
+                                    type="date"
+                                    className="input"
+                                    value={st.startDate || ''}
+                                    onChange={(e) => updateGeneratedByTempId('subtasks', st.tempId, 'startDate', e.target.value)}
+                                  />
+                                  <input
+                                    type="date"
+                                    className="input"
+                                    value={st.dueDate || ''}
+                                    onChange={(e) => updateGeneratedByTempId('subtasks', st.tempId, 'dueDate', e.target.value)}
+                                  />
+                                </div>
+                                <textarea className="input min-h-[40px]" value={st.description || ''} onChange={(e) => updateGeneratedByTempId('subtasks', st.tempId, 'description', e.target.value)} placeholder="Subtask description" />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                {!generatedBacklogDraft.epics.length && <p className="text-sm text-slate-400">No generated epics yet.</p>}
+              </div>
+            )}
+
+            {(plannerDraftView === 'json' || !hasGeneratedBacklog) && (
+              <>
+                <textarea
+                  value={generatedJsonText}
+                  onChange={(e) => setGeneratedJsonText(e.target.value)}
+                  className="input min-h-[260px] font-mono text-xs"
+                  placeholder="Generated JSON (epics/stories/tasks/subtasks) appears here for editing"
+                />
+                <button className="btn-secondary" onClick={applyGeneratedJsonText} disabled={!generatedJsonText.trim()}>
+                  Apply JSON to Landing View
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -545,6 +851,24 @@ export default function ProjectWorkspacePage() {
                               <option value="S4">S4</option>
                             </select>
                           </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <select className="input" value={editingDraft.assignee || ''} onChange={(e) => setEditingDraft((s) => ({ ...s, assignee: e.target.value }))}>
+                              <option value="">Select assignee</option>
+                              {availableAssignees.map((assignee) => (
+                                <option key={assignee.id} value={assignee.id}>{assignee.label}</option>
+                              ))}
+                            </select>
+                            <select className="input" value={editingDraft.parentStory || ''} onChange={(e) => setEditingDraft((s) => ({ ...s, parentStory: e.target.value }))}>
+                              <option value="">Parent: none</option>
+                              {existingParentCandidates.filter((candidate) => candidate._id !== story._id).map((candidate) => (
+                                <option key={candidate._id} value={candidate._id}>{candidate.type || 'story'} - {candidate.title}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input type="date" className="input" value={editingDraft.startDate || ''} onChange={(e) => setEditingDraft((s) => ({ ...s, startDate: e.target.value }))} />
+                            <input type="date" className="input" value={editingDraft.dueDate || ''} onChange={(e) => setEditingDraft((s) => ({ ...s, dueDate: e.target.value }))} />
+                          </div>
                           <div className="flex gap-2">
                             <button className="btn-primary btn-sm" onClick={() => updateStory.mutate()} disabled={updateStory.isPending}>Save</button>
                             <button className="btn-secondary btn-sm" onClick={() => setEditingStoryId('')}>Cancel</button>
@@ -553,7 +877,8 @@ export default function ProjectWorkspacePage() {
                       ) : (
                         <>
                           <p className="font-medium">{story.title}</p>
-                          <p className="text-xs text-slate-400">{story.type} • {story.status} • {story.priority} • {story.pushedToJira ? (story.jiraIssueKey || 'Pushed') : 'Not pushed'}</p>
+                          <p className="text-xs text-slate-400">{story.type} • {story.status} • {story.priority} • Assignee: {getAssigneeLabel(story.assignee)} • {story.pushedToJira ? (story.jiraIssueKey || 'Pushed') : 'Not pushed'}</p>
+                          <p className="text-xs text-slate-500">Parent: {story.parentStory?.title || 'none'} • Start: {toDateInput(story.startDate) || 'N/A'} • Due: {toDateInput(story.dueDate) || 'N/A'}</p>
                           <div className="flex gap-2">
                             <button
                               className="btn-secondary btn-sm"
@@ -564,6 +889,10 @@ export default function ProjectWorkspacePage() {
                                   status: story.status || 'approved',
                                   priority: story.priority || 'medium',
                                   sprint: story.sprint || 'backlog',
+                                  assignee: story.assignee?._id || '',
+                                  parentStory: story.parentStory?._id || '',
+                                  startDate: toDateInput(story.startDate),
+                                  dueDate: toDateInput(story.dueDate),
                                 })
                               }}
                             >

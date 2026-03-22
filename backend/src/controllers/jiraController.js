@@ -65,6 +65,61 @@ const sanitizeJiraPath = (path = '') => {
   return cleaned.startsWith('/') ? cleaned : `/${cleaned}`;
 };
 
+const parseJiraPathFromUrl = (value = '') => {
+  if (!value || typeof value !== 'string') return null;
+  try {
+    const parsed = new URL(value);
+    return `${parsed.pathname}${parsed.search || ''}`;
+  } catch {
+    return value;
+  }
+};
+
+const isUserRoleActor = (actor) => actor?.type === 'atlassian-user-role-actor';
+
+const buildMemberFromUser = (user = {}, roleName = '') => ({
+  accountId: user?.accountId || null,
+  name: user?.displayName || user?.name || 'Unknown',
+  email: user?.emailAddress || 'N/A',
+  avatar: user?.avatarUrls?.['48x48'] || null,
+  type: 'atlassian-user-role-actor',
+  accountType: user?.accountType || null,
+  roles: roleName ? [roleName] : [],
+});
+
+const fetchGroupMembers = async (client, actorGroup = {}) => {
+  const members = [];
+  const groupId = actorGroup?.groupId;
+  const groupName = actorGroup?.name;
+  if (!groupId && !groupName) return members;
+
+  let startAt = 0;
+  let hasMore = true;
+  while (hasMore) {
+    const params = { startAt, maxResults: 50 };
+    if (groupId) params.groupId = groupId;
+    else params.groupname = groupName;
+
+    let data;
+    try {
+      data = await jiraRequest(client, 'get', '/group/member', { params });
+    } catch {
+      break;
+    }
+
+    const values = Array.isArray(data?.values) ? data.values : [];
+    members.push(...values);
+
+    const nextStartAt = Number(data?.startAt || 0) + Number(data?.maxResults || values.length || 0);
+    const total = Number(data?.total || members.length);
+    hasMore = data?.isLast === false || nextStartAt < total;
+    startAt = nextStartAt;
+    if (values.length === 0) hasMore = false;
+  }
+
+  return members;
+};
+
 const jiraRequest = async (client, method, path, options = {}) => {
   const safePath = sanitizeJiraPath(path);
   if (!safePath) {
@@ -344,7 +399,10 @@ const pushToJira = async (req, res) => {
   // Push stories
   for (const storyId of (storyIds || [])) {
     try {
-      const story = await Story.findById(storyId).populate('epic');
+      const story = await Story.findById(storyId)
+        .populate('epic')
+        .populate('assignee', 'email jiraEmail')
+        .populate('parentStory', 'jiraIssueKey title');
       if (!story) continue;
 
       const acText = (story.acceptanceCriteria || []).map((a) => `- ${a.criterion}`).join('\n');
@@ -354,16 +412,40 @@ const pushToJira = async (req, res) => {
           project: { key: project.jiraProjectKey },
           summary: story.title,
           description: toAdfText(acText ? `${story.description || ''}\n\nAcceptance Criteria:\n${acText}` : story.description || ''),
-          issuetype: { name: story.type === 'task' ? 'Task' : 'Story' },
+          issuetype: { name: story.type === 'task' ? 'Task' : story.type === 'subtask' ? 'Sub-task' : 'Story' },
           priority: { name: capitalize(story.priority || 'medium') },
         },
       };
 
       if (storyPointsField && story.storyPoints) payload.fields[storyPointsField] = story.storyPoints;
+      if (story.dueDate) payload.fields.duedate = new Date(story.dueDate).toISOString().slice(0, 10);
+
+      if (story.startDate) {
+        const startDateValue = new Date(story.startDate).toISOString().slice(0, 10);
+        payload.fields.labels = [...new Set([...(payload.fields.labels || []), `start_date_${startDateValue}`])];
+      }
+
+      const assigneeEmail = story.assignee?.jiraEmail || story.assignee?.email;
+      if (assigneeEmail) {
+        try {
+          const assignees = await jiraRequest(client, 'get', '/user/search', {
+            params: { query: assigneeEmail, maxResults: 10 },
+          });
+          const match = (assignees || []).find((u) => (u?.emailAddress || '').toLowerCase() === assigneeEmail.toLowerCase());
+          if (match?.accountId) {
+            payload.fields.assignee = { accountId: match.accountId };
+          }
+        } catch {
+          // Keep payload valid even if assignee lookup fails.
+        }
+      }
 
       if (story.epic?.jiraEpicKey) {
         if (epicLinkField) payload.fields[epicLinkField] = story.epic.jiraEpicKey;
-        payload.fields.parent = { key: story.epic.jiraEpicKey };
+      }
+
+      if (story.type === 'subtask' && story.parentStory?.jiraIssueKey) {
+        payload.fields.parent = { key: story.parentStory.jiraIssueKey };
       }
 
       if (story.jiraIssueKey) {
@@ -452,6 +534,117 @@ const deleteServerProject = async (req, res) => {
   const client = await getJiraClient(req.user.id);
   await jiraRequest(client, 'delete', `/project/${req.params.projectIdOrKey}`);
   res.status(200).json({ success: true, message: 'Jira project deleted' });
+};
+
+// @desc    List Jira project members by role
+// @route   GET /api/jira/server/projects/:projectIdOrKey/members
+// @access  Private
+const listServerProjectMembers = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  const { projectIdOrKey } = req.params;
+  const includeApps = String(req.query.includeApps || 'false').toLowerCase() === 'true';
+  const includeGroups = String(req.query.includeGroups || 'true').toLowerCase() !== 'false';
+
+  const roleMap = await jiraRequest(client, 'get', `/project/${projectIdOrKey}/role`);
+  const roleEntries = Object.entries(roleMap || {});
+
+  const memberMap = new Map();
+  const roles = [];
+
+  for (const [roleName, roleUrl] of roleEntries) {
+    if (!includeApps && roleName.toLowerCase() === 'atlassian-addons-project-access') {
+      continue;
+    }
+
+    const rolePath = parseJiraPathFromUrl(roleUrl);
+    if (!rolePath) continue;
+
+    const roleData = await jiraRequest(client, 'get', rolePath);
+    const rawActors = Array.isArray(roleData?.actors) ? roleData.actors : [];
+    const actors = includeApps
+      ? rawActors
+      : rawActors.filter((actor) => isUserRoleActor(actor) || actor?.type === 'atlassian-group-role-actor');
+    roles.push({
+      id: roleData?.id,
+      name: roleData?.name || roleName,
+      actorCount: actors.length,
+    });
+
+    actors.forEach((actor) => {
+      if (!isUserRoleActor(actor)) return;
+
+      const user = actor?.actorUser || {
+        accountId: actor?.accountId,
+        displayName: actor?.displayName || actor?.name,
+        emailAddress: actor?.emailAddress,
+        accountType: actor?.accountType,
+      };
+      const item = buildMemberFromUser(user, roleName);
+      const key = item.accountId || `${roleName}:${item.name}`;
+
+      if (!memberMap.has(key)) {
+        memberMap.set(key, item);
+      }
+
+      const existing = memberMap.get(key);
+      if (!existing.roles.includes(roleName)) {
+        existing.roles.push(roleName);
+      }
+    });
+
+    if (includeGroups) {
+      const groupActors = actors.filter((actor) => actor?.type === 'atlassian-group-role-actor');
+      for (const groupActor of groupActors) {
+        const groupMembers = await fetchGroupMembers(client, groupActor?.actorGroup);
+        groupMembers.forEach((user) => {
+          const item = buildMemberFromUser(user, roleName);
+          const key = item.accountId || `${roleName}:${item.name}`;
+          if (!memberMap.has(key)) {
+            memberMap.set(key, item);
+          }
+          const existing = memberMap.get(key);
+          if (!existing.roles.includes(roleName)) {
+            existing.roles.push(roleName);
+          }
+        });
+      }
+    }
+  }
+
+  // Fallback: if role-based resolution returns no people, pull assignable users for the project.
+  if (memberMap.size === 0) {
+    let assignableUsers = [];
+    try {
+      assignableUsers = await jiraRequest(client, 'get', '/user/assignable/search', {
+        params: {
+          project: projectIdOrKey,
+          maxResults: 100,
+        },
+      });
+    } catch {
+      assignableUsers = [];
+    }
+
+    if (Array.isArray(assignableUsers)) {
+      assignableUsers.forEach((user) => {
+        const item = buildMemberFromUser(user, 'assignable_user');
+        const key = item.accountId || `assignable:${item.name}`;
+        if (!memberMap.has(key)) {
+          memberMap.set(key, item);
+        }
+      });
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      projectIdOrKey,
+      memberCount: memberMap.size,
+      members: [...memberMap.values()],
+      roles,
+    },
+  });
 };
 
 // @desc    List Jira issues by project/JQL
@@ -693,6 +886,7 @@ module.exports = {
   createServerProject,
   updateServerProject,
   deleteServerProject,
+  listServerProjectMembers,
   listServerIssues,
   getServerIssue,
   createServerIssue,

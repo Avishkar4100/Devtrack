@@ -9,6 +9,7 @@ const {
 	createServerProject,
 	updateServerProject,
 	deleteServerProject,
+	listServerProjectMembers,
 	listServerIssues,
 	getServerIssue,
 	createServerIssue,
@@ -30,6 +31,7 @@ router.post('/sync/:projectId', syncFromJira);
 
 // Full Jira server control
 router.get('/server/projects', listServerProjects);
+router.get('/server/projects/:projectIdOrKey/members', listServerProjectMembers);
 router.post('/server/projects', createServerProject);
 router.put('/server/projects/:projectIdOrKey', updateServerProject);
 router.patch('/server/projects/:projectIdOrKey', updateServerProject);
