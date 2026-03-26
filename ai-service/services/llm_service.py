@@ -1,81 +1,111 @@
 import os
 import json
 import re
+import logging
 from typing import List, Dict, Any
 
+logger = logging.getLogger(__name__)
 
-STORY_GENERATION_PROMPT = """You are an expert Agile Scrum Master AI assistant for the project "{project_name}".
 
-Module: {module_name}
+STORY_GENERATION_PROMPT = """You are a senior software architect generating a production-ready Jira backlog.
+
+Project: {project_name}
+Module Focus: {module_name}
 {constraints}
 
 Context from SRS document:
 {context}
 
-Additional context: {additional_context}
+Additional context:
+{additional_context}
 
-Generate a complete Agile breakdown for the "{module_name}" module. Return ONLY valid JSON with this exact structure:
+Instructions:
+1. Generate a COMPLETE backlog hierarchy: Epics -> Stories -> Tasks -> Subtasks.
+2. Focus ONLY on domain-specific features from SRS context.
+3. DO NOT include generic tasks: optimize, refactor, improve, enhance, validation.
+4. Ensure logical engineering dependency flow and no orphan items.
+5. Minimum 2 epics; each epic must have at least 1 story; each story must have at least 1 task.
+6. Return STRICT JSON only using this structure and fields.
 
+Return ONLY valid JSON with exact shape:
 {{
-  "epics": [
-    {{
-      "tempId": "epic-1",
-      "title": "Epic title",
-      "description": "Epic description",
-      "sprint": "S1",
-      "priority": "high"
-    }}
-  ],
-  "stories": [
-    {{
-      "tempId": "story-1",
-      "epicTempId": "epic-1",
-      "type": "story",
-      "title": "As a [role], I can [action] so that [benefit]",
-      "description": "Detailed description",
-      "acceptanceCriteria": ["Criterion 1", "Criterion 2", "Criterion 3"],
-      "sprint": "S1",
-      "priority": "high",
-      "storyPoints": 5
-    }}
-  ],
-  "tasks": [
-    {{
-      "tempId": "task-1",
-      "epicTempId": "epic-1",
-      "type": "task",
-      "title": "Technical task title",
-      "description": "Technical description",
-      "acceptanceCriteria": ["Technical criterion 1"],
-      "sprint": "S1",
-      "priority": "medium",
-      "storyPoints": 3
-    }}
-  ],
-  "subtasks": [
-    {{
-      "parentTempId": "story-1",
-      "epicTempId": "epic-1",
-      "type": "subtask",
-      "title": "Specific subtask title",
-      "description": "Specific implementation detail",
-      "acceptanceCriteria": ["Subtask done criterion"],
-      "sprint": "S1",
-      "priority": "medium",
-      "storyPoints": 1
-    }}
-  ]
-}}
-
-Rules:
-- Generate 1-2 epics, 3-5 user stories, 3-5 technical tasks, 4-8 subtasks
-- User stories must follow \"As a [role], I can [action] so that [benefit]\" format
-- Each story/task must have 2-4 specific, testable acceptance criteria
-- Subtasks are small implementation steps that belong to a parent story or task (use parentTempId)
-- Assign realistic story points: stories(3-8), tasks(2-5), subtasks(1-2)
-- Sprint values: S1, S2, S3 or S4
-- Priority values: highest, high, medium, low, lowest
-- Return ONLY the JSON object, no markdown, no explanation"""
+    "epics": [
+        {{
+            "tempId": "epic-1",
+            "title": "",
+            "description": "",
+            "type": "epic",
+            "module": "",
+            "priority": "high|medium|low",
+            "assignee": null,
+            "status": "todo",
+            "startDate": null,
+            "dueDate": null,
+            "storyPoints": 0,
+            "parentId": null,
+            "sprint": "S1"
+        }}
+    ],
+    "stories": [
+        {{
+            "tempId": "story-1",
+            "epicTempId": "epic-1",
+            "title": "",
+            "description": "",
+            "type": "story",
+            "module": "",
+            "priority": "high|medium|low",
+            "assignee": null,
+            "status": "todo",
+            "startDate": null,
+            "dueDate": null,
+            "storyPoints": 0,
+            "parentId": "epic-1",
+            "acceptanceCriteria": ["", ""],
+            "sprint": "S1"
+        }}
+    ],
+    "tasks": [
+        {{
+            "tempId": "task-1",
+            "epicTempId": "epic-1",
+            "parentTempId": "story-1",
+            "title": "",
+            "description": "",
+            "type": "task",
+            "module": "",
+            "priority": "high|medium|low",
+            "assignee": null,
+            "status": "todo",
+            "startDate": null,
+            "dueDate": null,
+            "storyPoints": 0,
+            "parentId": "story-1",
+            "acceptanceCriteria": [""],
+            "sprint": "S1"
+        }}
+    ],
+    "subtasks": [
+        {{
+            "tempId": "subtask-1",
+            "epicTempId": "epic-1",
+            "parentTempId": "task-1",
+            "title": "",
+            "description": "",
+            "type": "subtask",
+            "module": "",
+            "priority": "high|medium|low",
+            "assignee": null,
+            "status": "todo",
+            "startDate": null,
+            "dueDate": null,
+            "storyPoints": 0,
+            "parentId": "task-1",
+            "acceptanceCriteria": [""],
+            "sprint": "S1"
+        }}
+    ]
+}}"""
 
 
 CODE_ANALYSIS_PROMPT = """You are a code analysis AI. Determine if the following code changes satisfy a user story's acceptance criteria.
@@ -179,6 +209,75 @@ Output rules:
 - Keep suggestions backlog/planning oriented and immediately actionable
 - Ensure each suggestion is distinct and targets a different planning action (scope, workflow, data model, role permissions, integrations, NFRs, risks, validation).
 - No markdown, no extra keys, JSON only
+"""
+
+
+REQUIREMENT_EXTRACTION_PROMPT = """Extract structured requirements from the following SRS.
+
+Return ONLY valid JSON with this shape:
+{{
+    "functional_requirements": ["..."],
+    "non_functional_requirements": ["..."],
+    "modules": ["..."],
+    "actors": ["..."]
+}}
+
+Rules:
+- Keep requirements concise and deduplicated
+- Preserve requirement IDs like FR-1 / NFR-2 if present
+- Do not invent modules or actors
+
+SRS:
+{srs_text}
+"""
+
+
+PHASE_ACTION_SUGGEST_PROMPT = """You are an AI software planning assistant.
+
+Project: {project_name}
+Module Focus: {module_name}
+Project Phase: {phase}
+User Input: {user_input}
+
+Modules:
+{modules}
+
+Functional Requirements:
+{functional_requirements}
+
+Non-Functional Requirements:
+{non_functional_requirements}
+
+Actors:
+{actors}
+
+Existing Work:
+{existing_work}
+
+Task:
+Suggest 5 to 7 high-value development actions.
+
+Rules:
+- You MUST prioritize features directly derived from the SRS domain and listed modules/requirements.
+- If domain terms imply healthcare, prioritize appointment, doctor, patient, scheduling flows first.
+- Each suggestion MUST belong to a concrete module from the provided module list when available.
+- Align with project phase:
+    - START phase: suggest ONLY core product features and required integrations.
+    - START phase: DO NOT suggest optimization/UI tweaks/refactors/improvements.
+- Avoid duplicates and avoid generic planning language.
+- DO NOT include titles containing these words: optimize, refactor, improve, enhance, validation, error handling, define, plan.
+- Return at least 3 core features and at most 7 total suggestions.
+
+Return ONLY valid JSON array:
+[
+    {{
+        "title": "",
+        "type": "feature | improvement | integration",
+        "priority": "high | medium | low",
+        "module": "",
+        "reason": ""
+    }}
+]
 """
 
 
@@ -594,7 +693,108 @@ class LLMService:
             else:
                 raise ValueError(f"LLM returned invalid JSON: {raw[:200]}")
 
-        return result
+        return self._normalize_generated_backlog(result, module_name)
+
+    def _normalize_generated_backlog(self, result: Dict[str, Any], module_name: str) -> Dict[str, Any]:
+        epics = result.get("epics") if isinstance(result, dict) else []
+        stories = result.get("stories") if isinstance(result, dict) else []
+        tasks = result.get("tasks") if isinstance(result, dict) else []
+        subtasks = result.get("subtasks") if isinstance(result, dict) else []
+
+        if not isinstance(epics, list):
+            epics = []
+        if not isinstance(stories, list):
+            stories = []
+        if not isinstance(tasks, list):
+            tasks = []
+        if not isinstance(subtasks, list):
+            subtasks = []
+
+        def _priority(v: str) -> str:
+            val = str(v or "").lower()
+            return val if val in {"high", "medium", "low"} else "medium"
+
+        def _normalize_item(item: Dict[str, Any], item_type: str, parent_id: str = None, idx: int = 0) -> Dict[str, Any]:
+            temp_id = str(item.get("tempId") or f"{item_type}-{idx + 1}")
+            title = str(item.get("title") or "").strip() or f"{item_type.title()} {idx + 1}"
+            return {
+                **item,
+                "tempId": temp_id,
+                "title": title,
+                "description": str(item.get("description") or "").strip(),
+                "type": item_type,
+                "module": str(item.get("module") or module_name or "core").strip(),
+                "priority": _priority(item.get("priority")),
+                "assignee": item.get("assignee") if item.get("assignee") else None,
+                "status": "todo",
+                "startDate": item.get("startDate") if item.get("startDate") else None,
+                "dueDate": item.get("dueDate") if item.get("dueDate") else None,
+                "storyPoints": int(item.get("storyPoints") or 0),
+                "parentId": parent_id,
+            }
+
+        normalized_epics = [_normalize_item(e if isinstance(e, dict) else {}, "epic", None, i) for i, e in enumerate(epics)]
+        if len(normalized_epics) < 2:
+            raise ValueError("Generated backlog must include at least 2 epics")
+
+        epic_ids = {e["tempId"] for e in normalized_epics}
+        normalized_stories = []
+        for i, s in enumerate(stories):
+            if not isinstance(s, dict):
+                continue
+            epic_temp = str(s.get("epicTempId") or s.get("parentId") or "")
+            if epic_temp not in epic_ids:
+                epic_temp = normalized_epics[0]["tempId"]
+            item = _normalize_item(s, "story", epic_temp, i)
+            item["epicTempId"] = epic_temp
+            item["acceptanceCriteria"] = s.get("acceptanceCriteria") or []
+            normalized_stories.append(item)
+
+        story_ids = {s["tempId"] for s in normalized_stories}
+        normalized_tasks = []
+        for i, t in enumerate(tasks):
+            if not isinstance(t, dict):
+                continue
+            parent_story = str(t.get("parentTempId") or t.get("parentId") or "")
+            if parent_story not in story_ids:
+                parent_story = normalized_stories[0]["tempId"] if normalized_stories else None
+            epic_temp = str(t.get("epicTempId") or "")
+            if epic_temp not in epic_ids:
+                epic_temp = normalized_epics[0]["tempId"]
+            item = _normalize_item(t, "task", parent_story, i)
+            item["parentTempId"] = parent_story
+            item["epicTempId"] = epic_temp
+            item["acceptanceCriteria"] = t.get("acceptanceCriteria") or []
+            normalized_tasks.append(item)
+
+        task_ids = {t["tempId"] for t in normalized_tasks}
+        normalized_subtasks = []
+        for i, st in enumerate(subtasks):
+            if not isinstance(st, dict):
+                continue
+            parent_task = str(st.get("parentTempId") or st.get("parentId") or "")
+            if parent_task not in task_ids:
+                parent_task = normalized_tasks[0]["tempId"] if normalized_tasks else None
+            epic_temp = str(st.get("epicTempId") or "")
+            if epic_temp not in epic_ids:
+                epic_temp = normalized_epics[0]["tempId"]
+            item = _normalize_item(st, "subtask", parent_task, i)
+            item["parentTempId"] = parent_task
+            item["epicTempId"] = epic_temp
+            item["acceptanceCriteria"] = st.get("acceptanceCriteria") or []
+            normalized_subtasks.append(item)
+
+        if not normalized_stories:
+            raise ValueError("Generated backlog must include stories linked to epics")
+        if not normalized_tasks:
+            raise ValueError("Generated backlog must include tasks linked to stories")
+
+        return {
+            "epics": normalized_epics,
+            "stories": normalized_stories,
+            "tasks": normalized_tasks,
+            "subtasks": normalized_subtasks,
+        }
 
     def validate_code_against_story(
         self,
@@ -638,9 +838,11 @@ class LLMService:
             raw = self._call_llm(prompt, temperature=0.2, ai_config=ai_config).strip()
         except Exception as err:
             if not self._is_context_overflow_error(err):
-                return {"epics": [], "stories": [], "tasks": []}
+                logger.warning("suggest_planner_prompts failed before parse (non-overflow): %s", str(err))
+                raise RuntimeError(f"LLM call failed: {str(err)}")
 
             # Retry once with an aggressively compacted context for smaller local models.
+            logger.warning("suggest_planner_prompts context overflow, retrying with compact graph")
             retry_graph = self._compact_context_graph_for_prompt(
                 context_graph,
                 max_json_chars=3200,
@@ -655,8 +857,9 @@ class LLMService:
             )
             try:
                 raw = self._call_llm(retry_prompt, temperature=0.2, ai_config=ai_config).strip()
-            except Exception:
-                return {"epics": [], "stories": [], "tasks": []}
+            except Exception as retry_err:
+                logger.warning("suggest_planner_prompts retry failed: %s", str(retry_err))
+                raise RuntimeError(f"LLM call failed after compact retry: {str(retry_err)}")
 
         if raw.startswith("```"):
             raw = raw.split("```")[1]
@@ -673,20 +876,145 @@ class LLMService:
             if not (isinstance(epics, list) and isinstance(stories, list) and isinstance(tasks, list)):
                 legacy = parsed.get("suggestions", [])
                 if isinstance(legacy, list):
+                    logger.info("suggest_planner_prompts using legacy suggestions array format")
                     return {
                         "epics": [str(s).strip() for s in legacy[:2] if str(s).strip()],
                         "stories": [str(s).strip() for s in legacy[2:6] if str(s).strip()],
                         "tasks": [str(s).strip() for s in legacy[6:10] if str(s).strip()],
                     }
-                return {"epics": [], "stories": [], "tasks": []}
+                logger.warning("suggest_planner_prompts parsed JSON but keys were invalid")
+                raise ValueError("LLM returned JSON with invalid suggestion keys")
 
             return {
                 "epics": [str(s).strip() for s in epics if str(s).strip()][:4],
                 "stories": [str(s).strip() for s in stories if str(s).strip()][:8],
                 "tasks": [str(s).strip() for s in tasks if str(s).strip()][:8],
             }
-        except Exception:
-            return {"epics": [], "stories": [], "tasks": []}
+        except Exception as parse_err:
+            logger.warning("suggest_planner_prompts JSON parse failed: %s | raw_head=%s", str(parse_err), raw[:240])
+            raise ValueError("LLM returned invalid JSON for suggest response")
+
+    def extract_requirements(self, text: str, ai_config: Dict[str, Any] = None) -> Dict[str, List[str]]:
+        prompt = REQUIREMENT_EXTRACTION_PROMPT.format(
+            srs_text=self._trim_text(text, 32000),
+        )
+
+        raw = self._call_llm(prompt, temperature=0.1, ai_config=ai_config).strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+
+        try:
+            parsed = json.loads(raw)
+        except Exception as parse_err:
+            logger.warning("extract_requirements JSON parse failed: %s | raw_head=%s", str(parse_err), raw[:280])
+            raise ValueError("LLM returned invalid JSON for requirement extraction")
+
+        return {
+            "functional_requirements": [str(x).strip() for x in (parsed.get("functional_requirements") or []) if str(x).strip()][:40],
+            "non_functional_requirements": [str(x).strip() for x in (parsed.get("non_functional_requirements") or []) if str(x).strip()][:30],
+            "modules": [str(x).strip() for x in (parsed.get("modules") or []) if str(x).strip()][:20],
+            "actors": [str(x).strip() for x in (parsed.get("actors") or []) if str(x).strip()][:20],
+        }
+
+    def suggest_phase_actions(
+        self,
+        project_name: str,
+        module_name: str,
+        phase: str,
+        user_input: str,
+        modules: List[str],
+        functional_requirements: List[str],
+        non_functional_requirements: List[str],
+        actors: List[str],
+        existing_work: List[Dict[str, Any]],
+        ai_config: Dict[str, Any] = None,
+    ) -> List[Dict[str, str]]:
+        prompt = PHASE_ACTION_SUGGEST_PROMPT.format(
+            project_name=project_name,
+            module_name=module_name,
+            phase=phase,
+            user_input=user_input or "",
+            modules=json.dumps(modules[:20], ensure_ascii=False),
+            functional_requirements=json.dumps(functional_requirements[:40], ensure_ascii=False),
+            non_functional_requirements=json.dumps(non_functional_requirements[:30], ensure_ascii=False),
+            actors=json.dumps(actors[:20], ensure_ascii=False),
+            existing_work=json.dumps(existing_work[:12], ensure_ascii=False),
+        )
+
+        raw = self._call_llm(prompt, temperature=0.2, ai_config=ai_config).strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+
+        try:
+            parsed = json.loads(raw)
+        except Exception as parse_err:
+            logger.warning("suggest_phase_actions JSON parse failed: %s | raw_head=%s", str(parse_err), raw[:280])
+            raise ValueError("LLM returned invalid JSON for phase-aware suggestions")
+
+        if not isinstance(parsed, list):
+            raise ValueError("LLM returned non-array response for phase-aware suggestions")
+
+        normalized = []
+        module_catalog = [str(m).strip().lower() for m in (modules or []) if str(m).strip()]
+        banned_words = [
+            "optimize", "refactor", "improve", "enhance",
+            "validation", "error handling", "define", "plan",
+        ]
+        seen_keys = set()
+
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip()
+            action_type = str(item.get("type", "feature")).strip().lower()
+            priority = str(item.get("priority", "medium")).strip().lower()
+            module = str(item.get("module", module_name)).strip()
+            reason = str(item.get("reason", "")).strip()
+
+            if not title:
+                continue
+
+            title_low = title.lower()
+            if any(word in title_low for word in banned_words):
+                continue
+
+            if action_type not in {"feature", "improvement", "integration"}:
+                action_type = "feature"
+            if priority not in {"high", "medium", "low"}:
+                priority = "medium"
+
+            if phase == "start" and action_type == "improvement":
+                continue
+
+            module_low = module.lower()
+            if module_catalog and module_low not in module_catalog:
+                matched = next((m for m in module_catalog if m in title_low), None)
+                module = matched if matched else modules[0]
+
+            dedupe_key = f"{module.lower()}|{title_low}"
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+
+            normalized.append({
+                "title": title,
+                "type": action_type,
+                "priority": priority,
+                "module": module,
+                "reason": reason,
+            })
+
+        if phase == "start":
+            core = [x for x in normalized if x["type"] in {"feature", "integration"}]
+            if len(core) < 3:
+                raise ValueError("Insufficient core feature suggestions for START phase")
+            return core[:7]
+
+        return normalized[:7]
 
     def summarize_jira_project(self, project_key: str, issues: List[Dict[str, Any]]) -> Dict[str, Any]:
         issues_text = "\n".join(

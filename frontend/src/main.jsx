@@ -6,6 +6,7 @@ import { Toaster } from 'react-hot-toast'
 import App from './App.jsx'
 import './index.css'
 import ThemeSync from './components/ThemeSync.jsx'
+import NotificationSync from './components/NotificationSync.jsx'
 import AppErrorBoundary from './components/AppErrorBoundary.jsx'
 import { appLogger } from './lib/logger'
 
@@ -39,6 +40,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <QueryClientProvider client={queryClient}>
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <ThemeSync />
+          <NotificationSync />
           <App />
           <Toaster
             position="top-right"

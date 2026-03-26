@@ -5,10 +5,12 @@ const Epic = require('../models/Epic');
 const Story = require('../models/Story');
 const Project = require('../models/Project');
 const Document = require('../models/Document');
+const Requirement = require('../models/Requirement');
 const Sprint = require('../models/Sprint');
 const Commit = require('../models/Commit');
 const AuditLog = require('../models/AuditLog');
 const aiService = require('../services/aiService');
+const logger = require('../config/logger');
 
 const readSnippetFromDocument = (filePath, maxChars = 4000) => {
   try {
@@ -238,28 +240,92 @@ const suggestStories = async (req, res) => {
   const project = await Project.findById(req.params.projectId);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
-  const contextGraph = await buildSrsOnlyContext(project._id);
+  const [requirements, stories, commits] = await Promise.all([
+    Requirement.findOne({ project: project._id }).lean(),
+    Story.find({ project: project._id }).sort({ updatedAt: -1 }).limit(120).lean(),
+    Commit.find({ projectId: project._id }).sort({ date: -1 }).limit(40).lean(),
+  ]);
 
-  if (!contextGraph.documents.length) {
-    return res.status(400).json({
+  const doneStories = stories.filter((s) => s.status === 'done').length;
+  let phase = 'start';
+  if (stories.length > 10) phase = 'mid';
+  if (doneStories > 20) phase = 'late';
+
+  const existingStories = stories.slice(0, 10).map((s) => ({
+    title: s.title,
+    type: s.type,
+    status: s.status,
+    sprint: s.sprint,
+    priority: s.priority,
+  }));
+
+  const structuredContext = {
+    modules: Array.isArray(requirements?.modules) ? requirements.modules : [],
+    functional: Array.isArray(requirements?.functional) ? requirements.functional : [],
+    nonFunctional: Array.isArray(requirements?.nonFunctional) ? requirements.nonFunctional : [],
+    actors: Array.isArray(requirements?.actors) ? requirements.actors : [],
+    phase,
+    existingStories,
+    recentCommits: commits.slice(0, 8).map((c) => c.message || c.sha).filter(Boolean),
+  };
+
+  logger.info(`Suggest request project=${project._id} module=${moduleName} phase=${phase} modules=${structuredContext.modules.length} fr=${structuredContext.functional.length} nfr=${structuredContext.nonFunctional.length} actors=${structuredContext.actors.length} userInputChars=${(userInput || '').length}`);
+
+  let result;
+  try {
+    result = await aiService.suggestStories({
+      projectId: project._id.toString(),
+      projectName: project.name,
+      moduleName,
+      userInput: userInput || '',
+      contextGraph: structuredContext,
+    });
+  } catch (error) {
+    if (error.code === 'AI_SERVICE_UNAVAILABLE') {
+      logger.warn(`Suggest failed project=${project._id} reason=ai_service_unavailable`);
+      return res.status(503).json({
+        success: false,
+        message: 'AI suggestion service is unavailable. Start ai-service and verify model credentials, then try again.',
+      });
+    }
+    throw error;
+  }
+
+  const rawActions = Array.isArray(result?.suggestions) ? result.suggestions : [];
+  const badWords = ['optimize', 'refactor', 'improve', 'enhance', 'validation', 'error handling', 'define', 'plan'];
+  const filteredActions = rawActions.filter((s) => {
+    const title = String(s?.title || '').toLowerCase();
+    if (!title) return false;
+    if (badWords.some((w) => title.includes(w))) return false;
+    if (phase === 'start' && s?.type === 'improvement') return false;
+    return true;
+  }).slice(0, 7);
+
+  if (filteredActions.length < 3) {
+    logger.warn(`Suggest failed project=${project._id} reason=empty_ai_response`);
+    return res.status(502).json({
       success: false,
-      message: 'No processed SRS found. Upload and process SRS before requesting suggestions.',
+      message: 'AI returned insufficient domain-aligned actionable suggestions after quality filters. Check ai-service logs and requirements extraction.',
+      data: {
+        contextSummary: {
+          source: 'requirements_structured',
+          phase,
+          moduleCount: structuredContext.modules.length,
+          functionalCount: structuredContext.functional.length,
+        },
+      },
     });
   }
 
-  const result = await aiService.suggestStories({
-    projectId: project._id.toString(),
-    projectName: project.name,
-    moduleName,
-    userInput: userInput || '',
-    contextGraph,
+  const structuredSuggestions = { epics: [], stories: [], tasks: [] };
+  filteredActions.forEach((action) => {
+    const line = `${action.title}${action.reason ? ` - ${action.reason}` : ''}`;
+    if (action.type === 'integration') structuredSuggestions.epics.push(line);
+    else if (action.type === 'improvement') structuredSuggestions.tasks.push(line);
+    else structuredSuggestions.stories.push(line);
   });
 
-  const structuredSuggestions = {
-    epics: Array.isArray(result?.suggestions?.epics) ? result.suggestions.epics : [],
-    stories: Array.isArray(result?.suggestions?.stories) ? result.suggestions.stories : [],
-    tasks: Array.isArray(result?.suggestions?.tasks) ? result.suggestions.tasks : [],
-  };
+  logger.info(`Suggest AI response project=${project._id} actions=${filteredActions.length} epics=${structuredSuggestions.epics.length} stories=${structuredSuggestions.stories.length} tasks=${structuredSuggestions.tasks.length}`);
 
   const flatSuggestions = [
     ...structuredSuggestions.epics.map((s) => `EPIC: ${s}`),
@@ -273,8 +339,12 @@ const suggestStories = async (req, res) => {
       suggestions: flatSuggestions,
       structuredSuggestions,
       contextSummary: {
-        source: contextGraph.source,
-        documentCount: contextGraph.documents.length,
+        source: 'requirements_structured',
+        phase,
+        moduleCount: structuredContext.modules.length,
+        functionalCount: structuredContext.functional.length,
+        nonFunctionalCount: structuredContext.nonFunctional.length,
+        actorCount: structuredContext.actors.length,
       },
     },
   });
@@ -285,6 +355,10 @@ const suggestStories = async (req, res) => {
 // @access  Private (Scrum Master)
 const saveGeneratedStories = async (req, res) => {
   const { epics, stories, tasks, subtasks } = req.body;
+
+  const today = new Date();
+  const defaultDue = new Date(today);
+  defaultDue.setDate(defaultDue.getDate() + 5);
 
   const normalizeAssignee = (value) => (
     value && mongoose.Types.ObjectId.isValid(value) ? value : undefined
@@ -327,7 +401,8 @@ const saveGeneratedStories = async (req, res) => {
     const epicRef = storyData.epicTempId
       ? epicMap[storyData.epicTempId]
       : savedEpics[0]?._id;
-    const parentRef = storyData.parentTempId ? storyTempMap[storyData.parentTempId] : undefined;
+    const parentTempId = storyData.parentTempId || storyData.parentId;
+    const parentRef = parentTempId ? storyTempMap[parentTempId] : undefined;
 
     // Sanitize sprint/priority to valid enum values
     const validSprints = ['S1', 'S2', 'S3', 'S4', 'backlog'];
@@ -350,11 +425,11 @@ const saveGeneratedStories = async (req, res) => {
       storyPoints: storyData.storyPoints || 0,
       storyKey: `${project.key}-${Date.now()}-${storyIdx++}`,
       aiGenerated: true,
-      status: 'approved',
+      status: 'to_do',
       assignee: normalizeAssignee(storyData.assignee),
       parentStory: parentRef,
-      startDate: normalizeDate(storyData.startDate),
-      dueDate: normalizeDate(storyData.dueDate),
+      startDate: normalizeDate(storyData.startDate) || today,
+      dueDate: normalizeDate(storyData.dueDate) || defaultDue,
       reporter: req.user.id,
     });
     savedStories.push(story);
@@ -363,7 +438,8 @@ const saveGeneratedStories = async (req, res) => {
 
   // Save subtasks linked to parent stories
   for (const sub of (subtasks || [])) {
-    const parentId = sub.parentTempId ? storyTempMap[sub.parentTempId] : savedStories[0]?._id;
+    const subParentTempId = sub.parentTempId || sub.parentId;
+    const parentId = subParentTempId ? storyTempMap[subParentTempId] : savedStories[0]?._id;
     const epicRef = sub.epicTempId ? epicMap[sub.epicTempId] : savedEpics[0]?._id;
     const validSprints = ['S1', 'S2', 'S3', 'S4', 'backlog'];
     const validPriorities = ['highest', 'high', 'medium', 'low', 'lowest'];
@@ -385,10 +461,10 @@ const saveGeneratedStories = async (req, res) => {
       storyPoints: sub.storyPoints || 1,
       storyKey: `${project.key}-SUB-${Date.now()}-${storyIdx++}`,
       aiGenerated: true,
-      status: 'approved',
+      status: 'to_do',
       assignee: normalizeAssignee(sub.assignee),
-      startDate: normalizeDate(sub.startDate),
-      dueDate: normalizeDate(sub.dueDate),
+      startDate: normalizeDate(sub.startDate) || today,
+      dueDate: normalizeDate(sub.dueDate) || defaultDue,
       reporter: req.user.id,
     });
   }

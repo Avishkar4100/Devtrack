@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Powered DevTrack - Complete Project Blueprint</title>
+  <style>
+    :root {
+      --bg: #f3f5f7;
+      --card: #ffffff;
+      --text: #1d2430;
+      --muted: #4f5b6a;
+      --line: #d7dee7;
+      --brand: #0c4a6e;
+      --brand-2: #0e7490;
+      --ok: #166534;
+      --warn: #92400e;
+      --code: #0f172a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #e9eef3 0%, #f9fbfc 280px, #f3f5f7 100%);
+      color: var(--text);
+      line-height: 1.55;
+    }
+
+    .container {
+      width: min(1200px, 94vw);
+      margin: 24px auto 48px;
+    }
+
+    .hero {
+      background: radial-gradient(circle at top right, #c5e4ea 0%, #e8f4f7 35%, #ffffff 100%);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: 0 10px 30px rgba(12, 74, 110, 0.08);
+    }
+
+    h1, h2, h3 {
+      margin: 0 0 10px;
+      line-height: 1.25;
+    }
+
+    h1 { font-size: 1.9rem; }
+    h2 { font-size: 1.35rem; margin-top: 24px; }
+    h3 { font-size: 1.05rem; margin-top: 16px; }
+
+    p { margin: 8px 0; }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin-top: 8px;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      margin-top: 16px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+    }
+
+    .chip {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #dff3f7;
+      border: 1px solid #b7dee6;
+      color: #0a5368;
+      font-size: 0.82rem;
+      margin: 2px 4px 2px 0;
+      white-space: nowrap;
+    }
+
+    .flow {
+      background: #fbfdff;
+      border: 1px dashed #a7b8cc;
+      border-radius: 12px;
+      padding: 12px;
+      overflow-x: auto;
+      font-family: Consolas, Monaco, "Courier New", monospace;
+      font-size: 0.92rem;
+      color: #1e293b;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 0.94rem;
+    }
+
+    th {
+      background: #edf4fb;
+      color: #12395f;
+      font-weight: 650;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    code {
+      background: #e8edf4;
+      color: var(--code);
+      border-radius: 6px;
+      padding: 1px 5px;
+      font-family: Consolas, Monaco, "Courier New", monospace;
+      font-size: 0.88rem;
+    }
+
+    .status-ok { color: var(--ok); font-weight: 650; }
+    .status-warn { color: var(--warn); font-weight: 650; }
+
+    ul { margin-top: 8px; }
+
+    .footer {
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="hero">
+      <h1>AI Powered DevTrack - Complete Project Blueprint</h1>
+      <p>
+        This document captures the full architecture of the project as implemented till now: UI flow,
+        frontend state/actions, backend orchestration, AI service behavior, persistence layer,
+        and Jira publishing pipeline.
+      </p>
+      <p class="meta">
+        Scope: Frontend (React + Vite), Backend (Node/Express + MongoDB), AI Service (FastAPI + LLM + Chroma), Jira integration.
+      </p>
+    </section>
+
+    <h2>1) High-Level Architecture</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Frontend Layer</h3>
+        <p>React SPA with route-based pages, persisted client state, toast + notification history, and API interaction through shared client utilities.</p>
+        <span class="chip">React</span>
+        <span class="chip">Vite</span>
+        <span class="chip">Zustand (persist)</span>
+        <span class="chip">React Query</span>
+      </div>
+      <div class="card">
+        <h3>Backend Layer</h3>
+        <p>Express API that handles auth, projects, documents, stories, insights, Jira bridge, and delegates AI operations to FastAPI service.</p>
+        <span class="chip">Node.js</span>
+        <span class="chip">Express</span>
+        <span class="chip">Mongoose</span>
+        <span class="chip">Winston Logger</span>
+      </div>
+      <div class="card">
+        <h3>AI Service Layer</h3>
+        <p>FastAPI service for extraction/suggest/generate using LLM prompts, context building, and document retrieval support via embeddings/chroma.</p>
+        <span class="chip">FastAPI</span>
+        <span class="chip">LLM Service</span>
+        <span class="chip">Embeddings</span>
+        <span class="chip">Chroma Vector Store</span>
+      </div>
+      <div class="card">
+        <h3>External Integrations</h3>
+        <p>Jira push pipeline and GitHub/Jira analytics connectors from backend controllers and routes.</p>
+        <span class="chip">Jira REST APIs</span>
+        <span class="chip">GitHub APIs</span>
+      </div>
+    </div>
+
+    <h2>2) End-to-End Execution Flow (SRS to Jira)</h2>
+    <div class="flow">
+UI (Upload SRS)
+  -> Backend /documents upload endpoint
+    -> Store document metadata + file
+    -> Trigger ingestion
+      -> AI Service parses chunks + embeddings + vector store write
+      -> Backend marks ingestion status
+      -> AI Service requirement extraction endpoint
+      -> Backend upserts Requirement records
+
+UI (AI Planner Suggest)
+  -> Backend /stories/suggest/:projectId
+    -> Build phase-aware context (Requirements + existing stories + commits)
+    -> Call AI Service /stories/suggest
+    -> Validate + strict filtering (remove generic/non-actionable)
+    -> Return suggestions or explicit error (no static fallback)
+
+UI (Generate Backlog)
+  -> Backend /stories/generate/:projectId (long running, no forced timeout)
+    -> Call AI Service /stories/generate
+    -> LLM returns hierarchical backlog JSON
+    -> Normalize hierarchy + defaults
+    -> Return generated backlog to frontend
+
+UI (Backlog Editor)
+  -> User edits hierarchy (epic/story/task/subtask), assignees, dates, dependencies
+  -> Backend /stories/save/:projectId
+    -> Normalize fields + parent mapping + default status/dates
+    -> Persist stories
+
+UI (Push to Jira)
+  -> Backend /jira/push/:projectId
+    -> Create epics, then stories/tasks/subtasks in order
+    -> Map local IDs <-> Jira keys
+    -> Save audit / update results
+    </div>
+
+    <h2>3) Frontend Blueprint</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Area</th>
+          <th>Key Files</th>
+          <th>Role</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Routing</td>
+          <td><code>src/App.jsx</code></td>
+          <td>Defines app routes including AI planner and backlog editor paths.</td>
+        </tr>
+        <tr>
+          <td>Planner UI</td>
+          <td><code>src/pages/AIPlanner.jsx</code>, <code>src/pages/ProjectWorkspace.jsx</code></td>
+          <td>Collect context, trigger suggest/generate, persist draft context, redirect to backlog editor after generation.</td>
+        </tr>
+        <tr>
+          <td>Backlog Editing</td>
+          <td><code>src/pages/BacklogEditor.jsx</code></td>
+          <td>Tree-like hierarchy editor with add/delete/re-parent, inline field update, validation, save and Jira push actions.</td>
+        </tr>
+        <tr>
+          <td>Persistent State</td>
+          <td><code>src/store/projectStore.js</code>, <code>src/store/workspaceStateStore.js</code></td>
+          <td>Project context and planner/workspace drafts are persisted locally to avoid work loss.</td>
+        </tr>
+        <tr>
+          <td>Notifications</td>
+          <td><code>src/store/notificationStore.js</code>, <code>src/components/NotificationSync.jsx</code>, <code>src/components/Layout.jsx</code></td>
+          <td>Toast events are saved into notification history with seen/unseen controls in bell popup.</td>
+        </tr>
+        <tr>
+          <td>API Client</td>
+          <td><code>src/lib/api.js</code></td>
+          <td>Centralized HTTP requests from UI to backend services.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Frontend Runtime Behavior</h3>
+    <ul>
+      <li>User uploads document and polls ingestion status through backend APIs.</li>
+      <li>Planner builds prompt context from current project/module/phase inputs and sends suggest call.</li>
+      <li>Generated backlog transitions to dedicated editor route for structured refinement before save/push.</li>
+      <li>State and notifications persist across refresh/session until explicit clear or logout.</li>
+    </ul>
+
+    <h2>4) Backend Blueprint</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Module</th>
+          <th>Key Files</th>
+          <th>Responsibility</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Server + Core</td>
+          <td><code>backend/server.js</code>, <code>src/config/db.js</code>, <code>src/config/logger.js</code></td>
+          <td>Bootstraps Express app, DB connections, and request logging/error handling.</td>
+        </tr>
+        <tr>
+          <td>Document Pipeline</td>
+          <td><code>src/controllers/documentController.js</code>, <code>src/routes/documents.js</code></td>
+          <td>Document upload, ingestion trigger/status, and requirement extraction after ingestion.</td>
+        </tr>
+        <tr>
+          <td>Story/Planner API</td>
+          <td><code>src/controllers/storyController.js</code>, <code>src/routes/stories.js</code></td>
+          <td>Suggest, generate, save stories; phase-aware context; strict filtering; persistence normalization.</td>
+        </tr>
+        <tr>
+          <td>AI Bridge Service</td>
+          <td><code>src/services/aiService.js</code></td>
+          <td>Backend-to-FastAPI HTTP bridge with structured error propagation and long-running generation support.</td>
+        </tr>
+        <tr>
+          <td>Project Users</td>
+          <td><code>src/controllers/projectController.js</code>, <code>src/routes/projects.js</code></td>
+          <td>Project details and assignee users list for backlog editor assignment controls.</td>
+        </tr>
+        <tr>
+          <td>Jira Integration</td>
+          <td><code>src/controllers/jiraController.js</code>, <code>src/routes/jira.js</code></td>
+          <td>Connect/test Jira and push hierarchy to Jira issues in parent-child order.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Important Backend Behaviors</h3>
+    <ul>
+      <li><span class="status-ok">No static suggest fallback:</span> if AI output is empty/unusable, backend returns explicit error.</li>
+      <li><span class="status-ok">Generation timeout relaxed:</span> long-running generation is allowed to complete.</li>
+      <li><span class="status-ok">Hierarchy normalization:</span> save path applies defaults for status/dates and parent compatibility.</li>
+      <li><span class="status-ok">Requirement extraction:</span> ingestion feeds a project-level requirement memory for stronger AI context.</li>
+    </ul>
+
+    <h2>5) AI Service Blueprint</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Layer</th>
+          <th>Key Files</th>
+          <th>Function</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>FastAPI Routers</td>
+          <td><code>ai-service/routers/stories.py</code>, <code>ai-service/routers/documents.py</code></td>
+          <td>Exposes endpoints for suggest/generate/extract-requirements and document ingestion operations.</td>
+        </tr>
+        <tr>
+          <td>LLM Logic</td>
+          <td><code>ai-service/services/llm_service.py</code></td>
+          <td>Prompt templates, phase-aware action generation, JSON parsing/validation, hierarchy normalization.</td>
+        </tr>
+        <tr>
+          <td>RAG + Embeddings</td>
+          <td><code>ai-service/services/rag_service.py</code>, <code>services/embeddings.py</code>, <code>services/document_parser.py</code></td>
+          <td>Parse docs, chunk, embed, store/retrieve context in Chroma vector DB.</td>
+        </tr>
+        <tr>
+          <td>Storage</td>
+          <td><code>ai-service/chroma_store/*</code></td>
+          <td>Vector persistence for retrieval and context enrichment.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>AI Endpoints (Conceptual)</h3>
+    <ul>
+      <li><code>POST /stories/suggest</code>: Returns phase-aware action suggestions from strict prompt constraints.</li>
+      <li><code>POST /stories/generate</code>: Produces Jira-like hierarchical backlog JSON.</li>
+      <li><code>POST /stories/extract-requirements</code>: Extracts structured requirements from SRS/ingested content.</li>
+    </ul>
+
+    <h2>6) AI Calls, Parameters, and Prompt Templates</h2>
+    <p>
+      This section lists the core AI call types made by the system, the major request parameters sent before each call,
+      and the primary prompt template structure used in the AI service layer.
+    </p>
+
+    <h3>6.1 AI Call Types</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Call Type</th>
+          <th>Backend Trigger</th>
+          <th>AI Endpoint</th>
+          <th>Output Shape</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Requirement Extraction</td>
+          <td><code>documentController</code> after ingestion completes</td>
+          <td><code>POST /stories/extract-requirements</code></td>
+          <td>Structured requirement list grouped by module/phase/priority</td>
+        </tr>
+        <tr>
+          <td>Phase-Aware Suggest</td>
+          <td><code>storyController.suggestStories</code></td>
+          <td><code>POST /stories/suggest</code></td>
+          <td>Actionable suggestion list with phase/module grounding</td>
+        </tr>
+        <tr>
+          <td>Backlog Generate</td>
+          <td><code>storyController.generateStories</code></td>
+          <td><code>POST /stories/generate</code></td>
+          <td>Hierarchy JSON: epic -> story -> task/subtask</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>6.2 Common Request Parameters Before AI Calls</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Parameter</th>
+          <th>Used In</th>
+          <th>Purpose</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>projectId</code></td>
+          <td>All call types</td>
+          <td>Project scope for requirements, stories, commits, and persistence mapping.</td>
+        </tr>
+        <tr>
+          <td><code>module</code></td>
+          <td>Suggest, Generate</td>
+          <td>Domain focus to avoid generic suggestions.</td>
+        </tr>
+        <tr>
+          <td><code>phase</code></td>
+          <td>Suggest, Generate</td>
+          <td>Controls phase-specific language and expected actions/output.</td>
+        </tr>
+        <tr>
+          <td><code>requirements[]</code></td>
+          <td>Suggest, Generate</td>
+          <td>Hard context extracted from SRS; primary grounding source.</td>
+        </tr>
+        <tr>
+          <td><code>existingStories[]</code></td>
+          <td>Suggest, Generate</td>
+          <td>Prevents duplication and keeps continuity with existing backlog.</td>
+        </tr>
+        <tr>
+          <td><code>recentCommits[]</code></td>
+          <td>Suggest</td>
+          <td>Adds implementation progress context and technical signals.</td>
+        </tr>
+        <tr>
+          <td><code>constraints</code></td>
+          <td>Suggest, Generate</td>
+          <td>Rules like "no generic output", "actionable only", "strict JSON".</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>6.3 Main Prompt Templates (Logical Form)</h3>
+    <p>Below are the logical template shapes used in the AI service. They are intentionally shown as readable blueprint templates.</p>
+
+    <h3>A) Requirement Extraction Template</h3>
+    <div class="flow">
+SYSTEM ROLE:
+  You are a requirements analyst. Extract concrete, testable requirements from SRS text.
+
+INPUT CONTEXT:
+  - Project: {project_name}
+  - Raw SRS chunks: {document_chunks}
+
+RULES:
+  - Do not invent requirements.
+  - Group by module and phase where possible.
+  - Keep statements specific and implementation-relevant.
+  - Return strict JSON only.
+
+OUTPUT JSON:
+  {
+    "requirements": [
+      {
+        "module": "...",
+        "phase": "...",
+        "requirement": "...",
+        "priority": "high|medium|low"
+      }
+    ]
+  }
+    </div>
+
+    <h3>B) Suggest Template (Phase-Aware Actions)</h3>
+    <div class="flow">
+SYSTEM ROLE:
+  You are an engineering planning assistant. Suggest next actionable work items.
+
+INPUT CONTEXT:
+  - Module: {module}
+  - Current phase: {phase}
+  - Requirements: {requirements}
+  - Existing stories: {existing_stories}
+  - Recent commits: {recent_commits}
+
+RULES:
+  - Suggestions must be phase-appropriate and technically actionable.
+  - Avoid generic placeholders like "improve" or "optimize" without concrete scope.
+  - Prefer tasks that map to verifiable outcomes.
+  - Return strict JSON array.
+
+OUTPUT JSON:
+  {
+    "suggestions": [
+      {
+        "title": "...",
+        "description": "...",
+        "type": "story|task|bug|spike",
+        "phase": "...",
+        "module": "...",
+        "acceptanceCriteria": ["...", "..."]
+      }
+    ]
+  }
+    </div>
+
+    <h3>C) Generate Template (Jira-Style Hierarchy)</h3>
+    <div class="flow">
+SYSTEM ROLE:
+  You are a Jira backlog architect. Produce a complete hierarchy.
+
+INPUT CONTEXT:
+  - Module: {module}
+  - Phase: {phase}
+  - Requirement set: {requirements}
+  - Existing backlog context: {existing_stories}
+
+RULES:
+  - Build hierarchy: Epic -> Story -> Task/Subtask.
+  - Every child must map to a valid parent.
+  - Titles and descriptions must be implementation-specific.
+  - Include estimates/priority/dependencies when inferable.
+  - Return strict JSON only.
+
+OUTPUT JSON:
+  {
+    "epics": [
+      {
+        "tempId": "E1",
+        "title": "...",
+        "description": "...",
+        "stories": [
+          {
+            "tempId": "S1",
+            "parentTempId": "E1",
+            "title": "...",
+            "tasks": [
+              {
+                "tempId": "T1",
+                "parentTempId": "S1",
+                "title": "..."
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+    </div>
+
+    <h3>6.4 Parameterized Prompt Assembly Notes</h3>
+    <ul>
+      <li>Backend composes context from MongoDB (requirements/stories/commits) before calling AI service.</li>
+      <li>AI service inserts normalized context fields into prompt templates and enforces strict JSON responses.</li>
+      <li>Backend validates and filters AI output, then surfaces explicit errors on invalid/empty output.</li>
+      <li>Generation flow keeps long-running calls open and then normalizes hierarchy defaults before returning.</li>
+    </ul>
+
+    <h2>7) Data & Models Blueprint</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Collection / Model</th>
+          <th>Purpose</th>
+          <th>Notable Fields</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>Project</code></td>
+          <td>Top-level container for work and team members.</td>
+          <td>name, org, members, jira config refs</td>
+        </tr>
+        <tr>
+          <td><code>Document</code></td>
+          <td>Uploaded artifacts and ingestion metadata.</td>
+          <td>projectId, filePath, status, parsed indicators</td>
+        </tr>
+        <tr>
+          <td><code>Requirement</code></td>
+          <td>Structured requirement memory extracted post-ingestion.</td>
+          <td>projectId, module, phase, requirement text, priority (as implemented)</td>
+        </tr>
+        <tr>
+          <td><code>Story</code></td>
+          <td>Backlog entities persisted before Jira push.</td>
+          <td>type, title, description, status, assignee, parentId, dates, dependencies</td>
+        </tr>
+        <tr>
+          <td><code>Commit</code></td>
+          <td>Git history context for phase/status awareness.</td>
+          <td>message, author, timestamp, related project links</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>8) API Trigger Chain (Who Calls What)</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>User Action in UI</th>
+          <th>Frontend Request</th>
+          <th>Backend Controller</th>
+          <th>AI Service Call</th>
+          <th>DB/External Effect</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Upload SRS</td>
+          <td>Upload + ingest trigger</td>
+          <td>documentController</td>
+          <td>document ingest parser/chunk/embed</td>
+          <td>Document status + vector store updates</td>
+        </tr>
+        <tr>
+          <td>Post-ingestion enrichment</td>
+          <td>Internal backend flow</td>
+          <td>documentController</td>
+          <td>/stories/extract-requirements</td>
+          <td>Requirement upsert in MongoDB</td>
+        </tr>
+        <tr>
+          <td>Click Suggest</td>
+          <td>/stories/suggest/:projectId</td>
+          <td>storyController</td>
+          <td>/stories/suggest</td>
+          <td>Filtered suggestions returned to UI</td>
+        </tr>
+        <tr>
+          <td>Click Generate Backlog</td>
+          <td>/stories/generate/:projectId</td>
+          <td>storyController</td>
+          <td>/stories/generate</td>
+          <td>Structured backlog JSON returned</td>
+        </tr>
+        <tr>
+          <td>Edit + Save Backlog</td>
+          <td>/stories/save/:projectId</td>
+          <td>storyController</td>
+          <td>none (backend only)</td>
+          <td>Stories persisted with normalized parents/defaults</td>
+        </tr>
+        <tr>
+          <td>Push to Jira</td>
+          <td>/jira/push/:projectId</td>
+          <td>jiraController</td>
+          <td>none (direct Jira API)</td>
+          <td>Jira issues created and mapped</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>9) Reliability and Quality Controls Added</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>State Persistence</h3>
+        <p>Project/planner/workspace drafts survive refresh and context switches; cleared on logout for safety.</p>
+      </div>
+      <div class="card">
+        <h3>Notification Memory</h3>
+        <p>Toast history is preserved in bell notifications with seen/unseen controls and stable popup behavior.</p>
+      </div>
+      <div class="card">
+        <h3>AI Failure Transparency</h3>
+        <p>Failures are surfaced to UI instead of masked with generic fallback data.</p>
+      </div>
+      <div class="card">
+        <h3>Structured Suggest Context</h3>
+        <p>Requirements + commits + existing stories + phase/module constraints improve relevance.</p>
+      </div>
+      <div class="card">
+        <h3>Strict Output Filtering</h3>
+        <p>Generic/non-actionable items are filtered before suggestions are accepted by UI.</p>
+      </div>
+      <div class="card">
+        <h3>Long-Running Generate</h3>
+        <p>Generate calls are allowed to run without short client/server timeout cutoffs.</p>
+      </div>
+    </div>
+
+    <h2>10) Current Feature Status Snapshot</h2>
+    <ul>
+      <li class="status-ok">Implemented: persisted planner/workspace state.</li>
+      <li class="status-ok">Implemented: notification history + seen/unseen lifecycle.</li>
+      <li class="status-ok">Implemented: requirement extraction and storage.</li>
+      <li class="status-ok">Implemented: phase-aware suggest path with strict filtering.</li>
+      <li class="status-ok">Implemented: backlog editor route and editable hierarchy screen.</li>
+      <li class="status-ok">Implemented: assignee API for project users.</li>
+      <li class="status-ok">Implemented: save + Jira push wiring from backlog editor.</li>
+      <li class="status-warn">Needs runtime E2E verification across all services for production confidence.</li>
+    </ul>
+
+    <h2>11) Suggested Next Validation Pass</h2>
+    <ol>
+      <li>Upload a new SRS and verify ingestion and requirement records are created.</li>
+      <li>Run Suggest for two distinct modules/phases and compare relevance/novelty.</li>
+      <li>Generate backlog, verify hierarchy in Backlog Editor, and validate parent linkage after save.</li>
+      <li>Push to Jira and confirm mapping order: Epic -> Story -> Task/Subtask.</li>
+      <li>Audit logs/errors to ensure AI/provider failures surface correctly to UI.</li>
+    </ol>
+
+    <p class="footer">
+      Blueprint generated from the current implemented code state and recent feature additions.
+      Update this file whenever new routes, models, or service interactions are added.
+    </p>
+  </div>
+</body>
+</html>

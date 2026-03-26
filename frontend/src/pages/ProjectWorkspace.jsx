@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
+import { useWorkspaceStateStore } from '@/store/workspaceStateStore'
 import toast from 'react-hot-toast'
 
 const TABS = [
@@ -54,26 +55,83 @@ const toDateInput = (value) => {
   return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
 }
 
+const DEFAULT_GENERATED_DRAFT = { epics: [], stories: [], tasks: [], subtasks: [] }
+const DEFAULT_PROJECT_CHAT = [
+  { role: 'assistant', text: 'Upload SRS, ask for suggestions, review generated backlog, then push to Jira.' },
+]
+
 export default function ProjectWorkspacePage() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { user } = useAuthStore()
   const isScrumMaster = user?.role === 'scrum_master'
+  const workspaceStorageKey = id || '__fallback__'
+  const workspaceHydrated = useWorkspaceStateStore((state) => state.hydrated)
+  const persistedWorkspace = useWorkspaceStateStore((state) => state.projectWorkspaceByProject[workspaceStorageKey])
+  const setProjectWorkspaceState = useWorkspaceStateStore((state) => state.setProjectWorkspaceState)
 
   const [activeTab, setActiveTab] = useState('overview')
   const [moduleName, setModuleName] = useState('Core Module')
   const [storyPrompt, setStoryPrompt] = useState('')
   const [generatedJsonText, setGeneratedJsonText] = useState('')
   const [plannerDraftView, setPlannerDraftView] = useState('json')
-  const [generatedBacklogDraft, setGeneratedBacklogDraft] = useState({ epics: [], stories: [], tasks: [], subtasks: [] })
+  const [generatedBacklogDraft, setGeneratedBacklogDraft] = useState(DEFAULT_GENERATED_DRAFT)
   const [plannerInput, setPlannerInput] = useState('')
-  const [plannerChat, setPlannerChat] = useState([
-    { role: 'assistant', text: 'Upload SRS, ask for suggestions, review generated backlog, then push to Jira.' },
-  ])
+  const [plannerChat, setPlannerChat] = useState(DEFAULT_PROJECT_CHAT)
   const [srsFile, setSrsFile] = useState(null)
   const [jiraProjectKey, setJiraProjectKey] = useState('')
   const [autoDetectedKey, setAutoDetectedKey] = useState('')
   const [autoConnectAttempted, setAutoConnectAttempted] = useState(false)
+  const workspaceLoadedKeyRef = useRef('')
+
+  useEffect(() => {
+    if (!workspaceHydrated) return
+    if (workspaceLoadedKeyRef.current === workspaceStorageKey) return
+
+    workspaceLoadedKeyRef.current = workspaceStorageKey
+    const snapshot = persistedWorkspace || {}
+
+    setActiveTab(snapshot.activeTab || 'overview')
+    setModuleName(snapshot.moduleName || 'Core Module')
+    setStoryPrompt(snapshot.storyPrompt || '')
+    setGeneratedJsonText(snapshot.generatedJsonText || '')
+    setPlannerDraftView(snapshot.plannerDraftView || 'json')
+    setGeneratedBacklogDraft(snapshot.generatedBacklogDraft || DEFAULT_GENERATED_DRAFT)
+    setPlannerInput(snapshot.plannerInput || '')
+    setPlannerChat(Array.isArray(snapshot.plannerChat) && snapshot.plannerChat.length ? snapshot.plannerChat : DEFAULT_PROJECT_CHAT)
+    setJiraProjectKey(snapshot.jiraProjectKey || '')
+  }, [workspaceHydrated, workspaceStorageKey, persistedWorkspace])
+
+  useEffect(() => {
+    if (!workspaceHydrated) return
+    if (workspaceLoadedKeyRef.current !== workspaceStorageKey) return
+
+    setProjectWorkspaceState(workspaceStorageKey, {
+      activeTab,
+      moduleName,
+      storyPrompt,
+      generatedJsonText,
+      plannerDraftView,
+      generatedBacklogDraft,
+      plannerInput,
+      plannerChat,
+      jiraProjectKey,
+    })
+  }, [
+    workspaceHydrated,
+    workspaceStorageKey,
+    activeTab,
+    moduleName,
+    storyPrompt,
+    generatedJsonText,
+    plannerDraftView,
+    generatedBacklogDraft,
+    plannerInput,
+    plannerChat,
+    jiraProjectKey,
+    setProjectWorkspaceState,
+  ])
 
   const [newStory, setNewStory] = useState({ title: '', type: 'story', priority: 'medium', sprint: 'backlog', epic: '' })
   const [editingStoryId, setEditingStoryId] = useState('')
@@ -180,6 +238,8 @@ export default function ProjectWorkspacePage() {
       const response = await api.post(`/stories/generate/${id}`, {
         moduleName,
         additionalContext: storyPrompt,
+      }, {
+        timeout: 0,
       })
       return response.data.data
     },
@@ -194,6 +254,7 @@ export default function ProjectWorkspacePage() {
       setGeneratedJsonText(JSON.stringify(normalized, null, 2))
       setPlannerDraftView('landing')
       toast.success('AI backlog draft generated')
+      navigate(`/projects/${id}/backlog-editor`, { state: { generatedBacklog: normalized } })
     },
   })
 

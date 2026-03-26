@@ -16,6 +16,13 @@ export const useAuthStore = create(
 
       logout: () => {
         set({ user: null, token: null })
+        try {
+          localStorage.removeItem('devtrack-project')
+          localStorage.removeItem('devtrack-workspace-state')
+          localStorage.removeItem('devtrack-notifications')
+        } catch (_) {
+          // no-op for restricted storage environments
+        }
         window.location.href = '/login'
       },
 

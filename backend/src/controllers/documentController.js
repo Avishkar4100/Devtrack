@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const Document = require('../models/Document');
+const Requirement = require('../models/Requirement');
 const Project = require('../models/Project');
 const AuditLog = require('../models/AuditLog');
 const aiService = require('../services/aiService');
@@ -100,6 +101,33 @@ const ingestDocument = async (doc, project, req) => {
       'ingestionStatus.embeddings': result.embeddings || 0,
       'ingestionStatus.processingTime': result.processingTime || 0,
     });
+
+    // Build requirement understanding layer from the ingested SRS.
+    try {
+      const extracted = await aiService.extractRequirements({
+        projectId: project._id.toString(),
+        documentId: doc._id.toString(),
+        filePath: path.resolve(doc.filePath),
+        fileType: doc.fileType,
+      });
+
+      await Requirement.findOneAndUpdate(
+        { project: project._id },
+        {
+          project: project._id,
+          document: doc._id,
+          functional: Array.isArray(extracted?.functional_requirements) ? extracted.functional_requirements : [],
+          nonFunctional: Array.isArray(extracted?.non_functional_requirements) ? extracted.non_functional_requirements : [],
+          modules: Array.isArray(extracted?.modules) ? extracted.modules : [],
+          actors: Array.isArray(extracted?.actors) ? extracted.actors : [],
+          source: 'srs_extract',
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    } catch (extractErr) {
+      // Requirement extraction should not fail document ingestion lifecycle.
+      console.error(`Requirement extraction failed for document ${doc._id}: ${extractErr.message}`);
+    }
 
     // Emit socket event
     const io = req.app.get('io');

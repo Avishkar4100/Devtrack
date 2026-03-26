@@ -1,8 +1,10 @@
 import { Outlet, NavLink } from 'react-router-dom'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from '@/store/authStore'
 import { useProjectStore } from '@/store/projectStore'
+import { useNotificationStore } from '@/store/notificationStore'
 import api from '@/lib/api'
 import {
   HomeIcon, FolderIcon, CogIcon, ArrowRightOnRectangleIcon,
@@ -55,8 +57,16 @@ export default function Layout() {
     selectedJiraProjectKey,
     setSelectedJiraProjectKey,
   } = useProjectStore()
+  const notifications = useNotificationStore((state) => state.notifications)
+  const markSeen = useNotificationStore((state) => state.markSeen)
+  const markAllSeen = useNotificationStore((state) => state.markAllSeen)
+  const clearNotifications = useNotificationStore((state) => state.clearNotifications)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [notificationOpen, setNotificationOpen] = useState(false)
+  const bellButtonRef = useRef(null)
+  const [notificationPanelPos, setNotificationPanelPos] = useState({ top: 56, right: 16 })
   const avatarLetter = user?.name?.[0]?.toUpperCase()
+  const unseenCount = notifications.filter((item) => !item.seen).length
 
   const { data: fetchedProjectsData } = useQuery({
     queryKey: ['layout-projects'],
@@ -92,6 +102,29 @@ export default function Layout() {
       setSelectedJiraProjectKey(connectedJiraKey)
     }
   }, [activeProject, selectedJiraProjectKey, setSelectedJiraProjectKey])
+
+  useEffect(() => {
+    if (!notificationOpen) return
+
+    const updatePanelPosition = () => {
+      const btn = bellButtonRef.current
+      if (!btn) return
+      const rect = btn.getBoundingClientRect()
+      const panelWidth = Math.min(360, window.innerWidth - 24)
+      const top = rect.bottom + 8
+      const left = Math.max(12, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 12))
+      setNotificationPanelPos({ top, right: Math.max(12, window.innerWidth - (left + panelWidth)) })
+    }
+
+    updatePanelPosition()
+    window.addEventListener('resize', updatePanelPosition)
+    window.addEventListener('scroll', updatePanelPosition, true)
+
+    return () => {
+      window.removeEventListener('resize', updatePanelPosition)
+      window.removeEventListener('scroll', updatePanelPosition, true)
+    }
+  }, [notificationOpen])
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-page)' }}>
@@ -238,11 +271,98 @@ export default function Layout() {
           </button>
           <div className="flex-1" />
           <ThemeToggle />
-          <button className="relative flex items-center justify-center rounded-xl transition-all"
-                  style={{ width:'36px', height:'36px', color:'#64748b' }}>
-            <BellIcon style={{ width:'18px', height:'18px' }} />
-            <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full" style={{ background:'#6366f1' }} />
-          </button>
+          <div className="relative">
+            <button
+              ref={bellButtonRef}
+              className="relative flex items-center justify-center rounded-xl transition-all"
+              style={{ width:'36px', height:'36px', color:'#64748b' }}
+              onClick={() => setNotificationOpen((prev) => !prev)}
+              title="Notifications"
+            >
+              <BellIcon style={{ width:'18px', height:'18px' }} />
+              {unseenCount > 0 && (
+                <>
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full" style={{ background:'#6366f1' }} />
+                  <span
+                    className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-semibold flex items-center justify-center"
+                    style={{ background: '#ef4444', color: '#fff' }}
+                  >
+                    {unseenCount > 99 ? '99+' : unseenCount}
+                  </span>
+                </>
+              )}
+            </button>
+
+            {notificationOpen && createPortal(
+              <div
+                className="rounded-xl border shadow-xl"
+                style={{
+                  position: 'fixed',
+                  top: `${notificationPanelPos.top}px`,
+                  right: `${notificationPanelPos.right}px`,
+                  width: '360px',
+                  maxWidth: '92vw',
+                  background: 'var(--bg-page)',
+                  borderColor: 'var(--border-card)',
+                  boxShadow: '0 10px 30px rgba(0,0,0,0.35)',
+                  zIndex: 99999,
+                }}
+              >
+                <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: 'var(--border-card)' }}>
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Notifications</p>
+                    <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{unseenCount} unseen</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="text-xs px-2 py-1 rounded border"
+                      style={{ borderColor: 'var(--border-card)', color: 'var(--text-secondary)' }}
+                      onClick={markAllSeen}
+                    >
+                      Mark all seen
+                    </button>
+                    <button
+                      className="text-xs px-2 py-1 rounded border"
+                      style={{ borderColor: 'var(--border-card)', color: 'var(--text-secondary)' }}
+                      onClick={clearNotifications}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-h-[340px] overflow-y-auto p-2 space-y-2">
+                  {notifications.length === 0 && (
+                    <p className="text-sm px-2 py-6 text-center" style={{ color: 'var(--text-muted)' }}>No notifications yet.</p>
+                  )}
+
+                  {notifications.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => markSeen(item.id)}
+                      className="w-full text-left rounded-lg border px-3 py-2 transition"
+                      style={{
+                        borderColor: 'var(--border-card)',
+                        background: item.seen ? 'transparent' : 'rgba(99,102,241,0.12)',
+                        opacity: item.seen ? 0.58 : 1,
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-xs font-semibold" style={{ color: item.type === 'error' ? '#f87171' : item.type === 'success' ? '#34d399' : 'var(--text-secondary)' }}>
+                          {item.title}
+                        </span>
+                        <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                          {new Date(item.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="text-sm" style={{ color: 'var(--text-primary)' }}>{item.message}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>,
+              document.body
+            )}
+          </div>
           <div className="flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-xl cursor-pointer transition-all ml-1"
                style={{ background:'var(--bg-card)', border:'1px solid var(--border-card)' }}>
             <div className="flex items-center justify-center font-bold text-white shrink-0"

@@ -212,6 +212,44 @@ const getAuditLog = async (req, res) => {
   res.status(200).json({ success: true, count: logs.length, data: logs });
 };
 
+// @desc    Get assignable users for a project
+// @route   GET /api/projects/:id/users
+// @access  Private
+const getProjectUsers = async (req, res) => {
+  const project = await Project.findById(req.params.id)
+    .populate('owner', 'name email avatar role')
+    .populate('members.user', 'name email avatar role');
+
+  if (!project) {
+    return res.status(404).json({ success: false, message: 'Project not found' });
+  }
+
+  const users = [];
+  if (project.owner?._id) {
+    users.push({
+      _id: project.owner._id,
+      name: project.owner.name,
+      email: project.owner.email,
+      avatar: project.owner.avatar,
+      role: 'owner',
+    });
+  }
+
+  project.members.forEach((member) => {
+    if (!member?.user?._id) return;
+    if (users.some((u) => String(u._id) === String(member.user._id))) return;
+    users.push({
+      _id: member.user._id,
+      name: member.user.name,
+      email: member.user.email,
+      avatar: member.user.avatar,
+      role: member.role || member.user.role || 'member',
+    });
+  });
+
+  res.status(200).json({ success: true, count: users.length, data: users });
+};
+
 module.exports = {
   getProjects,
   getProject,
@@ -221,4 +259,5 @@ module.exports = {
   inviteMember,
   removeMember,
   getAuditLog,
+  getProjectUsers,
 };

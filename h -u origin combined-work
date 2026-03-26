@@ -1,0 +1,11 @@
+*   [33m2408c2d[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mcombined-work[m[33m, [m[1;31morigin/tejas[m[33m, [m[1;32mtejas[m[33m)[m fixed merge conflicts in User.js and App.jsx
+[31m|[m[32m\[m  
+[31m|[m * [33mf4f257f[m[33m ([m[1;31morigin/avishkar[m[33m)[m Update backend controllers and AI services with frontend workspace improvements
+* [32m|[m [33m2938575[m saving my local changes before pulling from avishkar
+[32m|[m[32m/[m  
+* [33md77c442[m latest update with final layout, from here work on the same
+* [33m6279fb7[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m fix: OAuth fix and MongoDB IP whitelist configuration for Atlas connectivity
+* [33m71f459a[m chore: add safe test and workspace dev scripts
+* [33m6ace410[m feat: enhance auth flows and frontend UI
+* [33m7f0930e[m feat: enhance document ingestion and story generation features
+* [33mdb47ef7[m feat: Initial commit — DevTrack AI-Powered Project Management

@@ -231,35 +231,57 @@ const adminLogin = async (req, res) => {
     return res.status(400).json({ success: false, message: 'Please provide email and password' });
   }
 
+  const loginEmail = email.toLowerCase().trim();
   const envAdminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
   const envAdminPassword = process.env.ADMIN_PASSWORD || '';
-  if (!envAdminEmail || !envAdminPassword) {
-    return res.status(500).json({ success: false, message: 'Admin credentials are not configured in environment variables.' });
+
+  // Preferred path: env-based admin credentials
+  if (envAdminEmail && envAdminPassword && loginEmail === envAdminEmail && password === envAdminPassword) {
+    let envAdminUser = await User.findOne({ email: envAdminEmail }).select('+password');
+    if (!envAdminUser) {
+      envAdminUser = await User.create({
+        name: 'Platform Admin',
+        email: envAdminEmail,
+        password: envAdminPassword,
+        role: 'admin',
+        isEmailVerified: true,
+      });
+    }
+
+    if (envAdminUser.role !== 'admin') {
+      envAdminUser.role = 'admin';
+    }
+
+    envAdminUser.lastLogin = Date.now();
+    await envAdminUser.save({ validateBeforeSave: false });
+
+    logger.info(`Admin login success (env): ${maskEmail(envAdminEmail)} id=${envAdminUser._id}`);
+    await sendTokenResponse(envAdminUser, 200, res);
+    return;
   }
 
-  if (email.toLowerCase().trim() !== envAdminEmail || password !== envAdminPassword) {
-    return res.status(401).json({ success: false, message: 'Invalid admin credentials' });
-  }
-
-  let user = await User.findOne({ email: envAdminEmail }).select('+password');
+  // Fallback path: existing admin user credentials in DB
+  const user = await User.findOne({ email: loginEmail }).select('+password');
   if (!user) {
-    user = await User.create({
-      name: 'Platform Admin',
-      email: envAdminEmail,
-      password: envAdminPassword,
-      role: 'admin',
-      isEmailVerified: true,
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid admin credentials',
     });
   }
 
   if (user.role !== 'admin') {
-    user.role = 'admin';
+    return res.status(403).json({ success: false, message: 'This account is not an admin account.' });
+  }
+
+  const isMatch = await user.matchPassword(password);
+  if (!isMatch) {
+    return res.status(401).json({ success: false, message: 'Invalid admin credentials' });
   }
 
   user.lastLogin = Date.now();
   await user.save({ validateBeforeSave: false });
 
-  logger.info(`Admin login success: ${maskEmail(envAdminEmail)} id=${user._id}`);
+  logger.info(`Admin login success (db): ${maskEmail(user.email)} id=${user._id}`);
   await sendTokenResponse(user, 200, res);
 };
 

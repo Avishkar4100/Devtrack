@@ -1,0 +1,1387 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DevTrack Static UI Demo</title>
+  <style>
+    :root {
+      --bg-page: #06060f;
+      --bg-sidebar: #0a0a18;
+      --bg-card: rgba(255, 255, 255, 0.04);
+      --bg-header: rgba(6, 6, 15, 0.9);
+      --bg-input: rgba(255, 255, 255, 0.05);
+      --bg-hover: rgba(255, 255, 255, 0.06);
+      --text-primary: #f3f4f6;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --border: rgba(255, 255, 255, 0.07);
+      --border-card: rgba(255, 255, 255, 0.1);
+      --brand: #6366f1;
+      --brand-2: #8b5cf6;
+      --ok: #10b981;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+
+    :root.light {
+      --bg-page: #f1f5f9;
+      --bg-sidebar: #ffffff;
+      --bg-card: #ffffff;
+      --bg-header: rgba(255, 255, 255, 0.95);
+      --bg-input: #ffffff;
+      --bg-hover: rgba(0, 0, 0, 0.04);
+      --text-primary: #0f172a;
+      --text-secondary: #334155;
+      --text-muted: #64748b;
+      --border: rgba(0, 0, 0, 0.08);
+      --border-card: rgba(0, 0, 0, 0.1);
+      --shadow-card: 0 8px 24px rgba(2, 6, 23, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font-family: "Inter", "Segoe UI", sans-serif;
+      background: var(--bg-page);
+      color: var(--text-primary);
+      overflow: hidden;
+    }
+
+    .app { display: flex; height: 100%; }
+
+    .sidebar {
+      width: 240px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .logo {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .bolt {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      color: white;
+      box-shadow: 0 6px 18px rgba(99, 102, 241, 0.35);
+    }
+
+    .title { font-weight: 800; letter-spacing: -0.02em; }
+    .title span { background: linear-gradient(90deg, #818cf8, #c4b5fd); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+    .nav { padding: 10px; overflow-y: auto; }
+    .nav-btn {
+      width: 100%;
+      border: 0;
+      color: var(--text-secondary);
+      background: transparent;
+      text-align: left;
+      padding: 10px 11px;
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+      cursor: pointer;
+      font-weight: 550;
+      transition: 0.15s;
+    }
+    .nav-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+    .nav-btn.active {
+      color: #c7d2fe;
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.14));
+      box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.35);
+    }
+
+    .context-card {
+      margin-top: 8px;
+      border: 1px solid var(--border-card);
+      background: var(--bg-card);
+      border-radius: 12px;
+      padding: 10px;
+    }
+
+    .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+
+    select, input, textarea, button {
+      font-family: inherit;
+      font-size: 13px;
+    }
+
+    .input {
+      width: 100%;
+      border: 1px solid var(--border-card);
+      background: var(--bg-input);
+      color: var(--text-primary);
+      border-radius: 10px;
+      padding: 9px 10px;
+      outline: none;
+    }
+
+    .input + .input { margin-top: 8px; }
+
+    .bottom-nav {
+      margin-top: auto;
+      padding: 10px;
+      border-top: 1px solid var(--border);
+    }
+
+    .user-chip {
+      border-top: 1px solid var(--border);
+      padding: 11px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg-hover);
+    }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: white;
+    }
+
+    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+    .topbar {
+      height: 54px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 0 16px;
+      background: var(--bg-header);
+      backdrop-filter: blur(16px);
+      position: relative;
+      z-index: 10;
+    }
+
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--border-card);
+      background: var(--bg-card);
+      color: var(--text-secondary);
+      border-radius: 10px;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      position: absolute;
+      right: 8px;
+      top: 8px;
+      background: #f43f5e;
+    }
+
+    .notif-count {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      min-width: 16px;
+      height: 16px;
+      font-size: 10px;
+      border-radius: 99px;
+      background: #ef4444;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 4px;
+      font-weight: 700;
+    }
+
+    .notif-panel {
+      position: absolute;
+      right: 16px;
+      top: 52px;
+      width: 360px;
+      max-width: calc(100vw - 20px);
+      border: 1px solid var(--border-card);
+      background: var(--bg-page);
+      border-radius: 12px;
+      box-shadow: 0 16px 45px rgba(0, 0, 0, 0.45);
+      display: none;
+      overflow: hidden;
+    }
+
+    .notif-panel.open { display: block; }
+
+    .notif-head {
+      padding: 10px;
+      border-bottom: 1px solid var(--border-card);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .notif-list {
+      max-height: 320px;
+      overflow: auto;
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .notif-item {
+      border: 1px solid var(--border-card);
+      border-radius: 9px;
+      padding: 8px;
+      background: rgba(99, 102, 241, 0.1);
+      cursor: pointer;
+    }
+
+    .notif-item.seen { opacity: 0.62; background: transparent; }
+
+    .content {
+      flex: 1;
+      overflow: auto;
+      padding: 18px;
+    }
+
+    .view { display: none; }
+    .view.active { display: block; }
+
+    .page-title {
+      font-size: 24px;
+      margin: 0 0 14px;
+      letter-spacing: -0.02em;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: 14px;
+      box-shadow: var(--shadow-card);
+      padding: 12px;
+    }
+
+    .metric-label { font-size: 12px; color: var(--text-muted); }
+    .metric-value { font-size: 28px; font-weight: 760; margin-top: 5px; }
+
+    .project-row {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 8px;
+      cursor: pointer;
+    }
+
+    .project-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .risk {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+    .risk.high { background: rgba(239, 68, 68, 0.18); color: #fda4af; }
+    .risk.medium { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+    .risk.low { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
+
+    .bar {
+      height: 7px;
+      background: rgba(148, 163, 184, 0.2);
+      border-radius: 999px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+    .bar > span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, #6366f1, #8b5cf6);
+    }
+
+    .hint { color: var(--text-muted); font-size: 12px; }
+
+    .btn {
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 12px;
+      cursor: pointer;
+      font-weight: 650;
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border: 1px solid var(--border-card);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      border-color: rgba(99, 102, 241, 0.55);
+      color: white;
+    }
+
+    .btn-danger {
+      background: rgba(244, 63, 94, 0.15);
+      color: #fda4af;
+      border-color: rgba(244, 63, 94, 0.35);
+    }
+
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .planner-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 1fr;
+      gap: 12px;
+    }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+    .chip {
+      border-radius: 999px;
+      border: 1px solid var(--border-card);
+      background: rgba(99, 102, 241, 0.16);
+      padding: 4px 9px;
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .chip button {
+      border: 0;
+      background: transparent;
+      color: #fca5a5;
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1;
+    }
+
+    .status-pill {
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      display: inline-block;
+    }
+    .status-uploaded { background: rgba(59,130,246,0.18); color: #93c5fd; }
+    .status-processing { background: rgba(245,158,11,0.2); color: #fde68a; }
+    .status-processed { background: rgba(16,185,129,0.2); color: #6ee7b7; }
+
+    .tree-node {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      padding: 8px;
+      margin-bottom: 8px;
+    }
+
+    .depth-1 { margin-left: 16px; }
+    .depth-2 { margin-left: 32px; }
+    .depth-3 { margin-left: 48px; }
+
+    .node-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: space-between;
+    }
+
+    .node-title {
+      border: 0;
+      background: transparent;
+      color: var(--text-primary);
+      cursor: pointer;
+      font-weight: 600;
+      text-align: left;
+      padding: 0;
+      flex: 1;
+    }
+
+    .muted { color: var(--text-muted); }
+
+    .details-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .toasts {
+      position: fixed;
+      right: 14px;
+      bottom: 14px;
+      width: 300px;
+      z-index: 999;
+      display: grid;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .toast {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      padding: 9px;
+      background: var(--bg-page);
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+      pointer-events: auto;
+    }
+
+    .toast.success { border-color: rgba(16, 185, 129, 0.4); }
+    .toast.error { border-color: rgba(239, 68, 68, 0.45); }
+
+    @media (max-width: 1200px) {
+      .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid-2 { grid-template-columns: 1fr; }
+      .planner-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 900px) {
+      .sidebar { width: 210px; }
+      .details-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="bolt">D</div>
+        <div class="title">Dev<span>Track</span></div>
+      </div>
+
+      <div class="nav">
+        <button class="nav-btn active" data-view="overview">Overview <span>•</span></button>
+        <button class="nav-btn" data-view="ai-planner">AI Planner</button>
+        <button class="nav-btn" data-view="workspace">Workspace</button>
+        <button class="nav-btn" data-view="backlog-editor">Backlog Editor</button>
+        <button class="nav-btn" data-view="insights">Insights</button>
+
+        <div class="context-card">
+          <div class="label">Workspace Context</div>
+          <select class="input" id="projectSelect"></select>
+          <select class="input" id="jiraSelect"></select>
+          <div class="hint" id="activeProjectHint" style="margin-top:8px;"></div>
+        </div>
+      </div>
+
+      <div class="bottom-nav">
+        <button class="nav-btn" data-view="settings">Settings</button>
+        <button class="nav-btn" id="signOutBtn">Sign Out</button>
+      </div>
+
+      <div class="user-chip">
+        <div class="avatar">A</div>
+        <div>
+          <div style="font-weight:600; font-size:13px;">Akshay Tejas</div>
+          <div class="hint">project_manager</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn" id="themeToggle" title="Toggle theme">◐</button>
+        <button class="icon-btn" id="notifBtn" title="Notifications">
+          🔔
+          <span class="badge-dot"></span>
+          <span class="notif-count" id="notifCount">3</span>
+        </button>
+
+        <div class="notif-panel" id="notifPanel">
+          <div class="notif-head">
+            <div>
+              <div style="font-weight:700;">Notifications</div>
+              <div class="hint" id="unseenMeta">3 unseen</div>
+            </div>
+            <div class="btn-row">
+              <button class="btn" id="markSeenBtn">Mark all seen</button>
+              <button class="btn" id="clearNotifBtn">Clear</button>
+            </div>
+          </div>
+          <div class="notif-list" id="notifList"></div>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="view active" id="view-overview">
+          <h1 class="page-title">Overview</h1>
+          <div class="grid-4" id="metricGrid"></div>
+          <div class="grid-2">
+            <div class="card">
+              <h3 style="margin:0 0 10px;">Projects</h3>
+              <div id="projectsList"></div>
+            </div>
+            <div class="card">
+              <h3 style="margin-top:0;">Today Summary</h3>
+              <p id="todaySummary" class="muted"></p>
+            </div>
+          </div>
+        </div>
+
+        <div class="view" id="view-ai-planner">
+          <h1 class="page-title">AI Planner</h1>
+          <div class="planner-grid">
+            <div class="card">
+              <div class="btn-row" style="justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <div>
+                  <div style="font-weight:700;">SRS Ingestion</div>
+                  <div class="hint">Upload -> Process -> Extract Requirements -> Suggest -> Generate</div>
+                </div>
+                <span class="status-pill status-processed" id="docStatusPill">PROCESSED</span>
+              </div>
+
+              <div class="hint" id="docMeta">Current SRS: banking-core-srs-v3.md (processed)</div>
+              <div class="btn-row" style="margin-top:10px;">
+                <button class="btn" id="uploadBtn">Upload SRS (Static)</button>
+                <button class="btn" id="connectJiraBtn">Connect Jira</button>
+              </div>
+
+              <hr style="border:none; border-top:1px solid var(--border); margin:14px 0;" />
+
+              <label class="hint">Planning Prompt</label>
+              <textarea id="planningPrompt" class="input" rows="4" placeholder="Describe planning direction"></textarea>
+
+              <label class="hint" style="display:block; margin-top:10px;">Chat Input</label>
+              <input id="chatInput" class="input" placeholder="Ask planner for next sprint plan" />
+
+              <div class="btn-row" style="margin-top:10px;">
+                <button class="btn btn-primary" id="suggestBtn">Suggest</button>
+                <button class="btn btn-primary" id="generateBtn">Generate Backlog</button>
+              </div>
+
+              <div style="margin-top:12px;">
+                <div class="hint">Selected Suggestion Chips</div>
+                <div class="chips" id="chipBox"></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3 style="margin-top:0;">Suggested Structure</h3>
+              <div class="hint">Based on project module, phase, requirements, and commit history context</div>
+              <div id="suggestionsBox" style="margin-top:10px;"></div>
+
+              <hr style="border:none; border-top:1px solid var(--border); margin:12px 0;" />
+
+              <h3 style="margin-top:0;">Planner Timeline (Static Chat)</h3>
+              <div id="chatTimeline" style="display:grid; gap:8px;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="view" id="view-workspace">
+          <h1 class="page-title">Project Workspace</h1>
+          <div class="card" style="margin-bottom:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+              <div>
+                <h3 style="margin:0;">FinCore Revamp - Execution Board</h3>
+                <div class="hint">Module: Auth + Billing + Analytics | Sprint: 24.3</div>
+              </div>
+              <button class="btn btn-primary" id="workspaceGenerateBtn">Generate Work Breakdown</button>
+            </div>
+          </div>
+          <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
+            <div class="card">
+              <h3 style="margin-top:0;">Active Epics</h3>
+              <ul id="workspaceEpics" class="muted"></ul>
+            </div>
+            <div class="card">
+              <h3 style="margin-top:0;">Latest Engineering Signals</h3>
+              <ul class="muted">
+                <li>5 commits touched payment orchestration this week</li>
+                <li>2 high-priority stories entered in-review</li>
+                <li>Bug velocity dropped 18% compared to previous sprint</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="view" id="view-backlog-editor">
+          <h1 class="page-title">Backlog Editor</h1>
+          <div class="btn-row" style="margin-bottom:10px;">
+            <button class="btn btn-primary" id="savePushBtn">Save and Push to Jira</button>
+            <button class="btn" id="addEpicBtn">+ Add Epic</button>
+          </div>
+
+          <div class="planner-grid">
+            <div class="card" style="max-height:72vh; overflow:auto;" id="treePane"></div>
+            <div class="card" id="detailsPane">
+              <h3 style="margin-top:0;">Item Details</h3>
+              <div id="emptySelection" class="hint">Select a backlog item from tree.</div>
+              <div id="detailsForm" style="display:none;">
+                <input id="fieldTitle" class="input" placeholder="Title" />
+                <textarea id="fieldDescription" class="input" rows="4" style="margin-top:8px;" placeholder="Description"></textarea>
+                <div class="details-grid" style="margin-top:8px;">
+                  <select id="fieldAssignee" class="input"></select>
+                  <select id="fieldPriority" class="input">
+                    <option value="high">high</option>
+                    <option value="medium">medium</option>
+                    <option value="low">low</option>
+                  </select>
+                </div>
+                <div class="details-grid" style="margin-top:8px;">
+                  <input id="fieldStart" type="date" class="input" />
+                  <input id="fieldDue" type="date" class="input" />
+                </div>
+                <div class="details-grid" style="margin-top:8px;">
+                  <input id="fieldPoints" type="number" class="input" min="0" placeholder="Story Points" />
+                  <select id="fieldParent" class="input"></select>
+                </div>
+                <div class="btn-row" style="margin-top:10px;">
+                  <button class="btn btn-danger" id="deleteSelectedBtn">Delete Item</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="view" id="view-insights">
+          <h1 class="page-title">Insights</h1>
+          <div class="grid-4" id="insightMetricGrid"></div>
+
+          <div class="planner-grid" style="margin-top:12px; grid-template-columns: 1.05fr 1fr;">
+            <div class="card">
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                <h3 style="margin:0;">Daily Delivery Report</h3>
+                <span class="hint" id="dailyReportDate"></span>
+              </div>
+              <div class="hint" style="margin:6px 0 10px;">Day-level execution trend from practical sprint activity.</div>
+              <div id="dailyReportRows"></div>
+            </div>
+
+            <div class="card">
+              <h3 style="margin:0;">Issue-Wise Insights</h3>
+              <div class="hint" style="margin:6px 0 10px;">Open/critical blockers and current ownership.</div>
+              <div id="issueInsightsRows"></div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:12px;">
+            <h3 style="margin:0;">Module-Wise Insights</h3>
+            <div class="hint" style="margin:6px 0 10px;">Health, velocity, risk, and quality indicators by module.</div>
+            <div id="moduleInsightsRows"></div>
+          </div>
+        </div>
+
+        <div class="view" id="view-settings">
+          <h1 class="page-title">Settings</h1>
+          <div class="card" style="max-width:680px;">
+            <h3 style="margin-top:0;">AI + Jira Settings Snapshot</h3>
+            <div class="hint">Static mirror of current practical setup</div>
+            <div class="details-grid" style="margin-top:10px;">
+              <input class="input" value="AI Provider: OpenRouter" readonly />
+              <input class="input" value="Model: deepseek-chat-v3" readonly />
+              <input class="input" value="Jira URL: https://acme.atlassian.net" readonly />
+              <input class="input" value="Default Project Key: FIN" readonly />
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <script>
+    const data = {
+      user: { name: "Akshay Tejas", role: "project_manager" },
+      projects: [
+        { id: "p1", key: "FIN", name: "FinCore Revamp", status: "active", completionPercentage: 72, risk: "low", updatedAt: "2026-03-24T18:30:00Z" },
+        { id: "p2", key: "AIP", name: "AI Planner Stabilization", status: "active", completionPercentage: 48, risk: "medium", updatedAt: "2026-03-25T09:10:00Z" },
+        { id: "p3", key: "JBR", name: "Jira Bridge Hardening", status: "active", completionPercentage: 33, risk: "high", updatedAt: "2026-03-24T12:45:00Z" },
+        { id: "p4", key: "OBS", name: "Observability Upgrade", status: "planned", completionPercentage: 12, risk: "high", updatedAt: "2026-03-21T10:15:00Z" }
+      ],
+      jiraProjects: [
+        { key: "FIN", name: "Finance Platform" },
+        { key: "AIP", name: "AI Planner" },
+        { key: "OPS", name: "Platform Ops" }
+      ],
+      notifications: [
+        { id: "n1", type: "success", title: "SRS Processed", message: "banking-core-srs-v3.md parsed and indexed.", seen: false, createdAt: "2026-03-25T09:12:00Z" },
+        { id: "n2", type: "info", title: "Suggestions Ready", message: "Phase-aware suggestions generated for module FIN/Auth.", seen: false, createdAt: "2026-03-25T09:14:00Z" },
+        { id: "n3", type: "success", title: "Backlog Saved", message: "17 items saved and linked for Jira push.", seen: true, createdAt: "2026-03-24T16:02:00Z" }
+      ],
+      summary: "4 projects tracked. AI Planner Stabilization is in active hardening with improved extraction, phase-aware suggest, and backlog editor rollout.",
+      insights: {
+        overall: [
+          { label: "Story Throughput", value: "38", note: "+12% WoW" },
+          { label: "Average Cycle Time", value: "4.6d", note: "-0.8d vs last sprint" },
+          { label: "Blocked Work Items", value: "7", note: "3 need infra dependency" },
+          { label: "AI Suggest Acceptance", value: "82%", note: "Based on last 5 planning sessions" }
+        ],
+        dailyReport: [
+          { day: "Mon", completed: 9, created: 11, carryOver: 4, deploys: 2, incidents: 1 },
+          { day: "Tue", completed: 12, created: 10, carryOver: 3, deploys: 3, incidents: 0 },
+          { day: "Wed", completed: 8, created: 9, carryOver: 5, deploys: 2, incidents: 2 },
+          { day: "Thu", completed: 14, created: 12, carryOver: 2, deploys: 3, incidents: 0 },
+          { day: "Fri", completed: 11, created: 8, carryOver: 3, deploys: 1, incidents: 1 }
+        ],
+        moduleWise: [
+          { module: "Auth", progress: 74, velocity: 16, defectLeakage: "low", risk: "medium", aiCoverage: "high" },
+          { module: "Billing", progress: 61, velocity: 12, defectLeakage: "medium", risk: "high", aiCoverage: "medium" },
+          { module: "Analytics", progress: 47, velocity: 9, defectLeakage: "medium", risk: "medium", aiCoverage: "medium" },
+          { module: "Jira Integration", progress: 83, velocity: 14, defectLeakage: "low", risk: "low", aiCoverage: "high" }
+        ],
+        issueWise: [
+          { id: "FIN-241", severity: "critical", title: "Webhook duplicate processing in payment callback", owner: "Tejas", status: "in_progress", eta: "Today EOD" },
+          { id: "AIP-177", severity: "high", title: "Suggest call fails on missing provider user mapping", owner: "Akshay", status: "in_review", eta: "Tomorrow" },
+          { id: "JBR-092", severity: "medium", title: "Parent linkage mismatch when pushing nested tasks", owner: "Riya", status: "to_do", eta: "2 days" },
+          { id: "OBS-054", severity: "low", title: "Dashboard summary lag by one polling cycle", owner: "Nikhil", status: "in_progress", eta: "This sprint" }
+        ]
+      },
+      suggestionBuckets: {
+        epics: [
+          "Epic: Hardening requirement extraction confidence scoring",
+          "Epic: End-to-end backlog validation pipeline"
+        ],
+        stories: [
+          "Story: Add parent linkage checker for generated tasks",
+          "Story: Capture suggest failure telemetry in notification center",
+          "Story: Improve project-context hydration on refresh"
+        ],
+        tasks: [
+          "Task: Validate orphan stories before save",
+          "Task: Add Jira push dry-run preview panel",
+          "Task: Add timeout-free generate watchdog messages"
+        ]
+      },
+      assignees: [
+        { id: "u1", name: "Akshay", role: "owner" },
+        { id: "u2", name: "Tejas", role: "backend_dev" },
+        { id: "u3", name: "Riya", role: "frontend_dev" },
+        { id: "u4", name: "Nikhil", role: "qa" }
+      ]
+    }
+
+    const state = {
+      activeView: "overview",
+      selectedProjectId: "p1",
+      selectedJiraKey: "FIN",
+      selectedChips: [],
+      plannerChat: [
+        { role: "assistant", text: "Upload SRS, click Suggest, pick chips, then Generate Backlog and edit in Backlog Editor." },
+        { role: "assistant", text: "Current project context loaded from FinCore Revamp with processed SRS and requirement memory." }
+      ],
+      backlog: {
+        epics: [
+          { tempId: "e1", type: "epic", title: "Payment Gateway Reliability", description: "Stabilize multi-step payment orchestration and retries", assignee: "u2", priority: "high", startDate: "2026-03-26", dueDate: "2026-04-08", storyPoints: 13 },
+          { tempId: "e2", type: "epic", title: "Authentication Modernization", description: "Move auth flow to token rotation with stronger observability", assignee: "u1", priority: "medium", startDate: "2026-03-28", dueDate: "2026-04-12", storyPoints: 8 }
+        ],
+        stories: [
+          { tempId: "s1", type: "story", epicTempId: "e1", title: "Retry-safe payment webhook handling", description: "Handle duplicate callback and idempotency checks", assignee: "u2", priority: "high", startDate: "2026-03-26", dueDate: "2026-03-31", storyPoints: 5 },
+          { tempId: "s2", type: "story", epicTempId: "e2", title: "Refresh-token revocation tracking", description: "Persist revocation and verify on each session refresh", assignee: "u3", priority: "medium", startDate: "2026-03-29", dueDate: "2026-04-04", storyPoints: 5 }
+        ],
+        tasks: [
+          { tempId: "t1", type: "task", parentTempId: "s1", epicTempId: "e1", title: "Implement payment event dedupe map", description: "Use provider eventId with ttl cache", assignee: "u2", priority: "high", startDate: "2026-03-26", dueDate: "2026-03-28", storyPoints: 3 },
+          { tempId: "t2", type: "task", parentTempId: "s2", epicTempId: "e2", title: "Add token blacklist collection", description: "Store revoked refresh tokens with expiry index", assignee: "u3", priority: "medium", startDate: "2026-03-30", dueDate: "2026-04-01", storyPoints: 3 }
+        ],
+        subtasks: [
+          { tempId: "st1", type: "subtask", parentTempId: "t1", epicTempId: "e1", title: "Unit tests for duplicate webhook payloads", description: "Cover payment_success + payment_failed replay", assignee: "u4", priority: "medium", startDate: "2026-03-27", dueDate: "2026-03-28", storyPoints: 1 }
+        ]
+      },
+      selectedItem: null
+    }
+
+    function el(id) { return document.getElementById(id) }
+
+    function toast(type, title, message) {
+      const node = document.createElement("div")
+      node.className = `toast ${type}`
+      node.innerHTML = `<div style="font-size:12px; font-weight:700; margin-bottom:2px;">${title}</div><div style="font-size:12px; color:var(--text-secondary)">${message}</div>`
+      el("toasts").prepend(node)
+      setTimeout(() => node.remove(), 3500)
+    }
+
+    function formatDate(iso) {
+      try { return new Date(iso).toLocaleString() } catch { return iso }
+    }
+
+    function renderProjectContext() {
+      const ps = el("projectSelect")
+      ps.innerHTML = data.projects.map(p => `<option value="${p.id}">${p.key} - ${p.name}</option>`).join("")
+      ps.value = state.selectedProjectId
+
+      const js = el("jiraSelect")
+      js.innerHTML = data.jiraProjects.map(p => `<option value="${p.key}">${p.key} - ${p.name}</option>`).join("")
+      js.value = state.selectedJiraKey
+
+      const active = data.projects.find(p => p.id === state.selectedProjectId)
+      el("activeProjectHint").textContent = active ? `Active: ${active.name}` : "Active: none"
+    }
+
+    function getMetrics() {
+      const total = data.projects.length
+      const active = data.projects.filter(p => p.status === "active").length
+      const avgProgress = Math.round(data.projects.reduce((s, p) => s + p.completionPercentage, 0) / total)
+      const highRisk = data.projects.filter(p => p.risk === "high").length
+      return [
+        { label: "Total Projects", value: total },
+        { label: "Active Projects", value: active },
+        { label: "Avg Progress %", value: `${avgProgress}%` },
+        { label: "High Risk Projects", value: highRisk }
+      ]
+    }
+
+    function renderOverview() {
+      el("metricGrid").innerHTML = getMetrics().map(m => `
+        <div class="card">
+          <div class="metric-label">${m.label}</div>
+          <div class="metric-value">${m.value}</div>
+        </div>
+      `).join("")
+
+      el("projectsList").innerHTML = data.projects.map(p => `
+        <div class="project-row" onclick="window.selectProject('${p.id}')">
+          <div class="project-top">
+            <div style="font-weight:650">${p.name}</div>
+            <span class="risk ${p.risk}">${p.risk}</span>
+          </div>
+          <div class="bar"><span style="width:${p.completionPercentage}%"></span></div>
+          <div class="hint" style="margin-top:6px;">Last activity: ${formatDate(p.updatedAt)}</div>
+        </div>
+      `).join("")
+
+      el("todaySummary").textContent = data.summary
+    }
+
+    function renderNotifications() {
+      const unseen = data.notifications.filter(n => !n.seen).length
+      el("notifCount").textContent = unseen > 99 ? "99+" : String(unseen)
+      el("unseenMeta").textContent = `${unseen} unseen`
+
+      const list = el("notifList")
+      if (!data.notifications.length) {
+        list.innerHTML = `<div class="hint" style="padding:18px; text-align:center;">No notifications yet.</div>`
+        return
+      }
+
+      list.innerHTML = data.notifications.map(n => `
+        <div class="notif-item ${n.seen ? 'seen' : ''}" onclick="window.markSeen('${n.id}')">
+          <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
+            <div style="font-size:12px; font-weight:700; color:${n.type === 'success' ? '#6ee7b7' : n.type === 'error' ? '#fda4af' : 'var(--text-secondary)'};">${n.title}</div>
+            <div class="hint">${formatDate(n.createdAt)}</div>
+          </div>
+          <div style="font-size:13px; margin-top:4px;">${n.message}</div>
+        </div>
+      `).join("")
+    }
+
+    function renderSuggestionBox() {
+      const b = data.suggestionBuckets
+      const sections = [
+        { title: "Epics", rows: b.epics, prefix: "EPIC" },
+        { title: "Stories", rows: b.stories, prefix: "STORY" },
+        { title: "Tasks", rows: b.tasks, prefix: "TASK" }
+      ]
+
+      el("suggestionsBox").innerHTML = sections.map(section => `
+        <div style="margin-bottom:10px;">
+          <div class="label" style="margin:0 0 6px;">${section.title}</div>
+          ${section.rows.map((r, i) => `<button class="btn" style="display:block; width:100%; text-align:left; margin-bottom:6px;" onclick="window.addChip('${section.prefix}: ${r.replace(/'/g, "&#39;")}')">${section.prefix}: ${r}</button>`).join("")}
+        </div>
+      `).join("")
+    }
+
+    function renderChips() {
+      const box = el("chipBox")
+      if (!state.selectedChips.length) {
+        box.innerHTML = `<div class="hint">No chips selected.</div>`
+        return
+      }
+      box.innerHTML = state.selectedChips.map((chip, i) => `
+        <span class="chip">${chip}<button onclick="window.removeChip(${i})">x</button></span>
+      `).join("")
+    }
+
+    function renderChat() {
+      const rows = state.plannerChat.map(m => `
+        <div style="border:1px solid var(--border-card); border-radius:10px; padding:8px; background:${m.role === 'assistant' ? 'rgba(99,102,241,0.12)' : 'var(--bg-card)'};">
+          <div class="hint" style="text-transform:uppercase; letter-spacing:0.06em;">${m.role}</div>
+          <div style="margin-top:4px;">${m.text}</div>
+        </div>
+      `)
+      el("chatTimeline").innerHTML = rows.join("")
+    }
+
+    function usersOptions() {
+      return `<option value="">Unassigned</option>` + data.assignees.map(u => `<option value="${u.id}">${u.name} (${u.role})</option>`).join("")
+    }
+
+    function renderWorkspaceEpics() {
+      const rows = state.backlog.epics.map(e => `<li><strong>${e.title}</strong> - ${e.description}</li>`).join("")
+      el("workspaceEpics").innerHTML = rows
+    }
+
+    function renderInsights() {
+      const insights = data.insights || {}
+      const overall = insights.overall || []
+      const dailyReport = insights.dailyReport || []
+      const moduleWise = insights.moduleWise || []
+      const issueWise = insights.issueWise || []
+
+      el("insightMetricGrid").innerHTML = overall.map(metric => `
+        <div class="card">
+          <div class="metric-label">${metric.label}</div>
+          <div class="metric-value">${metric.value}</div>
+          <div class="hint">${metric.note}</div>
+        </div>
+      `).join("")
+
+      el("dailyReportDate").textContent = "Week Snapshot"
+      el("dailyReportRows").innerHTML = `
+        <div style="border:1px solid var(--border-card); border-radius:10px; overflow:hidden;">
+          <div style="display:grid; grid-template-columns: 0.7fr 1fr 1fr 1fr 0.8fr 0.9fr; gap:0; padding:8px 10px; background:var(--bg-hover); font-size:12px; font-weight:700; color:var(--text-secondary);">
+            <div>Day</div><div>Completed</div><div>Created</div><div>Carry Over</div><div>Deploys</div><div>Incidents</div>
+          </div>
+          ${dailyReport.map(row => `
+            <div style="display:grid; grid-template-columns: 0.7fr 1fr 1fr 1fr 0.8fr 0.9fr; gap:0; padding:8px 10px; border-top:1px solid var(--border); font-size:13px;">
+              <div style="font-weight:650;">${row.day}</div>
+              <div>${row.completed}</div>
+              <div>${row.created}</div>
+              <div>${row.carryOver}</div>
+              <div>${row.deploys}</div>
+              <div style="color:${row.incidents > 0 ? '#fda4af' : '#6ee7b7'}; font-weight:650;">${row.incidents}</div>
+            </div>
+          `).join("")}
+        </div>
+      `
+
+      const riskColor = (risk) => {
+        if (risk === "high") return "#fda4af"
+        if (risk === "medium") return "#fcd34d"
+        return "#6ee7b7"
+      }
+
+      el("moduleInsightsRows").innerHTML = moduleWise.map(row => `
+        <div style="border:1px solid var(--border-card); border-radius:10px; padding:10px; margin-bottom:8px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:7px;">
+            <div style="font-weight:700;">${row.module}</div>
+            <div class="hint">Velocity ${row.velocity} pts/sprint</div>
+          </div>
+          <div class="bar" style="margin:0 0 8px;"><span style="width:${row.progress}%;"></span></div>
+          <div style="display:grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap:8px; font-size:12px;">
+            <div><span class="muted">Progress</span><div>${row.progress}%</div></div>
+            <div><span class="muted">Defect Leakage</span><div style="text-transform:capitalize;">${row.defectLeakage}</div></div>
+            <div><span class="muted">Risk</span><div style="color:${riskColor(row.risk)}; text-transform:capitalize; font-weight:700;">${row.risk}</div></div>
+            <div><span class="muted">AI Coverage</span><div style="text-transform:capitalize;">${row.aiCoverage}</div></div>
+          </div>
+        </div>
+      `).join("")
+
+      el("issueInsightsRows").innerHTML = issueWise.map(issue => `
+        <div style="border:1px solid var(--border-card); border-radius:10px; padding:9px; margin-bottom:8px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <div style="font-size:12px; font-weight:700; color:var(--text-secondary);">${issue.id}</div>
+            <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:${issue.severity === 'critical' ? '#fda4af' : issue.severity === 'high' ? '#fdba74' : issue.severity === 'medium' ? '#fde68a' : '#93c5fd'};">
+              ${issue.severity}
+            </div>
+          </div>
+          <div style="margin-top:5px; font-size:13px;">${issue.title}</div>
+          <div style="margin-top:6px; display:flex; align-items:center; justify-content:space-between; font-size:12px; color:var(--text-secondary);">
+            <span>Owner: ${issue.owner}</span>
+            <span>Status: ${issue.status.replace('_', ' ')}</span>
+            <span>ETA: ${issue.eta}</span>
+          </div>
+        </div>
+      `).join("")
+    }
+
+    function treeButtonText(item) {
+      return `${item.type.toUpperCase()}: ${item.title}`
+    }
+
+    function renderBacklogTree() {
+      const pane = el("treePane")
+      const { epics, stories, tasks, subtasks } = state.backlog
+
+      let html = ""
+      epics.forEach(epic => {
+        html += `<div class="tree-node">
+          <div class="node-head">
+            <button class="node-title" onclick="window.selectItem('epic','${epic.tempId}')">${treeButtonText(epic)}</button>
+            <div class="btn-row">
+              <button class="btn" onclick="window.addItem('story','${epic.tempId}')">+ Story</button>
+              <button class="btn btn-danger" onclick="window.deleteItem('epic','${epic.tempId}')">Delete</button>
+            </div>
+          </div>`
+
+        stories.filter(s => s.epicTempId === epic.tempId).forEach(story => {
+          html += `<div class="tree-node depth-1">
+            <div class="node-head">
+              <button class="node-title" onclick="window.selectItem('story','${story.tempId}')">${treeButtonText(story)}</button>
+              <div class="btn-row">
+                <button class="btn" onclick="window.addItem('task','${story.tempId}')">+ Task</button>
+                <button class="btn btn-danger" onclick="window.deleteItem('story','${story.tempId}')">Delete</button>
+              </div>
+            </div>`
+
+          tasks.filter(t => t.parentTempId === story.tempId).forEach(task => {
+            html += `<div class="tree-node depth-2">
+              <div class="node-head">
+                <button class="node-title" onclick="window.selectItem('task','${task.tempId}')">${treeButtonText(task)}</button>
+                <div class="btn-row">
+                  <button class="btn" onclick="window.addItem('subtask','${task.tempId}')">+ Subtask</button>
+                  <button class="btn btn-danger" onclick="window.deleteItem('task','${task.tempId}')">Delete</button>
+                </div>
+              </div>`
+
+            subtasks.filter(st => st.parentTempId === task.tempId).forEach(subtask => {
+              html += `<div class="tree-node depth-3">
+                <div class="node-head">
+                  <button class="node-title" onclick="window.selectItem('subtask','${subtask.tempId}')">${treeButtonText(subtask)}</button>
+                  <button class="btn btn-danger" onclick="window.deleteItem('subtask','${subtask.tempId}')">Delete</button>
+                </div>
+              </div>`
+            })
+
+            html += `</div>`
+          })
+
+          html += `</div>`
+        })
+
+        html += `</div>`
+      })
+
+      pane.innerHTML = html || `<div class="hint">No backlog items yet.</div>`
+    }
+
+    function findSelectedItem() {
+      if (!state.selectedItem) return null
+      const { type, tempId } = state.selectedItem
+      const list = state.backlog[`${type}s`] || []
+      return list.find(x => x.tempId === tempId) || null
+    }
+
+    function parentOptions(type) {
+      if (type === "story") {
+        return state.backlog.epics.map(e => `<option value="${e.tempId}">Parent Epic: ${e.title}</option>`).join("")
+      }
+      if (type === "task") {
+        return state.backlog.stories.map(s => `<option value="${s.tempId}">Parent Story: ${s.title}</option>`).join("")
+      }
+      if (type === "subtask") {
+        return state.backlog.tasks.map(t => `<option value="${t.tempId}">Parent Task: ${t.title}</option>`).join("")
+      }
+      return `<option value="">No parent (epic)</option>`
+    }
+
+    function renderDetailsForm() {
+      const item = findSelectedItem()
+      const empty = el("emptySelection")
+      const form = el("detailsForm")
+      if (!item) {
+        empty.style.display = "block"
+        form.style.display = "none"
+        return
+      }
+
+      empty.style.display = "none"
+      form.style.display = "block"
+
+      el("fieldTitle").value = item.title || ""
+      el("fieldDescription").value = item.description || ""
+      el("fieldAssignee").innerHTML = usersOptions()
+      el("fieldAssignee").value = item.assignee || ""
+      el("fieldPriority").value = item.priority || "medium"
+      el("fieldStart").value = item.startDate || ""
+      el("fieldDue").value = item.dueDate || ""
+      el("fieldPoints").value = String(item.storyPoints || 0)
+      el("fieldParent").innerHTML = parentOptions(item.type)
+
+      if (item.type === "story") el("fieldParent").value = item.epicTempId || ""
+      else if (item.type === "task" || item.type === "subtask") el("fieldParent").value = item.parentTempId || ""
+      else el("fieldParent").value = ""
+    }
+
+    function updateSelectedField(field, value) {
+      if (!state.selectedItem) return
+      const { type, tempId } = state.selectedItem
+      const list = state.backlog[`${type}s`]
+      const idx = list.findIndex(x => x.tempId === tempId)
+      if (idx < 0) return
+      list[idx][field] = value
+    }
+
+    function randomId(prefix) { return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
+
+    window.addChip = function(chip) {
+      if (!state.selectedChips.includes(chip)) state.selectedChips.push(chip)
+      renderChips()
+    }
+
+    window.removeChip = function(index) {
+      state.selectedChips.splice(index, 1)
+      renderChips()
+    }
+
+    window.selectProject = function(projectId) {
+      state.selectedProjectId = projectId
+      renderProjectContext()
+      toast("success", "Project Switched", "Workspace context updated")
+    }
+
+    window.markSeen = function(id) {
+      const row = data.notifications.find(n => n.id === id)
+      if (row) row.seen = true
+      renderNotifications()
+    }
+
+    window.selectItem = function(type, tempId) {
+      state.selectedItem = { type, tempId }
+      renderDetailsForm()
+    }
+
+    window.addItem = function(type, parentId) {
+      const base = {
+        tempId: randomId(type[0]),
+        type,
+        title: `New ${type}`,
+        description: "Add implementation details",
+        assignee: "",
+        priority: "medium",
+        startDate: "2026-03-26",
+        dueDate: "2026-03-31",
+        storyPoints: 0
+      }
+
+      if (type === "epic") {
+        state.backlog.epics.push(base)
+      }
+      if (type === "story") {
+        base.epicTempId = parentId || state.backlog.epics[0]?.tempId
+        state.backlog.stories.push(base)
+      }
+      if (type === "task") {
+        base.parentTempId = parentId || state.backlog.stories[0]?.tempId
+        base.epicTempId = state.backlog.stories.find(s => s.tempId === base.parentTempId)?.epicTempId || state.backlog.epics[0]?.tempId
+        state.backlog.tasks.push(base)
+      }
+      if (type === "subtask") {
+        base.parentTempId = parentId || state.backlog.tasks[0]?.tempId
+        base.epicTempId = state.backlog.tasks.find(t => t.tempId === base.parentTempId)?.epicTempId || state.backlog.epics[0]?.tempId
+        state.backlog.subtasks.push(base)
+      }
+
+      state.selectedItem = { type, tempId: base.tempId }
+      renderBacklogTree()
+      renderDetailsForm()
+      toast("success", "Backlog Updated", `${type} added`)
+    }
+
+    window.deleteItem = function(type, tempId) {
+      if (type === "epic") {
+        state.backlog.epics = state.backlog.epics.filter(e => e.tempId !== tempId)
+        const storyIds = state.backlog.stories.filter(s => s.epicTempId === tempId).map(s => s.tempId)
+        const taskIds = state.backlog.tasks.filter(t => storyIds.includes(t.parentTempId)).map(t => t.tempId)
+        state.backlog.stories = state.backlog.stories.filter(s => s.epicTempId !== tempId)
+        state.backlog.tasks = state.backlog.tasks.filter(t => !taskIds.includes(t.tempId))
+        state.backlog.subtasks = state.backlog.subtasks.filter(st => !taskIds.includes(st.parentTempId))
+      }
+      if (type === "story") {
+        const taskIds = state.backlog.tasks.filter(t => t.parentTempId === tempId).map(t => t.tempId)
+        state.backlog.stories = state.backlog.stories.filter(s => s.tempId !== tempId)
+        state.backlog.tasks = state.backlog.tasks.filter(t => t.parentTempId !== tempId)
+        state.backlog.subtasks = state.backlog.subtasks.filter(st => !taskIds.includes(st.parentTempId))
+      }
+      if (type === "task") {
+        state.backlog.tasks = state.backlog.tasks.filter(t => t.tempId !== tempId)
+        state.backlog.subtasks = state.backlog.subtasks.filter(st => st.parentTempId !== tempId)
+      }
+      if (type === "subtask") {
+        state.backlog.subtasks = state.backlog.subtasks.filter(st => st.tempId !== tempId)
+      }
+
+      state.selectedItem = null
+      renderBacklogTree()
+      renderDetailsForm()
+      toast("success", "Backlog Updated", `${type} deleted`)
+    }
+
+    function switchView(view) {
+      state.activeView = view
+      document.querySelectorAll(".nav-btn[data-view]").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.view === view)
+      })
+      document.querySelectorAll(".view").forEach(v => {
+        v.classList.toggle("active", v.id === `view-${view}`)
+      })
+    }
+
+    function bindEvents() {
+      document.querySelectorAll(".nav-btn[data-view]").forEach(btn => {
+        btn.addEventListener("click", () => switchView(btn.dataset.view))
+      })
+
+      el("projectSelect").addEventListener("change", e => {
+        state.selectedProjectId = e.target.value
+        renderProjectContext()
+      })
+
+      el("jiraSelect").addEventListener("change", e => {
+        state.selectedJiraKey = e.target.value
+        toast("success", "Jira Context", `Selected ${state.selectedJiraKey}`)
+      })
+
+      el("themeToggle").addEventListener("click", () => {
+        document.documentElement.classList.toggle("light")
+      })
+
+      el("notifBtn").addEventListener("click", () => {
+        el("notifPanel").classList.toggle("open")
+      })
+
+      document.addEventListener("click", (e) => {
+        const panel = el("notifPanel")
+        const btn = el("notifBtn")
+        if (!panel.contains(e.target) && !btn.contains(e.target)) {
+          panel.classList.remove("open")
+        }
+      })
+
+      el("markSeenBtn").addEventListener("click", () => {
+        data.notifications.forEach(n => n.seen = true)
+        renderNotifications()
+      })
+
+      el("clearNotifBtn").addEventListener("click", () => {
+        data.notifications = []
+        renderNotifications()
+      })
+
+      el("uploadBtn").addEventListener("click", () => {
+        el("docStatusPill").textContent = "PROCESSING"
+        el("docStatusPill").className = "status-pill status-processing"
+        el("docMeta").textContent = "Current SRS: ai-planning-srs-v4.md (processing)"
+        state.plannerChat.push({ role: "assistant", text: "SRS uploaded and ingestion started in background." })
+        renderChat()
+        toast("success", "SRS Uploaded", "Ingestion started")
+
+        setTimeout(() => {
+          el("docStatusPill").textContent = "PROCESSED"
+          el("docStatusPill").className = "status-pill status-processed"
+          el("docMeta").textContent = "Current SRS: ai-planning-srs-v4.md (processed + requirements extracted)"
+          state.plannerChat.push({ role: "assistant", text: "SRS ingestion completed and requirements extracted." })
+          data.notifications.unshift({ id: randomId("n"), type: "success", title: "SRS Processed", message: "Requirements extracted for planning context.", seen: false, createdAt: new Date().toISOString() })
+          renderChat()
+          renderNotifications()
+          toast("success", "Processing Complete", "Requirements are ready")
+        }, 1400)
+      })
+
+      el("connectJiraBtn").addEventListener("click", () => {
+        toast("success", "Jira Connected", `Project key ${state.selectedJiraKey} linked`)
+      })
+
+      el("suggestBtn").addEventListener("click", () => {
+        const prompt = el("planningPrompt").value.trim()
+        const chat = el("chatInput").value.trim()
+        if (chat) state.plannerChat.push({ role: "user", text: chat })
+        state.plannerChat.push({ role: "assistant", text: "Generated phase-aware suggestions using requirements + commits + existing stories context." })
+        renderChat()
+        renderSuggestionBox()
+        toast("success", "Suggestions Ready", prompt || chat ? "Based on your context input" : "Default planning suggestions loaded")
+      })
+
+      el("generateBtn").addEventListener("click", () => {
+        state.plannerChat.push({ role: "assistant", text: "Backlog generated. Redirecting to Backlog Editor for final review." })
+        renderChat()
+        renderBacklogTree()
+        switchView("backlog-editor")
+        toast("success", "Backlog Generated", "Structured hierarchy created")
+      })
+
+      el("workspaceGenerateBtn").addEventListener("click", () => {
+        switchView("ai-planner")
+        toast("success", "Workspace Context Applied", "Using module + sprint signals for planning")
+      })
+
+      el("savePushBtn").addEventListener("click", () => {
+        toast("success", "Saved + Pushed", `Backlog synced to Jira project ${state.selectedJiraKey}`)
+        data.notifications.unshift({ id: randomId("n"), type: "success", title: "Jira Push Completed", message: "Epics and stories were created with parent mapping.", seen: false, createdAt: new Date().toISOString() })
+        renderNotifications()
+      })
+
+      el("addEpicBtn").addEventListener("click", () => window.addItem("epic"))
+
+      el("deleteSelectedBtn").addEventListener("click", () => {
+        if (!state.selectedItem) return
+        window.deleteItem(state.selectedItem.type, state.selectedItem.tempId)
+      })
+
+      el("fieldTitle").addEventListener("input", e => { updateSelectedField("title", e.target.value); renderBacklogTree() })
+      el("fieldDescription").addEventListener("input", e => updateSelectedField("description", e.target.value))
+      el("fieldAssignee").addEventListener("change", e => updateSelectedField("assignee", e.target.value))
+      el("fieldPriority").addEventListener("change", e => updateSelectedField("priority", e.target.value))
+      el("fieldStart").addEventListener("change", e => updateSelectedField("startDate", e.target.value))
+      el("fieldDue").addEventListener("change", e => updateSelectedField("dueDate", e.target.value))
+      el("fieldPoints").addEventListener("input", e => updateSelectedField("storyPoints", Number(e.target.value) || 0))
+
+      el("fieldParent").addEventListener("change", e => {
+        if (!state.selectedItem) return
+        const sel = state.selectedItem
+        const val = e.target.value
+        if (sel.type === "story") updateSelectedField("epicTempId", val)
+        if (sel.type === "task" || sel.type === "subtask") updateSelectedField("parentTempId", val)
+        renderBacklogTree()
+      })
+
+      el("signOutBtn").addEventListener("click", () => {
+        toast("error", "Demo Mode", "Sign out disabled in static preview")
+      })
+    }
+
+    function init() {
+      renderProjectContext()
+      renderOverview()
+      renderSuggestionBox()
+      renderChips()
+      renderChat()
+      renderWorkspaceEpics()
+      renderInsights()
+      renderBacklogTree()
+      renderDetailsForm()
+      renderNotifications()
+      bindEvents()
+    }
+
+    init()
+  </script>
+</body>
+</html>

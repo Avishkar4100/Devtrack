@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from services.rag_service import RAGService
 from services.llm_service import LLMService
+from services.document_parser import parse_document
 
 router = APIRouter()
 rag_service = RAGService()
@@ -27,6 +28,22 @@ class SuggestStoriesRequest(BaseModel):
     user_input: Optional[str] = None
     context_graph: Dict[str, Any]
     ai_config: Optional[Dict[str, Any]] = None
+
+
+class ExtractRequirementsRequest(BaseModel):
+    project_id: str
+    document_id: str
+    file_path: str
+    file_type: str
+    ai_config: Optional[Dict[str, Any]] = None
+
+
+class SuggestAction(BaseModel):
+    title: str
+    type: str
+    priority: str
+    module: str
+    reason: str
 
 
 @router.post("/generate")
@@ -60,13 +77,43 @@ async def generate_stories(req: GenerateStoriesRequest):
     return {"success": True, **result}
 
 
+@router.post("/extract-requirements")
+async def extract_requirements(req: ExtractRequirementsRequest):
+    try:
+        text = parse_document(req.file_path, req.file_type)
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=f"Failed to parse SRS: {str(err)}")
+
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="Could not extract text from document")
+
+    try:
+        extracted = llm_service.extract_requirements(
+            text=text,
+            ai_config=req.ai_config,
+        )
+    except Exception as err:
+        raise HTTPException(status_code=502, detail=f"Requirement extraction failed: {str(err)}")
+
+    return {"success": True, **extracted}
+
+
 @router.post("/suggest")
 async def suggest_stories(req: SuggestStoriesRequest):
-    suggestions = llm_service.suggest_planner_prompts(
-        project_name=req.project_name,
-        module_name=req.module_name,
-        user_input=req.user_input or "",
-        context_graph=req.context_graph,
-        ai_config=req.ai_config,
-    )
+    try:
+        suggestions = llm_service.suggest_phase_actions(
+            project_name=req.project_name,
+            module_name=req.module_name,
+            user_input=req.user_input or "",
+            phase=req.context_graph.get("phase", "start"),
+            modules=req.context_graph.get("modules", []),
+            functional_requirements=req.context_graph.get("functional", []),
+            non_functional_requirements=req.context_graph.get("nonFunctional", []),
+            actors=req.context_graph.get("actors", []),
+            existing_work=req.context_graph.get("existingStories", []),
+            ai_config=req.ai_config,
+        )
+    except Exception as err:
+        raise HTTPException(status_code=502, detail=f"Suggest generation failed: {str(err)}")
+
     return {"success": True, "suggestions": suggestions}

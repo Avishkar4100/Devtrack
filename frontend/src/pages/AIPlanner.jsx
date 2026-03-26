@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import api from '@/lib/api'
 import { useProjectStore } from '@/store/projectStore'
+import { useWorkspaceStateStore } from '@/store/workspaceStateStore'
+import { appLogger } from '@/lib/logger'
 import toast from 'react-hot-toast'
 
 const makeId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -14,33 +17,88 @@ const normalizeGeneratedItems = (rows = [], prefix) =>
     assignee: row.assignee || '',
   }))
 
+const DEFAULT_SUGGESTIONS = { epics: [], stories: [], tasks: [] }
+const DEFAULT_BACKLOG_DRAFT = { epics: [], stories: [], tasks: [], subtasks: [] }
+const DEFAULT_PLANNER_CHAT = [
+  {
+    role: 'assistant',
+    text: 'Upload SRS, press Suggest, pick context prompts, add your instruction, then generate editable backlog and confirm push to Jira.',
+  },
+]
+
 export default function AIPlannerPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const {
     selectedProjectId,
     selectedJiraProjectKey,
     setSelectedJiraProjectKey,
     projects,
   } = useProjectStore()
+  const plannerStorageKey = selectedProjectId || '__fallback__'
+  const plannerHydrated = useWorkspaceStateStore((state) => state.hydrated)
+  const persistedAIPlanner = useWorkspaceStateStore((state) => state.aiPlannerByProject[plannerStorageKey])
+  const setAIPlannerState = useWorkspaceStateStore((state) => state.setAIPlannerState)
 
   const [chatInput, setChatInput] = useState('')
   const [planningPrompt, setPlanningPrompt] = useState('')
   const [srsFile, setSrsFile] = useState(null)
   const [selectedSuggestionChips, setSelectedSuggestionChips] = useState([])
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
-  const [suggestions, setSuggestions] = useState({ epics: [], stories: [], tasks: [] })
-  const [backlogDraft, setBacklogDraft] = useState({ epics: [], stories: [], tasks: [], subtasks: [] })
+  const [suggestions, setSuggestions] = useState(DEFAULT_SUGGESTIONS)
+  const [backlogDraft, setBacklogDraft] = useState(DEFAULT_BACKLOG_DRAFT)
   const [latestDocumentStatus, setLatestDocumentStatus] = useState(null)
   const [lastSrsLabel, setLastSrsLabel] = useState('')
-  const [plannerChat, setPlannerChat] = useState([
-    {
-      role: 'assistant',
-      text: 'Upload SRS, press Suggest, pick context prompts, add your instruction, then generate editable backlog and confirm push to Jira.',
-    },
-  ])
+  const [plannerChat, setPlannerChat] = useState(DEFAULT_PLANNER_CHAT)
 
   const filePickerRef = useRef(null)
   const monitorInFlightRef = useRef(false)
+  const plannerLoadedKeyRef = useRef('')
+
+  useEffect(() => {
+    if (!plannerHydrated) return
+    if (plannerLoadedKeyRef.current === plannerStorageKey) return
+
+    plannerLoadedKeyRef.current = plannerStorageKey
+    const snapshot = persistedAIPlanner || {}
+
+    setChatInput(snapshot.chatInput || '')
+    setPlanningPrompt(snapshot.planningPrompt || '')
+    setSelectedSuggestionChips(Array.isArray(snapshot.selectedSuggestionChips) ? snapshot.selectedSuggestionChips : [])
+    setSuggestionsOpen(Boolean(snapshot.suggestionsOpen))
+    setSuggestions(snapshot.suggestions || DEFAULT_SUGGESTIONS)
+    setBacklogDraft(snapshot.backlogDraft || DEFAULT_BACKLOG_DRAFT)
+    setLastSrsLabel(snapshot.lastSrsLabel || '')
+    setPlannerChat(Array.isArray(snapshot.plannerChat) && snapshot.plannerChat.length ? snapshot.plannerChat : DEFAULT_PLANNER_CHAT)
+  }, [plannerHydrated, plannerStorageKey, persistedAIPlanner])
+
+  useEffect(() => {
+    if (!plannerHydrated) return
+    if (plannerLoadedKeyRef.current !== plannerStorageKey) return
+
+    setAIPlannerState(plannerStorageKey, {
+      chatInput,
+      planningPrompt,
+      selectedSuggestionChips,
+      suggestionsOpen,
+      suggestions,
+      backlogDraft,
+      lastSrsLabel,
+      plannerChat,
+    })
+  }, [
+    plannerHydrated,
+    plannerStorageKey,
+    chatInput,
+    planningPrompt,
+    selectedSuggestionChips,
+    suggestionsOpen,
+    suggestions,
+    backlogDraft,
+    lastSrsLabel,
+    plannerChat,
+    setAIPlannerState,
+  ])
 
   const { data: project } = useQuery({
     queryKey: ['ai-planner-project', selectedProjectId],
@@ -216,6 +274,11 @@ export default function AIPlannerPage() {
       if (!resolvedProjectId) throw new Error('No project available. Please create one first.')
 
       const inputText = chatInput.trim() || planningPrompt.trim() || 'Suggest next planning prompts'
+      appLogger.info('AI Planner suggest request', {
+        projectId: resolvedProjectId,
+        moduleName,
+        inputLength: inputText.length,
+      })
       const response = await api.post(`/stories/suggest/${resolvedProjectId}`, {
         moduleName,
         userInput: inputText,
@@ -224,14 +287,40 @@ export default function AIPlannerPage() {
     },
     onSuccess: (data) => {
       const structured = data?.structuredSuggestions || {}
+      const epics = Array.isArray(structured.epics) ? structured.epics : []
+      const stories = Array.isArray(structured.stories) ? structured.stories : []
+      const tasks = Array.isArray(structured.tasks) ? structured.tasks : []
       setSuggestions({
-        epics: Array.isArray(structured.epics) ? structured.epics : [],
-        stories: Array.isArray(structured.stories) ? structured.stories : [],
-        tasks: Array.isArray(structured.tasks) ? structured.tasks : [],
+        epics,
+        stories,
+        tasks,
       })
-      setSuggestionsOpen(true)
+      const hasAny = epics.length + stories.length + tasks.length > 0
+      setSuggestionsOpen(hasAny)
+
+      appLogger.info('AI Planner suggest response', {
+        hasAny,
+        epics: epics.length,
+        stories: stories.length,
+        tasks: tasks.length,
+        message: data?.message || null,
+        contextSummary: data?.contextSummary || null,
+      })
+
+      if (!hasAny) {
+        toast.error('No suggestions generated. Upload/process SRS or try a clearer prompt.')
+      } else if (data?.message) {
+        toast.success(data.message)
+      }
     },
-    onError: (error) => toast.error(error?.message || 'Failed to fetch suggestions'),
+    onError: (error) => {
+      appLogger.error('AI Planner suggest failed', {
+        message: error?.response?.data?.message || error?.message,
+        status: error?.response?.status,
+        details: error?.response?.data || null,
+      })
+      toast.error(error?.response?.data?.message || error?.message || 'Failed to fetch suggestions')
+    },
   })
 
   const hasSuggestions = (suggestions.epics?.length || 0) + (suggestions.stories?.length || 0) + (suggestions.tasks?.length || 0) > 0
@@ -267,10 +356,12 @@ export default function AIPlannerPage() {
       const response = await api.post(`/stories/generate/${resolvedProjectId}`, {
         moduleName,
         additionalContext: combinedContext,
+      }, {
+        timeout: 0,
       })
-      return response.data.data
+      return { data: response.data.data, resolvedProjectId }
     },
-    onSuccess: (data) => {
+    onSuccess: ({ data, resolvedProjectId }) => {
       const normalized = {
         epics: normalizeGeneratedItems(data?.epics || [], 'epic'),
         stories: normalizeGeneratedItems(data?.stories || [], 'story'),
@@ -280,6 +371,9 @@ export default function AIPlannerPage() {
       setBacklogDraft(normalized)
       setPlannerChat((prev) => [...prev, { role: 'assistant', text: 'Backlog generated. Review/edit on the left, then confirm push to Jira.' }])
       toast.success('Backlog generated')
+      navigate(`/projects/${resolvedProjectId}/backlog-editor`, {
+        state: { generatedBacklog: normalized },
+      })
     },
     onError: (error) => toast.error(error?.message || 'Failed to generate backlog'),
   })
@@ -383,7 +477,6 @@ export default function AIPlannerPage() {
   const addSuggestionChip = (value) => {
     if (!value || selectedSuggestionChips.includes(value)) return
     setSelectedSuggestionChips((prev) => [...prev, value])
-    setSuggestionsOpen(false)
   }
 
   const latestDoc = latestDocumentStatus || documents[0] || null

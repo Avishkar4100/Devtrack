@@ -11,6 +11,20 @@ const aiClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+const isServiceUnavailableError = (error) => {
+  const transientCodes = ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNABORTED'];
+  if (transientCodes.includes(error?.code)) return true;
+  return !error?.response;
+};
+
+const asServiceUnavailable = (action, originalError) => {
+  const err = new Error(`AI service is offline. Unable to ${action}. Start ai-service and try again.`);
+  err.code = 'AI_SERVICE_UNAVAILABLE';
+  err.statusCode = 503;
+  err.cause = originalError;
+  return err;
+};
+
 const getActiveAIConfigPayload = async () => {
   const cfg = await AIConfig.findOne({ isActive: true }).lean();
   if (!cfg) return null;
@@ -24,6 +38,24 @@ const getActiveAIConfigPayload = async () => {
     temperature: cfg.temperature,
     maxTokens: cfg.maxTokens,
   };
+};
+
+const checkHealth = async () => {
+  try {
+    const response = await aiClient.get('/health', { timeout: 2500 });
+    return {
+      online: true,
+      data: response.data,
+    };
+  } catch (error) {
+    if (isServiceUnavailableError(error)) {
+      return {
+        online: false,
+        data: null,
+      };
+    }
+    throw error;
+  }
 };
 
 /**
@@ -41,10 +73,8 @@ const ingestDocument = async ({ documentId, filePath, fileType, namespace, proje
     return response.data;
   } catch (error) {
     logger.error(`AI Service - ingestDocument error: ${error.message}`);
-    // Return mock result if AI service is unavailable
-    if (error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET') {
-      logger.warn('AI Service unavailable - returning mock ingestion result');
-      return { chunks: 0, embeddings: 0, processingTime: 0, mock: true };
+    if (isServiceUnavailableError(error)) {
+      throw asServiceUnavailable('ingest document', error);
     }
     throw error;
   }
@@ -65,16 +95,30 @@ const generateStories = async ({ projectId, projectName, moduleName, documentId,
       budget,
       deadline: deadline ? new Date(deadline).toISOString() : null,
       ai_config: aiConfig,
-    });
+    }, { timeout: 0 });
     return response.data;
   } catch (error) {
     logger.error(`AI Service - generateStories error: ${error.message}`);
-
-    if (error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET') {
-      // Return mock generated stories when AI service is down
-      logger.warn('AI Service unavailable - returning mock stories');
-      return getMockStories(moduleName, projectName);
+    if (error?.response?.data) {
+      logger.error(`AI Service - generateStories response: ${JSON.stringify(error.response.data)}`);
     }
+
+    if (isServiceUnavailableError(error)) {
+      throw asServiceUnavailable('generate stories', error);
+    }
+
+    const status = Number(error?.response?.status || 0);
+    if (status >= 500) {
+      logger.warn('AI generation failed with upstream 5xx. Returning fallback generated backlog.');
+      const fallback = getMockStories(moduleName, projectName);
+      return {
+        ...fallback,
+        mock: true,
+        message: 'AI generation service returned an internal error. Showing fallback backlog so planning can continue.',
+        upstreamStatus: status,
+      };
+    }
+
     throw error;
   }
 };
@@ -94,8 +138,8 @@ const analyzeCode = async ({ projectId, changedFiles, stories, commitSha, commit
     return response.data;
   } catch (error) {
     logger.error(`AI Service - analyzeCode error: ${error.message}`);
-    if (error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET') {
-      return { results: [], mock: true };
+    if (isServiceUnavailableError(error)) {
+      throw asServiceUnavailable('analyze code', error);
     }
     throw error;
   }
@@ -118,13 +162,55 @@ const suggestStories = async ({ projectId, projectName, moduleName, userInput, c
     return response.data;
   } catch (error) {
     logger.error(`AI Service - suggestStories error: ${error.message}`);
-    const isServiceDown = error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET';
+    const isServiceDown = isServiceUnavailableError(error);
     if (isServiceDown) {
       const err = new Error('AI suggestion service is unavailable. Start ai-service and try Suggest again.');
       err.code = 'AI_SERVICE_UNAVAILABLE';
+      err.statusCode = 503;
       throw err;
     }
-    throw error;
+
+    const upstreamStatus = Number(error?.response?.status || 500);
+    const upstreamDetail = error?.response?.data?.detail;
+    const upstreamMessage = error?.response?.data?.message;
+    const message = upstreamDetail || upstreamMessage || error.message || 'AI suggestion request failed.';
+    const err = new Error(`AI suggest failed: ${message}`);
+    err.code = 'AI_SUGGEST_FAILED';
+    err.statusCode = upstreamStatus;
+    err.cause = error;
+    throw err;
+  }
+};
+
+/**
+ * Extract structured requirements from an SRS document.
+ */
+const extractRequirements = async ({ projectId, documentId, filePath, fileType }) => {
+  try {
+    const aiConfig = await getActiveAIConfigPayload();
+    const response = await aiClient.post('/stories/extract-requirements', {
+      project_id: projectId,
+      document_id: documentId,
+      file_path: filePath,
+      file_type: fileType,
+      ai_config: aiConfig,
+    }, { timeout: AI_INGEST_TIMEOUT_MS });
+    return response.data;
+  } catch (error) {
+    logger.error(`AI Service - extractRequirements error: ${error.message}`);
+    if (isServiceUnavailableError(error)) {
+      throw asServiceUnavailable('extract requirements', error);
+    }
+
+    const upstreamStatus = Number(error?.response?.status || 500);
+    const upstreamDetail = error?.response?.data?.detail;
+    const upstreamMessage = error?.response?.data?.message;
+    const message = upstreamDetail || upstreamMessage || error.message || 'Requirement extraction failed.';
+    const err = new Error(`AI requirement extraction failed: ${message}`);
+    err.code = 'AI_REQUIREMENT_EXTRACTION_FAILED';
+    err.statusCode = upstreamStatus;
+    err.cause = error;
+    throw err;
   }
 };
 
@@ -220,4 +306,4 @@ const getMockStories = (moduleName, projectName) => {
   };
 };
 
-module.exports = { ingestDocument, generateStories, analyzeCode, suggestStories };
+module.exports = { ingestDocument, generateStories, analyzeCode, suggestStories, extractRequirements, checkHealth };

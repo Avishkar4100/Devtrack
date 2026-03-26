@@ -10,26 +10,19 @@ import VerifyEmailPage from '@/pages/VerifyEmail'
 import OverviewPage from '@/pages/Overview'
 import ProjectsPage from '@/pages/Projects'
 import ProjectWorkspacePage from '@/pages/ProjectWorkspace'
+import BacklogEditorPage from '@/pages/BacklogEditor'
 import SettingsPage from '@/pages/Settings'
 import InsightsPage from '@/pages/Insights'
-import WorkspacePage from '@/pages/Workspace'
 import AIPlannerPage from '@/pages/AIPlanner'
-<<<<<<< HEAD
+import WorkspacePage from '@/pages/Workspace'
 import AdminLayout from '@/components/AdminLayout'
 import AdminLoginPage from '@/pages/AdminLogin'
-=======
-import AdminLoginPage from '@/pages/AdminLogin'
-import AdminLayout from '@/components/AdminLayout'
->>>>>>> f4f257f6624fcf48a6840ebc197cc11983daa266
 import AdminOverviewPage from '@/pages/AdminOverview'
 import AdminAIConfigPage from '@/pages/AdminAIConfig'
 import AdminOrganizationsPage from '@/pages/AdminOrganizations'
 import AdminProjectsPage from '@/pages/AdminProjects'
-<<<<<<< HEAD
 
 const getHomeByRole = (user) => (user?.role === 'admin' ? '/admin/overview' : '/overview')
-=======
->>>>>>> f4f257f6624fcf48a6840ebc197cc11983daa266
 
 const UserRoute = ({ children }) => {
   const { token, user } = useAuthStore()
@@ -51,13 +44,6 @@ const PublicRoute = ({ children }) => {
   return <Navigate to={getHomeByRole(user)} replace />
 }
 
-const AdminRoute = ({ children }) => {
-  const { token, user } = useAuthStore()
-  if (!token) return <Navigate to="/admin/login" replace />
-  if (user?.role !== 'admin') return <Navigate to="/overview" replace />
-  return children
-}
-
 const AdminPublicRoute = ({ children }) => {
   const { token, user } = useAuthStore()
   if (token && user?.role === 'admin') return <Navigate to="/admin/overview" replace />
@@ -71,11 +57,7 @@ export default function App() {
       <Route path="/" element={<PublicRoute><HomePage /></PublicRoute>} />
       <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
       <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
-<<<<<<< HEAD
-      <Route path="/admin/login" element={<PublicRoute><AdminLoginPage /></PublicRoute>} />
-=======
       <Route path="/admin/login" element={<AdminPublicRoute><AdminLoginPage /></AdminPublicRoute>} />
->>>>>>> f4f257f6624fcf48a6840ebc197cc11983daa266
 
       {/* Password reset — public, no auth needed */}
       <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
@@ -89,21 +71,19 @@ export default function App() {
       {/* User application (non-admin roles only) */}
       <Route path="/" element={<UserRoute><Layout /></UserRoute>}>
         <Route path="overview" element={<OverviewPage />} />
-        <Route path="projects" element={<ProjectsPage />} />
-        <Route path="projects/:id" element={<ProjectWorkspacePage />} />
         <Route path="ai-planner" element={<AIPlannerPage />} />
         <Route path="workspace" element={<WorkspacePage />} />
         <Route path="progress" element={<Navigate to="/insights" replace />} />
+        <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects/:id" element={<ProjectWorkspacePage />} />
+        <Route path="projects/:id/backlog-editor" element={<BacklogEditorPage />} />
         <Route path="insights" element={<InsightsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="dashboard" element={<Navigate to="/overview" replace />} />
       </Route>
 
       <Route path="/admin" element={<AdminRoute><AdminLayout /></AdminRoute>}>
-<<<<<<< HEAD
         <Route index element={<Navigate to="/admin/overview" replace />} />
-=======
->>>>>>> f4f257f6624fcf48a6840ebc197cc11983daa266
         <Route path="overview" element={<AdminOverviewPage />} />
         <Route path="ai-config" element={<AdminAIConfigPage />} />
         <Route path="organizations" element={<AdminOrganizationsPage />} />
