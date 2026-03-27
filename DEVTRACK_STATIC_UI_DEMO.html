@@ -443,6 +443,70 @@
       gap: 8px;
     }
 
+    .workspace-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .workspace-tab {
+      border: 1px solid var(--border-card);
+      background: var(--bg-input);
+      color: var(--text-secondary);
+      border-radius: 9px;
+      padding: 7px 11px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .workspace-tab.active {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.24), rgba(139, 92, 246, 0.18));
+      border-color: rgba(99, 102, 241, 0.55);
+      color: #c7d2fe;
+    }
+
+    .workspace-mini-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin: 10px 0;
+    }
+
+    .workspace-mini-card {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      padding: 9px;
+      background: rgba(99, 102, 241, 0.08);
+    }
+
+    .workspace-mini-label {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .workspace-mini-value {
+      font-size: 20px;
+      font-weight: 760;
+      margin-top: 2px;
+    }
+
+    .workspace-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .workspace-item {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      padding: 9px;
+      background: var(--bg-card);
+    }
+
     .toasts {
       position: fixed;
       right: 14px;
@@ -470,6 +534,7 @@
       .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid-2 { grid-template-columns: 1fr; }
       .planner-grid { grid-template-columns: 1fr; }
+      .workspace-mini-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     @media (max-width: 900px) {
@@ -490,7 +555,6 @@
         <button class="nav-btn active" data-view="overview">Overview <span>•</span></button>
         <button class="nav-btn" data-view="ai-planner">AI Planner</button>
         <button class="nav-btn" data-view="workspace">Workspace</button>
-        <button class="nav-btn" data-view="backlog-editor">Backlog Editor</button>
         <button class="nav-btn" data-view="insights">Insights</button>
 
         <div class="context-card">
@@ -557,50 +621,95 @@
 
         <div class="view" id="view-ai-planner">
           <h1 class="page-title">AI Planner</h1>
-          <div class="planner-grid">
-            <div class="card">
-              <div class="btn-row" style="justify-content:space-between; align-items:center; margin-bottom:10px;">
-                <div>
-                  <div style="font-weight:700;">SRS Ingestion</div>
-                  <div class="hint">Upload -> Process -> Extract Requirements -> Suggest -> Generate</div>
+          <div class="workspace-tabs" id="aiPlannerTabs" style="margin-bottom:10px;">
+            <button class="workspace-tab ai-planner-tab active" data-ai-tab="planner">Planner</button>
+            <button class="workspace-tab ai-planner-tab" data-ai-tab="backlog">Backlog</button>
+          </div>
+
+          <div id="aiPlannerPanel">
+            <div class="planner-grid">
+              <div class="card">
+                <div class="btn-row" style="justify-content:space-between; align-items:center; margin-bottom:10px;">
+                  <div>
+                    <div style="font-weight:700;">SRS Ingestion</div>
+                    <div class="hint">Upload -> Process -> Extract Requirements -> Suggest -> Generate</div>
+                  </div>
+                  <span class="status-pill status-processed" id="docStatusPill">PROCESSED</span>
                 </div>
-                <span class="status-pill status-processed" id="docStatusPill">PROCESSED</span>
+
+                <div class="hint" id="docMeta">Current SRS: banking-core-srs-v3.md (processed)</div>
+                <div class="btn-row" style="margin-top:10px;">
+                  <button class="btn" id="uploadBtn">Upload SRS (Static)</button>
+                  <button class="btn" id="connectJiraBtn">Connect Jira</button>
+                </div>
+
+                <hr style="border:none; border-top:1px solid var(--border); margin:14px 0;" />
+
+                <label class="hint">Planning Prompt</label>
+                <textarea id="planningPrompt" class="input" rows="4" placeholder="Describe planning direction"></textarea>
+
+                <label class="hint" style="display:block; margin-top:10px;">Chat Input</label>
+                <input id="chatInput" class="input" placeholder="Ask planner for next sprint plan" />
+
+                <div class="btn-row" style="margin-top:10px;">
+                  <button class="btn btn-primary" id="suggestBtn">Suggest</button>
+                  <button class="btn btn-primary" id="generateBtn">Generate Backlog</button>
+                </div>
+
+                <div style="margin-top:12px;">
+                  <div class="hint">Selected Suggestion Chips</div>
+                  <div class="chips" id="chipBox"></div>
+                </div>
               </div>
 
-              <div class="hint" id="docMeta">Current SRS: banking-core-srs-v3.md (processed)</div>
-              <div class="btn-row" style="margin-top:10px;">
-                <button class="btn" id="uploadBtn">Upload SRS (Static)</button>
-                <button class="btn" id="connectJiraBtn">Connect Jira</button>
-              </div>
+              <div class="card">
+                <h3 style="margin-top:0;">Suggested Structure</h3>
+                <div class="hint">Based on project module, phase, requirements, and commit history context</div>
+                <div id="suggestionsBox" style="margin-top:10px;"></div>
 
-              <hr style="border:none; border-top:1px solid var(--border); margin:14px 0;" />
+                <hr style="border:none; border-top:1px solid var(--border); margin:12px 0;" />
 
-              <label class="hint">Planning Prompt</label>
-              <textarea id="planningPrompt" class="input" rows="4" placeholder="Describe planning direction"></textarea>
-
-              <label class="hint" style="display:block; margin-top:10px;">Chat Input</label>
-              <input id="chatInput" class="input" placeholder="Ask planner for next sprint plan" />
-
-              <div class="btn-row" style="margin-top:10px;">
-                <button class="btn btn-primary" id="suggestBtn">Suggest</button>
-                <button class="btn btn-primary" id="generateBtn">Generate Backlog</button>
-              </div>
-
-              <div style="margin-top:12px;">
-                <div class="hint">Selected Suggestion Chips</div>
-                <div class="chips" id="chipBox"></div>
+                <h3 style="margin-top:0;">Planner Timeline (Static Chat)</h3>
+                <div id="chatTimeline" style="display:grid; gap:8px;"></div>
               </div>
             </div>
+          </div>
 
-            <div class="card">
-              <h3 style="margin-top:0;">Suggested Structure</h3>
-              <div class="hint">Based on project module, phase, requirements, and commit history context</div>
-              <div id="suggestionsBox" style="margin-top:10px;"></div>
+          <div id="aiBacklogPanel" style="display:none;">
+            <div class="btn-row" style="margin-bottom:10px;">
+              <button class="btn btn-primary" id="savePushBtn">Save and Push to Jira</button>
+              <button class="btn" id="addEpicBtn">+ Add Epic</button>
+            </div>
 
-              <hr style="border:none; border-top:1px solid var(--border); margin:12px 0;" />
-
-              <h3 style="margin-top:0;">Planner Timeline (Static Chat)</h3>
-              <div id="chatTimeline" style="display:grid; gap:8px;"></div>
+            <div class="planner-grid">
+              <div class="card" style="max-height:72vh; overflow:auto;" id="treePane"></div>
+              <div class="card" id="detailsPane">
+                <h3 style="margin-top:0;">Item Details</h3>
+                <div id="emptySelection" class="hint">Select a backlog item from tree.</div>
+                <div id="detailsForm" style="display:none;">
+                  <input id="fieldTitle" class="input" placeholder="Title" />
+                  <textarea id="fieldDescription" class="input" rows="4" style="margin-top:8px;" placeholder="Description"></textarea>
+                  <div class="details-grid" style="margin-top:8px;">
+                    <select id="fieldAssignee" class="input"></select>
+                    <select id="fieldPriority" class="input">
+                      <option value="high">high</option>
+                      <option value="medium">medium</option>
+                      <option value="low">low</option>
+                    </select>
+                  </div>
+                  <div class="details-grid" style="margin-top:8px;">
+                    <input id="fieldStart" type="date" class="input" />
+                    <input id="fieldDue" type="date" class="input" />
+                  </div>
+                  <div class="details-grid" style="margin-top:8px;">
+                    <input id="fieldPoints" type="number" class="input" min="0" placeholder="Story Points" />
+                    <select id="fieldParent" class="input"></select>
+                  </div>
+                  <div class="btn-row" style="margin-top:10px;">
+                    <button class="btn btn-danger" id="deleteSelectedBtn">Delete Item</button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -630,44 +739,26 @@
               </ul>
             </div>
           </div>
-        </div>
 
-        <div class="view" id="view-backlog-editor">
-          <h1 class="page-title">Backlog Editor</h1>
-          <div class="btn-row" style="margin-bottom:10px;">
-            <button class="btn btn-primary" id="savePushBtn">Save and Push to Jira</button>
-            <button class="btn" id="addEpicBtn">+ Add Epic</button>
-          </div>
-
-          <div class="planner-grid">
-            <div class="card" style="max-height:72vh; overflow:auto;" id="treePane"></div>
-            <div class="card" id="detailsPane">
-              <h3 style="margin-top:0;">Item Details</h3>
-              <div id="emptySelection" class="hint">Select a backlog item from tree.</div>
-              <div id="detailsForm" style="display:none;">
-                <input id="fieldTitle" class="input" placeholder="Title" />
-                <textarea id="fieldDescription" class="input" rows="4" style="margin-top:8px;" placeholder="Description"></textarea>
-                <div class="details-grid" style="margin-top:8px;">
-                  <select id="fieldAssignee" class="input"></select>
-                  <select id="fieldPriority" class="input">
-                    <option value="high">high</option>
-                    <option value="medium">medium</option>
-                    <option value="low">low</option>
-                  </select>
-                </div>
-                <div class="details-grid" style="margin-top:8px;">
-                  <input id="fieldStart" type="date" class="input" />
-                  <input id="fieldDue" type="date" class="input" />
-                </div>
-                <div class="details-grid" style="margin-top:8px;">
-                  <input id="fieldPoints" type="number" class="input" min="0" placeholder="Story Points" />
-                  <select id="fieldParent" class="input"></select>
-                </div>
-                <div class="btn-row" style="margin-top:10px;">
-                  <button class="btn btn-danger" id="deleteSelectedBtn">Delete Item</button>
-                </div>
+          <div class="card" style="margin-top:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
+              <div>
+                <h3 style="margin:0;">Workspace Details</h3>
+                <div class="hint" id="workspaceTabMeta">Every Day • Developers and QA</div>
               </div>
+              <div class="hint" id="workspaceContextMeta">Project: FIN - FinCore Revamp | Jira: FIN</div>
             </div>
+
+            <div class="workspace-tabs" id="workspaceTabs">
+              <button class="workspace-tab active" data-workspace-tab="active-sprints">Active Sprints</button>
+              <button class="workspace-tab" data-workspace-tab="backlog">Backlog</button>
+              <button class="workspace-tab" data-workspace-tab="timeline">Timeline</button>
+              <button class="workspace-tab" data-workspace-tab="reports">Reports</button>
+              <button class="workspace-tab" data-workspace-tab="team-members">Team Members</button>
+              <button class="workspace-tab" data-workspace-tab="development">Development</button>
+            </div>
+
+            <div id="workspaceDetailContent" style="margin-top:10px;"></div>
           </div>
         </div>
 
@@ -791,11 +882,13 @@
 
     const state = {
       activeView: "overview",
+      aiPlannerTab: "planner",
       selectedProjectId: "p1",
       selectedJiraKey: "FIN",
+      workspaceTab: "active-sprints",
       selectedChips: [],
       plannerChat: [
-        { role: "assistant", text: "Upload SRS, click Suggest, pick chips, then Generate Backlog and edit in Backlog Editor." },
+        { role: "assistant", text: "Upload SRS, click Suggest, pick chips, then Generate Backlog and edit in AI Planner > Backlog tab." },
         { role: "assistant", text: "Current project context loaded from FinCore Revamp with processed SRS and requirement memory." }
       ],
       backlog: {
@@ -946,6 +1039,157 @@
     function renderWorkspaceEpics() {
       const rows = state.backlog.epics.map(e => `<li><strong>${e.title}</strong> - ${e.description}</li>`).join("")
       el("workspaceEpics").innerHTML = rows
+    }
+
+    const WORKSPACE_TAB_META = {
+      "active-sprints": "Every Day • Developers and QA",
+      "backlog": "Weekly / Bi-weekly • Product Owners and Leads",
+      "timeline": "Bi-weekly / Monthly • Project Managers",
+      "reports": "End of Sprint • Scrum Masters",
+      "team-members": "Weekly / On Demand • Managers and Scrum Masters",
+      "development": "Occasionally • Tech Leads"
+    }
+
+    function selectedProject() {
+      return data.projects.find(p => p.id === state.selectedProjectId) || data.projects[0]
+    }
+
+    function workspaceMockData() {
+      const project = selectedProject()
+      const sprintMap = {
+        p1: [{ name: "Sprint 24.3", goal: "Billing stability + auth hardening", status: "active", start: "2026-03-22", end: "2026-04-04" }],
+        p2: [{ name: "Sprint 11", goal: "Prompt safety and fallback", status: "active", start: "2026-03-24", end: "2026-04-06" }],
+        p3: [{ name: "Sprint 7", goal: "Parent linkage resilience", status: "active", start: "2026-03-23", end: "2026-04-05" }],
+        p4: []
+      }
+      const timelineMap = {
+        p1: ["API readiness review - 2026-03-27", "UAT freeze - 2026-04-02", "Release candidate - 2026-04-08"],
+        p2: ["Model config audit - 2026-03-29", "Planner regression suite - 2026-04-03", "Patch release - 2026-04-10"],
+        p3: ["Jira mapping validation - 2026-03-28", "Bulk sync soak test - 2026-04-04", "Production rollout - 2026-04-09"],
+        p4: ["Architecture kickoff - 2026-03-30", "Observability spike - 2026-04-07"]
+      }
+      const jiraIssueMap = {
+        FIN: [
+          { key: "FIN-241", summary: "Webhook duplicate processing", status: "In Progress", assignee: "Tejas" },
+          { key: "FIN-249", summary: "Token rotation metrics", status: "Review", assignee: "Akshay" }
+        ],
+        AIP: [
+          { key: "AIP-177", summary: "Suggest fallback on provider mismatch", status: "In Review", assignee: "Riya" },
+          { key: "AIP-181", summary: "Chat state restore", status: "To Do", assignee: "Nikhil" }
+        ],
+        OPS: [
+          { key: "OPS-92", summary: "Jira push retry policy", status: "In Progress", assignee: "Tejas" }
+        ]
+      }
+      const commitMap = {
+        p1: ["feat(payments): idempotent webhook dedupe", "fix(auth): token revocation check in refresh", "chore(ci): tighten test matrix for billing"],
+        p2: ["feat(planner): context-aware suggestion buckets", "fix(ai): guard missing user provider mapping", "refactor(chat): normalize planner transcript state"],
+        p3: ["feat(jira): validate parent-child links before push", "fix(sync): avoid duplicate backlog import on retry", "test(bridge): add nested task mapping specs"],
+        p4: ["feat(obs): bootstrap OpenTelemetry traces", "chore(dashboard): add health KPI placeholders"]
+      }
+
+      return {
+        project,
+        sprints: sprintMap[project.id] || [],
+        timeline: timelineMap[project.id] || [],
+        jiraIssues: jiraIssueMap[state.selectedJiraKey] || [],
+        commits: commitMap[project.id] || []
+      }
+    }
+
+    function renderWorkspaceDetails() {
+      const meta = workspaceMockData()
+      el("workspaceTabMeta").textContent = WORKSPACE_TAB_META[state.workspaceTab] || WORKSPACE_TAB_META["active-sprints"]
+      el("workspaceContextMeta").textContent = `Project: ${meta.project.key} - ${meta.project.name} | Jira: ${state.selectedJiraKey}`
+
+      const storyCount = state.backlog.stories.length
+      const taskCount = state.backlog.tasks.length + state.backlog.subtasks.length
+      const doneEstimate = Math.round(meta.project.completionPercentage * 0.42)
+
+      const topMetrics = `
+        <div class="workspace-mini-grid">
+          <div class="workspace-mini-card">
+            <div class="workspace-mini-label">Project Progress</div>
+            <div class="workspace-mini-value">${meta.project.completionPercentage}%</div>
+          </div>
+          <div class="workspace-mini-card">
+            <div class="workspace-mini-label">Active Sprints</div>
+            <div class="workspace-mini-value">${meta.sprints.length}</div>
+          </div>
+          <div class="workspace-mini-card">
+            <div class="workspace-mini-label">Backlog Items</div>
+            <div class="workspace-mini-value">${storyCount + taskCount}</div>
+          </div>
+          <div class="workspace-mini-card">
+            <div class="workspace-mini-label">Risk</div>
+            <div class="workspace-mini-value" style="text-transform:capitalize; color:${meta.project.risk === 'high' ? '#fda4af' : meta.project.risk === 'medium' ? '#fcd34d' : '#6ee7b7'};">${meta.project.risk}</div>
+          </div>
+        </div>
+      `
+
+      let detail = ""
+
+      if (state.workspaceTab === "active-sprints") {
+        detail = `
+          <ul class="workspace-list">
+            ${(meta.sprints.length ? meta.sprints : [{ name: "No active sprint", goal: "Plan sprint in planner", status: "idle", start: "N/A", end: "N/A" }]).map(s => `
+              <li class="workspace-item">
+                <div style="display:flex; justify-content:space-between; gap:8px;">
+                  <strong>${s.name}</strong>
+                  <span class="hint" style="text-transform:capitalize;">${s.status}</span>
+                </div>
+                <div class="hint" style="margin-top:4px;">${s.start} - ${s.end}</div>
+                <div style="margin-top:4px;">Goal: ${s.goal}</div>
+              </li>
+            `).join("")}
+          </ul>
+        `
+      } else if (state.workspaceTab === "backlog") {
+        detail = `
+          <ul class="workspace-list">
+            <li class="workspace-item"><strong>Epics:</strong> ${state.backlog.epics.length}</li>
+            <li class="workspace-item"><strong>Stories:</strong> ${state.backlog.stories.length}</li>
+            <li class="workspace-item"><strong>Tasks + Subtasks:</strong> ${taskCount}</li>
+            <li class="workspace-item"><strong>Jira Issues Loaded:</strong> ${meta.jiraIssues.length}</li>
+          </ul>
+        `
+      } else if (state.workspaceTab === "timeline") {
+        detail = `
+          <ul class="workspace-list">
+            ${meta.timeline.map(row => `<li class="workspace-item">${row}</li>`).join("")}
+          </ul>
+        `
+      } else if (state.workspaceTab === "reports") {
+        detail = `
+          <ul class="workspace-list">
+            <li class="workspace-item">Velocity Planned: ${Math.max(8, Math.round((storyCount + taskCount) * 1.4))} pts</li>
+            <li class="workspace-item">Velocity Actual: ${Math.max(5, Math.round((storyCount + taskCount) * 1.1))} pts</li>
+            <li class="workspace-item">Estimated Done Items: ${doneEstimate}</li>
+            <li class="workspace-item">Burndown Samples: ${meta.sprints.length ? 10 : 0}</li>
+          </ul>
+        `
+      } else if (state.workspaceTab === "team-members") {
+        detail = `
+          <ul class="workspace-list">
+            ${data.assignees.map(user => `
+              <li class="workspace-item">
+                <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
+                  <strong>${user.name}</strong>
+                  <span class="hint">${user.role}</span>
+                </div>
+              </li>
+            `).join("")}
+          </ul>
+        `
+      } else {
+        detail = `
+          <ul class="workspace-list">
+            ${meta.commits.map(msg => `<li class="workspace-item">${msg}</li>`).join("")}
+          </ul>
+        `
+      }
+
+      el("workspaceDetailContent").innerHTML = `${topMetrics}${detail}`
     }
 
     function renderInsights() {
@@ -1154,6 +1398,7 @@
     window.selectProject = function(projectId) {
       state.selectedProjectId = projectId
       renderProjectContext()
+      renderWorkspaceDetails()
       toast("success", "Project Switched", "Workspace context updated")
     }
 
@@ -1244,19 +1489,46 @@
       })
     }
 
+    function switchAiPlannerTab(tab) {
+      state.aiPlannerTab = tab
+      document.querySelectorAll(".ai-planner-tab").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.aiTab === tab)
+      })
+      el("aiPlannerPanel").style.display = tab === "planner" ? "block" : "none"
+      el("aiBacklogPanel").style.display = tab === "backlog" ? "block" : "none"
+    }
+
     function bindEvents() {
       document.querySelectorAll(".nav-btn[data-view]").forEach(btn => {
         btn.addEventListener("click", () => switchView(btn.dataset.view))
       })
 
+      el("aiPlannerTabs").addEventListener("click", (e) => {
+        const target = e.target.closest("[data-ai-tab]")
+        if (!target) return
+        switchAiPlannerTab(target.dataset.aiTab)
+      })
+
       el("projectSelect").addEventListener("change", e => {
         state.selectedProjectId = e.target.value
         renderProjectContext()
+        renderWorkspaceDetails()
       })
 
       el("jiraSelect").addEventListener("change", e => {
         state.selectedJiraKey = e.target.value
+        renderWorkspaceDetails()
         toast("success", "Jira Context", `Selected ${state.selectedJiraKey}`)
+      })
+
+      el("workspaceTabs").addEventListener("click", (e) => {
+        const target = e.target.closest("[data-workspace-tab]")
+        if (!target) return
+        state.workspaceTab = target.dataset.workspaceTab
+        document.querySelectorAll(".workspace-tab").forEach(btn => {
+          btn.classList.toggle("active", btn.dataset.workspaceTab === state.workspaceTab)
+        })
+        renderWorkspaceDetails()
       })
 
       el("themeToggle").addEventListener("click", () => {
@@ -1320,15 +1592,17 @@
       })
 
       el("generateBtn").addEventListener("click", () => {
-        state.plannerChat.push({ role: "assistant", text: "Backlog generated. Redirecting to Backlog Editor for final review." })
+        state.plannerChat.push({ role: "assistant", text: "Backlog generated. Opening AI Planner Backlog tab for final review." })
         renderChat()
         renderBacklogTree()
-        switchView("backlog-editor")
+        switchView("ai-planner")
+        switchAiPlannerTab("backlog")
         toast("success", "Backlog Generated", "Structured hierarchy created")
       })
 
       el("workspaceGenerateBtn").addEventListener("click", () => {
         switchView("ai-planner")
+        switchAiPlannerTab("planner")
         toast("success", "Workspace Context Applied", "Using module + sprint signals for planning")
       })
 
@@ -1373,7 +1647,9 @@
       renderSuggestionBox()
       renderChips()
       renderChat()
+      switchAiPlannerTab(state.aiPlannerTab)
       renderWorkspaceEpics()
+      renderWorkspaceDetails()
       renderInsights()
       renderBacklogTree()
       renderDetailsForm()
