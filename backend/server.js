@@ -15,6 +15,7 @@ require('express-async-errors');
 const connectDB = require('./src/config/db');
 const { errorHandler, notFound } = require('./src/middleware/error');
 const logger = require('./src/config/logger');
+const JobRunner = require('./src/config/jobs');
 
 // Route imports
 const authRoutes = require('./src/routes/auth');
@@ -53,11 +54,37 @@ const io = new Server(server, {
 // Make io accessible globally
 app.set('io', io);
 
-// Rate limiting
+// Rate limiting configuration (configurable via environment variables)
+const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000, 10);
+const RATE_LIMIT_MAX_REQUESTS = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || 500, 10);
+const AUTH_RATE_LIMIT_MAX = parseInt(process.env.AUTH_RATE_LIMIT_MAX || 10, 10);
+
+logger.info(
+  `Rate limiting: ${RATE_LIMIT_MAX_REQUESTS} requests per ${RATE_LIMIT_WINDOW_MS / 1000}s, ` +
+  `Auth: ${AUTH_RATE_LIMIT_MAX} requests per ${RATE_LIMIT_WINDOW_MS / 1000}s`
+);
+
+// Global rate limiter
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200,
-  message: 'Too many requests from this IP, please try again after 15 minutes',
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: RATE_LIMIT_MAX_REQUESTS,
+  message: `Too many requests from this IP. Maximum ${RATE_LIMIT_MAX_REQUESTS} requests per ${RATE_LIMIT_WINDOW_MS / 1000}s allowed.`,
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false,  // Disable the `X-RateLimit-*` headers
+  skip: (req) => {
+    // Skip rate limiting for health checks
+    return req.path === '/health';
+  },
+});
+
+// Stricter rate limiter for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: AUTH_RATE_LIMIT_MAX,
+  message: `Too many login attempts. Please try again after ${RATE_LIMIT_WINDOW_MS / 1000}s.`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false, // Count all requests, not just failed ones
 });
 
 // Security middleware
@@ -69,11 +96,13 @@ app.use(cors({
 app.use(compression());
 app.use(mongoSanitize());
 app.use(hpp());
-app.use('/api', limiter);
 
-// Body parsing
+// Body parsing (before rate limiter to avoid counting these in limits)
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Apply rate limiting to all /api routes
+app.use('/api', limiter);
 
 // Logging
 app.use(morgan(':id :method :url :status :response-time ms - :res[content-length]', {
@@ -85,7 +114,7 @@ app.use(morgan(':id :method :url :status :response-time ms - :res[content-length
 // Static files (uploaded documents)
 app.use('/uploads', express.static('uploads'));
 
-// Health check
+// Health check (no rate limit)
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
@@ -96,7 +125,7 @@ app.get('/health', (req, res) => {
 });
 
 // API Routes
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/stories', storyRoutes);
@@ -130,8 +159,14 @@ app.use(notFound);
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
+
+// Initialize scheduled jobs
+const jobs = JobRunner.initialize(io);
+logger.info(`Scheduled jobs initialized: ${jobs.map(j => j.name).join(', ')}`);
+
 server.listen(PORT, () => {
   logger.info(`🚀 DevTrack Backend running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+  logger.info(`📅 Background jobs: Sprint auto-closure (hourly)`);
 });
 
 process.on('unhandledRejection', (reason) => {
@@ -143,6 +178,16 @@ process.on('uncaughtException', (error) => {
   if (error?.code === 'EADDRINUSE') {
     process.exit(1);
   }
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM signal received: closing HTTP server');
+  JobRunner.stopAll();
+  server.close(() => {
+    logger.info('HTTP server closed');
+    process.exit(0);
+  });
 });
 
 module.exports = { app, server, io };

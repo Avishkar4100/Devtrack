@@ -156,6 +156,11 @@ export default function ProjectWorkspacePage() {
     queryFn: async () => (await api.get(`/dashboard/${id}`)).data.data,
   })
 
+  const { data: controlTower } = useQuery({
+    queryKey: ['control-tower', id],
+    queryFn: async () => (await api.get(`/dashboard/${id}/control-tower`)).data.data,
+  })
+
   const { data: epics = [] } = useQuery({
     queryKey: ['epics', id],
     queryFn: async () => (await api.get(`/stories/epics/${id}`)).data.data,
@@ -413,11 +418,11 @@ export default function ProjectWorkspacePage() {
   }, [commits])
 
   const projectRisk = useMemo(() => {
-    const p = project?.completionPercentage || 0
-    if (p < 40) return 'High'
-    if (p < 70) return 'Medium'
+    const riskStatus = controlTower?.toolHealth?.find((item) => item.name === 'GitHub Commit Validator')?.status
+    if (riskStatus === 'risk') return 'High'
+    if (riskStatus === 'watch') return 'Medium'
     return 'Low'
-  }, [project])
+  }, [controlTower])
 
   const openStories = stories.filter((s) => s.status !== 'done').length
 
@@ -584,10 +589,52 @@ export default function ProjectWorkspacePage() {
       </div>
 
       {activeTab === 'overview' && (
-        <div className="grid md:grid-cols-3 gap-3">
-          <Card title="Sprint Progress" value={`${dashboard?.activeSprint?.completionPercentage ?? project.completionPercentage ?? 0}%`} />
-          <Card title="Open Stories" value={openStories} />
-          <Card title="Risk" value={projectRisk} />
+        <div className="space-y-3">
+          <div className="grid md:grid-cols-4 gap-3">
+            <Card title="Sprint Progress" value={`${dashboard?.activeSprint?.completionPercentage ?? project.completionPercentage ?? 0}%`} />
+            <Card title="Open Stories" value={openStories} />
+            <Card title="Risk" value={projectRisk} />
+            <Card title="Commit Mapped" value={`${controlTower?.kpis?.commitMappedPct ?? 0}%`} />
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="card p-4">
+              <h3 className="text-base font-semibold mb-2">Control Tower KPIs</h3>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="rounded-md border border-slate-700 p-2">AI Issues Created: <strong>{controlTower?.kpis?.aiIssuesCreated ?? 0}</strong></div>
+                <div className="rounded-md border border-slate-700 p-2">Jira Sync: <strong>{controlTower?.kpis?.jiraSyncSuccessPct ?? 0}%</strong></div>
+                <div className="rounded-md border border-slate-700 p-2">Validation Trend (latest): <strong>{(controlTower?.validationTrend || []).slice(-1)[0] ?? 0}%</strong></div>
+                <div className="rounded-md border border-slate-700 p-2">Standup Time Saved: <strong>{controlTower?.kpis?.standupTimeSavedHours ?? 0}h/week</strong></div>
+              </div>
+            </div>
+
+            <div className="card p-4">
+              <h3 className="text-base font-semibold mb-2">Tool Health</h3>
+              <ul className="space-y-2 text-sm">
+                {(controlTower?.toolHealth || []).map((tool) => (
+                  <li key={tool.name} className="rounded-md border border-slate-700 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <strong>{tool.name}</strong>
+                      <span className="text-xs uppercase text-slate-300">{tool.status}</span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1">{tool.detail}</p>
+                  </li>
+                ))}
+                {(!controlTower?.toolHealth || controlTower.toolHealth.length === 0) && (
+                  <li className="text-slate-400">No tool health data yet.</li>
+                )}
+              </ul>
+            </div>
+          </div>
+
+          <div className="card p-4">
+            <h3 className="text-base font-semibold mb-2">Engineering Signals</h3>
+            <ul className="list-disc pl-5 text-sm text-slate-300 space-y-1">
+              {(controlTower?.engineeringSignals || []).map((signal) => (
+                <li key={signal}>{signal}</li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
 

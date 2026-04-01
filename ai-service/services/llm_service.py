@@ -16,27 +16,62 @@ Module Focus: {module_name}
 Context from SRS document:
 {context}
 
-Additional context:
+Additional context & Planning Suggestions:
 {additional_context}
 
 Instructions:
 1. Generate a COMPLETE backlog hierarchy: Epics -> Stories -> Tasks -> Subtasks.
-2. Focus ONLY on domain-specific features from SRS context.
-3. DO NOT include generic tasks: optimize, refactor, improve, enhance, validation.
-4. Ensure logical engineering dependency flow and no orphan items.
-5. Minimum 2 epics; each epic must have at least 1 story; each story must have at least 1 task.
-6. Return STRICT JSON only using this structure and fields.
+2. CREATE EXACTLY 3 MAJOR EPICS:
+   - Epic 1: Core Infrastructure/Setup (foundation, data models, core services)
+   - Epic 2: Domain Features (primary business logic and user workflows from SRS and suggestions)
+   - Epic 3: Integrations/Advanced Features (external services, advanced capabilities from suggestions)
+3. Incorporate ALL suggestions from planning prompts AND user input into the epic and story structure.
+4. Focus ONLY on domain-specific features from SRS context.
+5. DO NOT include generic tasks: optimize, refactor, improve, enhance, validation.
+6. Ensure logical engineering dependency flow and no orphan items.
+7. Each of the 3 epics MUST have at least 2-3 stories; each story MUST have at least 1-2 tasks.
+8. Return STRICT JSON only - no markdown, code blocks, or extra text.
 
 Return ONLY valid JSON with exact shape:
 {{
     "epics": [
         {{
             "tempId": "epic-1",
-            "title": "",
-            "description": "",
+            "title": "Core Infrastructure Setup",
+            "description": "Foundation services, database models, and core architecture",
             "type": "epic",
-            "module": "",
-            "priority": "high|medium|low",
+            "module": "core",
+            "priority": "high",
+            "assignee": null,
+            "status": "todo",
+            "startDate": null,
+            "dueDate": null,
+            "storyPoints": 0,
+            "parentId": null,
+            "sprint": "S1"
+        }},
+        {{
+            "tempId": "epic-2",
+            "title": "Domain Features",
+            "description": "Primary business workflows and user-facing functionality",
+            "type": "epic",
+            "module": "domain",
+            "priority": "high",
+            "assignee": null,
+            "status": "todo",
+            "startDate": null,
+            "dueDate": null,
+            "storyPoints": 0,
+            "parentId": null,
+            "sprint": "S1"
+        }},
+        {{
+            "tempId": "epic-3",
+            "title": "Integrations & Advanced Features",
+            "description": "External integrations, performance enhancements, and advanced capabilities",
+            "type": "epic",
+            "module": "integrations",
+            "priority": "medium",
             "assignee": null,
             "status": "todo",
             "startDate": null,
@@ -734,8 +769,30 @@ class LLMService:
             }
 
         normalized_epics = [_normalize_item(e if isinstance(e, dict) else {}, "epic", None, i) for i, e in enumerate(epics)]
-        if len(normalized_epics) < 2:
-            raise ValueError("Generated backlog must include at least 2 epics")
+        
+        # FALLBACK: If fewer than 3 epics, auto-generate missing ones
+        epic_templates = [
+            {"tempId": "epic-1", "title": "Core Infrastructure Setup", "description": "Foundation services, database models, and core systems", "priority": "high", "module": "core"},
+            {"tempId": "epic-2", "title": "Primary Domain Features", "description": "Main business workflows and user-facing functionality", "priority": "high", "module": "domain"},
+            {"tempId": "epic-3", "title": "Integrations & Advanced Features", "description": "External integrations, performance optimization, and advanced capabilities", "priority": "medium", "module": "integrations"},
+        ]
+        
+        if len(normalized_epics) < 3:
+            # Use generated epics first, then fill in from templates
+            used_indices = set()
+            for i, epic in enumerate(normalized_epics[:3]):
+                if i < len(epic_templates):
+                    epic["tempId"] = epic_templates[i]["tempId"]
+                    if not epic["title"] or epic["title"].startswith("Epic"):
+                        epic["title"] = epic_templates[i]["title"]
+                    if not epic["description"]:
+                        epic["description"] = epic_templates[i]["description"]
+                used_indices.add(i)
+            
+            # Add missing epics from templates
+            for i in range(len(normalized_epics), 3):
+                template = epic_templates[i]
+                normalized_epics.append(_normalize_item(template, "epic", None, i))
 
         epic_ids = {e["tempId"] for e in normalized_epics}
         normalized_stories = []

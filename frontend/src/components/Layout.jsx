@@ -16,6 +16,20 @@ import {
 import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '@/store/themeStore'
 
+// Click-outside detector hook
+function useClickOutside(ref, callback) {
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (ref.current && !ref.current.contains(event.target)) {
+        callback()
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [ref, callback])
+}
+
 function ThemeToggle() {
   const { theme, toggleTheme } = useThemeStore()
   return (
@@ -64,9 +78,15 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [notificationOpen, setNotificationOpen] = useState(false)
   const bellButtonRef = useRef(null)
+  const notificationPanelRef = useRef(null)
   const [notificationPanelPos, setNotificationPanelPos] = useState({ top: 56, right: 16 })
   const avatarLetter = user?.name?.[0]?.toUpperCase()
   const unseenCount = notifications.filter((item) => !item.seen).length
+
+  // Close notification panel on click outside
+  useClickOutside(notificationPanelRef, () => {
+    setNotificationOpen(false)
+  })
 
   const { data: fetchedProjectsData } = useQuery({
     queryKey: ['layout-projects'],
@@ -295,6 +315,8 @@ export default function Layout() {
 
             {notificationOpen && createPortal(
               <div
+                ref={notificationPanelRef}
+                onMouseLeave={() => setNotificationOpen(false)}
                 className="rounded-xl border shadow-xl"
                 style={{
                   position: 'fixed',

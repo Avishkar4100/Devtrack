@@ -17,6 +17,36 @@ const normalizeGeneratedItems = (rows = [], prefix) =>
     assignee: row.assignee || '',
   }))
 
+const validateBacklogItems = ({ epics, stories, tasks, subtasks }) => {
+  const errors = []
+  
+  epics.forEach((item, idx) => {
+    if (!item.title || !item.title.trim()) {
+      errors.push(`Epic ${idx + 1} is missing a title`)
+    }
+  })
+  
+  stories.forEach((item, idx) => {
+    if (!item.title || !item.title.trim()) {
+      errors.push(`Story ${idx + 1} is missing a title`)
+    }
+  })
+  
+  tasks.forEach((item, idx) => {
+    if (!item.title || !item.title.trim()) {
+      errors.push(`Task ${idx + 1} is missing a title`)
+    }
+  })
+  
+  subtasks.forEach((item, idx) => {
+    if (!item.title || !item.title.trim()) {
+      errors.push(`Subtask ${idx + 1} is missing a title`)
+    }
+  })
+  
+  return errors
+}
+
 const DEFAULT_SUGGESTIONS = { epics: [], stories: [], tasks: [] }
 const DEFAULT_BACKLOG_DRAFT = { epics: [], stories: [], tasks: [], subtasks: [] }
 const DEFAULT_PLANNER_CHAT = [
@@ -45,11 +75,13 @@ export default function AIPlannerPage() {
   const [srsFile, setSrsFile] = useState(null)
   const [selectedSuggestionChips, setSelectedSuggestionChips] = useState([])
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
+  const [aiPlannerTab, setAiPlannerTab] = useState('planner')
   const [suggestions, setSuggestions] = useState(DEFAULT_SUGGESTIONS)
   const [backlogDraft, setBacklogDraft] = useState(DEFAULT_BACKLOG_DRAFT)
   const [latestDocumentStatus, setLatestDocumentStatus] = useState(null)
   const [lastSrsLabel, setLastSrsLabel] = useState('')
   const [plannerChat, setPlannerChat] = useState(DEFAULT_PLANNER_CHAT)
+  const [selectedItem, setSelectedItem] = useState(null)
 
   const filePickerRef = useRef(null)
   const monitorInFlightRef = useRef(false)
@@ -64,6 +96,7 @@ export default function AIPlannerPage() {
 
     setChatInput(snapshot.chatInput || '')
     setPlanningPrompt(snapshot.planningPrompt || '')
+    setAiPlannerTab(snapshot.aiPlannerTab || 'planner')
     setSelectedSuggestionChips(Array.isArray(snapshot.selectedSuggestionChips) ? snapshot.selectedSuggestionChips : [])
     setSuggestionsOpen(Boolean(snapshot.suggestionsOpen))
     setSuggestions(snapshot.suggestions || DEFAULT_SUGGESTIONS)
@@ -79,6 +112,7 @@ export default function AIPlannerPage() {
     setAIPlannerState(plannerStorageKey, {
       chatInput,
       planningPrompt,
+      aiPlannerTab,
       selectedSuggestionChips,
       suggestionsOpen,
       suggestions,
@@ -91,6 +125,7 @@ export default function AIPlannerPage() {
     plannerStorageKey,
     chatInput,
     planningPrompt,
+    aiPlannerTab,
     selectedSuggestionChips,
     suggestionsOpen,
     suggestions,
@@ -110,7 +145,7 @@ export default function AIPlannerPage() {
     if (project?.jiraProjectKey) {
       setSelectedJiraProjectKey(project.jiraProjectKey)
     }
-  }, [project?.jiraProjectKey])
+  }, [project])
 
   const { data: documents = [] } = useQuery({
     queryKey: ['ai-planner-documents', selectedProjectId],
@@ -129,13 +164,13 @@ export default function AIPlannerPage() {
 
   const availableAssignees = useMemo(() => {
     const map = new Map()
-    if (project?.owner?._id) {
-      map.set(project.owner._id, {
-        id: project.owner._id,
-        label: `${project.owner.name || 'Owner'} (Owner)`,
+    if (activeProject?.owner?._id) {
+      map.set(activeProject.owner._id, {
+        id: activeProject.owner._id,
+        label: `${activeProject.owner.name || 'Owner'} (Owner)`,
       })
     }
-    ;(project?.members || []).forEach((m) => {
+    ;(activeProject?.members || []).forEach((m) => {
       if (!m?.user?._id) return
       const role = (m?.role || 'member').replace('_', ' ')
       map.set(m.user._id, {
@@ -144,7 +179,7 @@ export default function AIPlannerPage() {
       })
     })
     return [...map.values()]
-  }, [project])
+  }, [activeProject])
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -290,6 +325,8 @@ export default function AIPlannerPage() {
       const epics = Array.isArray(structured.epics) ? structured.epics : []
       const stories = Array.isArray(structured.stories) ? structured.stories : []
       const tasks = Array.isArray(structured.tasks) ? structured.tasks : []
+      const planningWarnings = data?.planningMeta?.warnings || []
+      const isLowConfidence = data?.planningMeta?.contextQuality === 'low'
       setSuggestions({
         epics,
         stories,
@@ -312,6 +349,16 @@ export default function AIPlannerPage() {
       } else if (data?.message) {
         toast.success(data.message)
       }
+
+      if (isLowConfidence) {
+        toast('Suggestions generated with limited context (no processed SRS)', { icon: '⚠️' })
+      }
+      if (planningWarnings.length) {
+        setPlannerChat((prev) => [
+          ...prev,
+          ...planningWarnings.map((warning) => ({ role: 'assistant', text: `Warning: ${warning}` })),
+        ])
+      }
     },
     onError: (error) => {
       appLogger.error('AI Planner suggest failed', {
@@ -329,11 +376,16 @@ export default function AIPlannerPage() {
     if (!items.length) return null
     return (
       <div className="space-y-1">
-        <p className="text-[11px] uppercase tracking-wide text-slate-400 px-1">{title}</p>
+        <p className="text-[11px] uppercase tracking-wide px-1" style={{ color: '#a0a0a0' }}>{title}</p>
         {items.map((s, idx) => {
           const value = `${prefix}: ${s}`
           return (
-            <button key={`${prefix}-${idx}-${s}`} className="w-full text-left px-2 py-1.5 rounded-md hover:bg-slate-800 text-sm text-slate-200" onClick={() => addSuggestionChip(value)}>
+            <button
+              key={`${prefix}-${idx}-${s}`}
+              className="w-full text-left px-3 py-2 rounded-[10px] text-sm font-semibold border"
+              style={{ background: '#242424', color: '#e0e0e0', borderColor: '#333' }}
+              onClick={() => addSuggestionChip(value)}
+            >
               {value}
             </button>
           )
@@ -347,11 +399,28 @@ export default function AIPlannerPage() {
       const resolvedProjectId = await resolveProjectId()
       if (!resolvedProjectId) throw new Error('No project available. Please create one first.')
 
-      const combinedContext = [
-        plannerChat.filter((m) => m.role === 'user').map((m) => m.text).join('\n'),
-        selectedSuggestionChips.map((s) => `- ${s}`).join('\n'),
-        planningPrompt,
+      // Build comprehensive context combining user input, suggestions, planning prompt, and chat history
+      const suggestionContext = [
+        suggestions.epics.length > 0 && `Suggested Epics:\n${suggestions.epics.map((e) => `- ${e}`).join('\n')}`,
+        suggestions.stories.length > 0 && `Suggested Stories:\n${suggestions.stories.map((s) => `- ${s}`).join('\n')}`,
+        suggestions.tasks.length > 0 && `Suggested Tasks:\n${suggestions.tasks.map((t) => `- ${t}`).join('\n')}`,
       ].filter(Boolean).join('\n\n')
+
+      const chatContext = plannerChat
+        .filter((m) => m.role === 'user')
+        .map((m) => m.text)
+        .join('\n')
+
+      const selectedContext = selectedSuggestionChips.length > 0 ? `Selected Planning Chips:\n${selectedSuggestionChips.map((s) => `- ${s}`).join('\n')}` : ''
+
+      const combinedContext = [
+        chatContext,
+        selectedContext,
+        planningPrompt && `Planning Prompt:\n${planningPrompt}`,
+        suggestionContext,
+      ]
+        .filter(Boolean)
+        .join('\n\n')
 
       const response = await api.post(`/stories/generate/${resolvedProjectId}`, {
         moduleName,
@@ -368,12 +437,28 @@ export default function AIPlannerPage() {
         tasks: normalizeGeneratedItems(data?.tasks || [], 'task'),
         subtasks: normalizeGeneratedItems(data?.subtasks || [], 'subtask'),
       }
+
+      // Set backlog draft state BEFORE switching tabs
       setBacklogDraft(normalized)
-      setPlannerChat((prev) => [...prev, { role: 'assistant', text: 'Backlog generated. Review/edit on the left, then confirm push to Jira.' }])
-      toast.success('Backlog generated')
-      navigate(`/projects/${resolvedProjectId}/backlog-editor`, {
-        state: { generatedBacklog: normalized },
+
+      const planningWarnings = data?.planningMeta?.warnings || []
+      const isLowConfidence = data?.planningMeta?.contextQuality === 'low'
+
+      setPlannerChat((prev) => {
+        const next = [...prev, { role: 'assistant', text: `Backlog generated with ${normalized.epics.length} epics, ${normalized.stories.length} stories, ${normalized.tasks.length} tasks. Review on Backlog tab, then confirm push to Jira.` }]
+        planningWarnings.forEach((warning) => {
+          next.push({ role: 'assistant', text: `Warning: ${warning}` })
+        })
+        return next
       })
+
+      if (isLowConfidence) {
+        toast('Generated with limited context (no processed SRS)', { icon: '⚠️' })
+      }
+      toast.success('Backlog generated successfully')
+      
+      // Auto-switch to backlog tab so user sees the generated content
+      setAiPlannerTab('backlog')
     },
     onError: (error) => toast.error(error?.message || 'Failed to generate backlog'),
   })
@@ -383,7 +468,32 @@ export default function AIPlannerPage() {
       const resolvedProjectId = await resolveProjectId()
       if (!resolvedProjectId) throw new Error('No local project found. Please select a local project from sidebar.')
 
+      // Validate backlog has content
+      const hasEpics = (backlogDraft.epics || []).length > 0
+      const hasStories = (backlogDraft.stories || []).length > 0
+      const hasTasks = (backlogDraft.tasks || []).length > 0
+
+      if (!hasEpics || !hasStories || !hasTasks) {
+        throw new Error('Backlog must have epics, stories, and tasks. Generate a backlog first.')
+      }
+
+      // Validate epic count
       const selectedEpics = (backlogDraft.epics || []).filter((e) => e.selected !== false)
+      if (selectedEpics.length < 1) {
+        throw new Error('Select at least one epic to push')
+      }
+
+      const latest = latestDocumentStatus || documents[0] || null
+      const hasProcessedSrs = latest?.status === 'processed'
+      if (!hasProcessedSrs) {
+        const proceed = window.confirm(
+          'Latest SRS is not processed. Push will continue with low-confidence backlog context. Do you want to proceed?'
+        )
+        if (!proceed) {
+          throw new Error('Push cancelled. Process SRS first or confirm low-confidence push.')
+        }
+      }
+
       const selectedEpicTempIds = new Set(selectedEpics.map((e) => e.tempId))
       const selectedStories = (backlogDraft.stories || []).filter((s) =>
         s.selected !== false && (!s.epicTempId || selectedEpicTempIds.has(s.epicTempId))
@@ -401,6 +511,20 @@ export default function AIPlannerPage() {
 
       if (!selectedEpics.length && !selectedStories.length && !selectedTasks.length && !selectedSubtasks.length) {
         throw new Error('Select at least one generated item before confirming push')
+      }
+
+      // Validate that all selected items have titles
+      const validationErrors = validateBacklogItems({
+        epics: selectedEpics,
+        stories: selectedStories,
+        tasks: selectedTasks,
+        subtasks: selectedSubtasks,
+      })
+      if (validationErrors.length > 0) {
+        const errorMsg = validationErrors.join('\n')
+        const error = new Error(`Please fix the following issues:\n${errorMsg}`)
+        error.validationErrors = validationErrors
+        throw error
       }
 
       await api.post(`/stories/save/${resolvedProjectId}`, {
@@ -426,10 +550,29 @@ export default function AIPlannerPage() {
       })
     },
     onSuccess: () => {
-      toast.success('Confirmed and pushed to Jira')
-      setPlannerChat((prev) => [...prev, { role: 'assistant', text: 'Confirmed and pushed to Jira.' }])
+      toast.success('Backlog saved and pushed to Jira')
+      setPlannerChat((prev) => [...prev, { role: 'assistant', text: 'Confirmed and pushed to Jira. Backlog is now synced.' }])
+      setBacklogDraft(DEFAULT_BACKLOG_DRAFT)
+      setAiPlannerTab('planner')
     },
-    onError: (error) => toast.error(error?.message || 'Failed to confirm and push'),
+    onError: (error) => {
+      // Check for client-side validation errors
+      if (error?.validationErrors) {
+        const errorList = error.validationErrors.join('\n')
+        toast.error(`Validation failed:\n${errorList}`, { duration: 5000 })
+        appLogger.error('Backlog validation errors:', error.validationErrors)
+      } else {
+        // Check for server-side validation errors
+        const validationErrors = error?.response?.data?.errors
+        if (validationErrors && Array.isArray(validationErrors)) {
+          const errorList = validationErrors.join('\n')
+          toast.error(`Validation failed:\n${errorList}`, { duration: 5000 })
+          appLogger.error('Backlog validation errors:', validationErrors)
+        } else {
+          toast.error(error?.message || 'Failed to confirm and push', { duration: 4000 })
+        }
+      }
+    },
   })
 
   const updateByTempId = (collection, tempId, field, value) => {
@@ -480,16 +623,85 @@ export default function AIPlannerPage() {
   }
 
   const latestDoc = latestDocumentStatus || documents[0] || null
+
+  const getCollectionFromType = (type) => {
+    if (type === 'epic') return 'epics'
+    if (type === 'story') return 'stories'
+    if (type === 'task') return 'tasks'
+    return 'subtasks'
+  }
+
+  const createBacklogItem = (type, parentTempId = '') => {
+    const base = {
+      tempId: makeId(type),
+      type,
+      title: `New ${type}`,
+      description: '',
+      priority: 'medium',
+      assignee: '',
+      sprint: 'backlog',
+      storyPoints: 0,
+      selected: true,
+    }
+
+    if (type === 'story') {
+      return { ...base, epicTempId: parentTempId }
+    }
+    if (type === 'task') {
+      const parentStory = backlogDraft.stories.find((s) => s.tempId === parentTempId)
+      return { ...base, parentTempId, epicTempId: parentStory?.epicTempId || '' }
+    }
+    if (type === 'subtask') {
+      const parentTask = backlogDraft.tasks.find((t) => t.tempId === parentTempId)
+      return { ...base, parentTempId, epicTempId: parentTask?.epicTempId || '' }
+    }
+    return base
+  }
+
+  const addBacklogItem = (type, parentTempId = '') => {
+    const collection = getCollectionFromType(type)
+    const item = createBacklogItem(type, parentTempId)
+    setBacklogDraft((prev) => ({
+      ...prev,
+      [collection]: [...(prev[collection] || []), item],
+    }))
+    setSelectedItem({ type, tempId: item.tempId })
+  }
+
+  const selectedBacklogItem = useMemo(() => {
+    if (!selectedItem) return null
+    const collection = getCollectionFromType(selectedItem.type)
+    return (backlogDraft[collection] || []).find((row) => row.tempId === selectedItem.tempId) || null
+  }, [selectedItem, backlogDraft])
+
   const storiesByEpic = useMemo(() => {
     const map = new Map()
-    ;[...(backlogDraft.stories || []), ...(backlogDraft.tasks || [])].forEach((item) => {
-      const key = item.epicTempId || 'ungrouped'
+    
+    // Ensure backlogDraft has required properties
+    const stories = Array.isArray(backlogDraft?.stories) ? backlogDraft.stories : []
+    const tasks = Array.isArray(backlogDraft?.tasks) ? backlogDraft.tasks : []
+    
+    // Group stories by epic
+    stories.forEach((story) => {
+      const key = story.epicTempId || 'ungrouped'
       const arr = map.get(key) || []
-      arr.push(item)
+      arr.push({ ...story, type: 'story' })
       map.set(key, arr)
     })
+    
+    // Group tasks (only direct tasks, not under stories)
+    tasks.forEach((task) => {
+      if (!task.parentTempId) {
+        // Only orphan tasks get grouped by epic directly
+        const key = task.epicTempId || 'ungrouped'
+        const arr = map.get(key) || []
+        arr.push({ ...task, type: 'task' })
+        map.set(key, arr)
+      }
+    })
+    
     return map
-  }, [backlogDraft.stories, backlogDraft.tasks])
+  }, [backlogDraft?.stories, backlogDraft?.tasks])
 
   const srsStatusLabel = latestDoc
     ? `${latestDoc.name} - ${latestDoc.status}`
@@ -498,157 +710,280 @@ export default function AIPlannerPage() {
       : 'Not uploaded')
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-100">AI Planner</h1>
-          <p className="text-sm text-slate-400">Vectorless graph context planning with editable hierarchical backlog before Jira push.</p>
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex items-center gap-2">
-          <input
-            ref={filePickerRef}
-            type="file"
-            accept=".pdf,.doc,.docx,.txt,.md"
-            className="hidden"
-            onChange={handleSrsFileChange}
-          />
-          <button className="btn-secondary" onClick={() => filePickerRef.current?.click()}>Choose SRS</button>
-          <button className="btn-primary" onClick={() => uploadSrs.mutate()} disabled={!srsFile || uploadSrs.isPending}>
-            {uploadSrs.isPending ? 'Uploading...' : 'Upload'}
-          </button>
-          </div>
-          <p className="text-xs text-slate-400 max-w-[360px] text-right">Selected file: {selectedFileSummary}</p>
-        </div>
+    <div className="p-5 max-w-[1250px] mx-auto">
+      <h1 className="text-[40px] font-bold leading-none mb-4" style={{ color: '#e0e0e0' }}>AI Planner</h1>
+
+      <div className="flex items-center gap-2 mb-3">
+        <button
+          className="px-4 py-1.5 text-[14px] font-semibold rounded-[10px] border"
+          style={{
+            background: aiPlannerTab === 'planner' ? 'rgba(26, 115, 232, 0.20)' : '#2a2a2a',
+            borderColor: aiPlannerTab === 'planner' ? 'rgba(26, 115, 232, 0.5)' : '#444',
+            color: aiPlannerTab === 'planner' ? '#90caf9' : '#a0a0a0',
+          }}
+          onClick={() => setAiPlannerTab('planner')}
+        >
+          Planner
+        </button>
+        <button
+          className="px-4 py-1.5 text-[14px] font-semibold rounded-[10px] border"
+          style={{
+            background: aiPlannerTab === 'backlog' ? 'rgba(26, 115, 232, 0.20)' : '#2a2a2a',
+            borderColor: aiPlannerTab === 'backlog' ? 'rgba(26, 115, 232, 0.5)' : '#444',
+            color: aiPlannerTab === 'backlog' ? '#90caf9' : '#a0a0a0',
+          }}
+          onClick={() => setAiPlannerTab('backlog')}
+        >
+          Backlog
+        </button>
       </div>
 
-      <div className="flex flex-wrap gap-2 text-xs">
-        {activeProject && (
-          <span className="px-2 py-1 rounded-md border border-slate-700 text-slate-300 bg-slate-900/60">Project: {activeProject.key} - {activeProject.name}</span>
-        )}
-        <span className="px-2 py-1 rounded-md border border-slate-700 text-slate-300 bg-slate-900/60">Jira: {selectedJiraProjectKey || 'Select from sidebar'}</span>
-        <span className="px-2 py-1 rounded-md border border-slate-700 text-slate-300 bg-slate-900/60">SRS: {srsStatusLabel}</span>
-      </div>
-
-      <div className="grid lg:grid-cols-[1.1fr_1fr] gap-3">
-        <div className="card p-4 space-y-3 min-h-[70vh]">
-          <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold">Backlog Draft (Editable Hierarchy)</h3>
-            <button className="btn-secondary" onClick={() => confirmAndPush.mutate()} disabled={confirmAndPush.isPending || !backlogDraft.epics.length || !selectedJiraProjectKey}>Confirm and Push to Jira</button>
-          </div>
-          <div className="space-y-3 overflow-auto max-h-[62vh] pr-1">
-            {backlogDraft.epics.map((epic) => (
-              <div key={epic.tempId} className="rounded-md border border-slate-700 p-3 bg-slate-950/35">
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <label className="text-xs text-indigo-300 inline-flex items-center gap-2">
-                    <input type="checkbox" checked={epic.selected !== false} onChange={(e) => toggleSelected('epics', epic.tempId, e.target.checked)} />
-                    Epic
-                  </label>
-                  <button className="text-xs text-rose-300 hover:text-rose-200" onClick={() => removeByTempId('epics', epic.tempId)}>Remove</button>
-                </div>
-                <input className="input mb-2" value={epic.title || ''} onChange={(e) => updateByTempId('epics', epic.tempId, 'title', e.target.value)} placeholder="Epic title" />
-                <textarea className="input min-h-[56px] mb-2" value={epic.description || ''} onChange={(e) => updateByTempId('epics', epic.tempId, 'description', e.target.value)} placeholder="Epic description" />
-                <div className="space-y-2 ml-3 border-l border-slate-700 pl-3">
-                  {(storiesByEpic.get(epic.tempId) || []).map((item) => (
-                    <div key={item.tempId} className="rounded-md border border-slate-700 p-2 bg-slate-900/40">
-                      <div className="flex items-center justify-between gap-2 mb-2">
-                        <label className="text-xs text-cyan-300 inline-flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={item.selected !== false}
-                            onChange={(e) => toggleSelected(item.type === 'task' ? 'tasks' : 'stories', item.tempId, e.target.checked)}
-                          />
-                          {item.type || 'story'}
-                        </label>
-                        <button className="text-xs text-rose-300 hover:text-rose-200" onClick={() => removeByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId)}>Remove</button>
-                      </div>
-                      <input className="input mb-2" value={item.title || ''} onChange={(e) => updateByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId, 'title', e.target.value)} placeholder="Title" />
-                      <select
-                        className="input mb-2"
-                        value={item.assignee || ''}
-                        onChange={(e) => updateByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId, 'assignee', e.target.value)}
-                      >
-                        <option value="">Assign to...</option>
-                        {availableAssignees.map((assignee) => (
-                          <option key={assignee.id} value={assignee.id}>{assignee.label}</option>
-                        ))}
-                      </select>
-                      <textarea className="input min-h-[48px]" value={item.description || ''} onChange={(e) => updateByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId, 'description', e.target.value)} placeholder="Description" />
-                      <div className="space-y-1 mt-2 ml-3 border-l border-slate-700 pl-3">
-                        {(backlogDraft.subtasks || []).filter((st) => st.parentTempId === item.tempId).map((st) => (
-                          <div key={st.tempId} className="rounded-md border border-slate-700 p-2 bg-slate-900/40">
-                            <div className="flex items-center justify-between gap-2 mb-2">
-                              <label className="text-xs text-emerald-300 inline-flex items-center gap-2">
-                                <input type="checkbox" checked={st.selected !== false} onChange={(e) => toggleSelected('subtasks', st.tempId, e.target.checked)} />
-                                subtask
-                              </label>
-                              <button className="text-xs text-rose-300 hover:text-rose-200" onClick={() => removeByTempId('subtasks', st.tempId)}>Remove</button>
-                            </div>
-                            <input className="input" value={st.title || ''} onChange={(e) => updateByTempId('subtasks', st.tempId, 'title', e.target.value)} placeholder="Subtask title" />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+      {aiPlannerTab === 'planner' ? (
+        <div className="grid lg:grid-cols-[1.08fr_0.92fr] gap-3">
+          <div className="rounded-2xl border p-4" style={{ background: '#1a1a1a', borderColor: '#333' }}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-[30px] font-bold" style={{ color: '#e0e0e0' }}>SRS Ingestion</h3>
+                <p className="text-sm" style={{ color: '#a0a0a0' }}>Upload - Process - Suggest - Generate</p>
               </div>
-            ))}
-            {!backlogDraft.epics.length && <p className="text-sm text-slate-400">No backlog draft yet. Use chat and generate.</p>}
-          </div>
-        </div>
-
-        <div className="card p-4 space-y-3 min-h-[70vh]">
-          <h3 className="text-base font-semibold">Planner Chat</h3>
-          <div className="rounded-md border border-slate-700 bg-slate-950/40 p-3 min-h-[300px] max-h-[44vh] overflow-auto space-y-2">
-            {plannerChat.map((msg, idx) => (
-              <p key={`${msg.role}-${idx}`} className={`text-sm ${msg.role === 'assistant' ? 'text-slate-200' : 'text-indigo-200'}`}>
-                <span className="font-semibold mr-2">{msg.role === 'assistant' ? 'AI' : 'You'}:</span>
-                {msg.text}
-              </p>
-            ))}
-          </div>
-
-          {!!selectedSuggestionChips.length && (
-            <div className="flex flex-wrap gap-2">
-              {selectedSuggestionChips.map((chip) => (
-                <button key={chip} className="px-2 py-1 text-xs rounded-md border border-indigo-500/40 bg-indigo-500/10 text-indigo-200" onClick={() => removeSuggestionChip(chip)}>
-                  {chip} x
-                </button>
-              ))}
+              <span className="px-3 py-1 rounded-full text-[12px] font-bold" style={{
+                background: latestDoc?.status === 'processed' ? 'rgba(24,128,56,0.14)' : 'rgba(251,188,4,0.16)',
+                color: latestDoc?.status === 'processed' ? '#188038' : '#8d5a00',
+              }}>
+                {(latestDoc?.status || 'uploaded').toUpperCase()}
+              </span>
             </div>
-          )}
 
-          <div className="space-y-2">
-            <textarea className="input min-h-[80px]" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Optional instruction for planning (you can leave this blank)..." />
-            <div className="flex flex-wrap gap-2">
+            <p className="mt-2 text-sm" style={{ color: '#a0a0a0' }}>Current SRS: {srsStatusLabel}</p>
+
+            <div className="flex flex-wrap items-center gap-2 mt-3">
+              <input
+                ref={filePickerRef}
+                type="file"
+                accept=".pdf,.doc,.docx,.txt,.md"
+                className="hidden"
+                onChange={handleSrsFileChange}
+              />
+              <button className="btn-secondary" onClick={() => filePickerRef.current?.click()}>Upload SRS</button>
+              <button className="btn-secondary" onClick={() => connectJira.mutate()} disabled={connectJira.isPending || !selectedJiraProjectKey}>Connect Jira</button>
+              <button className="btn-primary" onClick={() => uploadSrs.mutate()} disabled={!srsFile || uploadSrs.isPending}>
+                {uploadSrs.isPending ? 'Uploading...' : 'Process SRS'}
+              </button>
+            </div>
+
+            <p className="text-xs mt-2" style={{ color: '#a0a0a0' }}>Selected file: {selectedFileSummary}</p>
+
+            <div className="mt-3">
+              <label className="block text-sm font-semibold mb-1" style={{ color: '#e0e0e0' }}>Planning Prompt</label>
+              <textarea
+                className="input min-h-[110px]"
+                style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                value={planningPrompt}
+                onChange={(e) => setPlanningPrompt(e.target.value)}
+                placeholder="Describe planning direction"
+              />
+            </div>
+
+            <div className="mt-3">
+              <label className="block text-sm font-semibold mb-1" style={{ color: '#e0e0e0' }}>Chat Input</label>
+              <input
+                className="input"
+                style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Ask planner for next sprint plan"
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2 mt-3">
               <button
-                className="btn-secondary"
+                className="btn-primary"
                 onClick={() => {
                   if (chatInput.trim()) {
                     setPlannerChat((prev) => [...prev, { role: 'user', text: chatInput.trim() }])
                   }
-                  setPlanningPrompt(chatInput)
+                  setPlanningPrompt((prev) => prev || chatInput)
                   setChatInput('')
                   fetchSuggestions.mutate()
                 }}
                 disabled={fetchSuggestions.isPending}
               >
-                {fetchSuggestions.isPending ? 'Loading...' : 'Suggest'}
+                {fetchSuggestions.isPending ? 'Suggesting...' : 'Suggest'}
               </button>
               <button className="btn-primary" onClick={() => generateBacklog.mutate()} disabled={generateBacklog.isPending}>
                 {generateBacklog.isPending ? 'Generating...' : 'Generate Backlog'}
               </button>
             </div>
-            {suggestionsOpen && hasSuggestions && (
-              <div className="rounded-md border border-slate-700 bg-slate-950/80 p-2 space-y-1">
-                {renderSuggestionGroup('Epics', 'EPIC', suggestions.epics)}
-                {renderSuggestionGroup('Stories', 'STORY', suggestions.stories)}
-                {renderSuggestionGroup('Tasks', 'TASK', suggestions.tasks)}
+
+            <div className="mt-4">
+              <p className="text-sm font-semibold" style={{ color: '#e0e0e0' }}>Selected Suggestion Chips</p>
+              {!selectedSuggestionChips.length ? (
+                <p className="text-sm mt-1" style={{ color: '#a0a0a0' }}>No chips selected.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {selectedSuggestionChips.map((chip) => (
+                    <button key={chip} className="px-2 py-1 text-xs rounded-full border" style={{ borderColor: '#555', color: '#90caf9', background: '#1e3a5f' }} onClick={() => removeSuggestionChip(chip)}>
+                      {chip} x
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border p-4" style={{ background: '#1a1a1a', borderColor: '#333' }}>
+            <h3 className="text-[30px] font-bold" style={{ color: '#e0e0e0' }}>Suggested Structure</h3>
+            <p className="text-sm mt-1" style={{ color: '#a0a0a0' }}>Based on project module, phase, requirements, and commit history context</p>
+
+            <div className="mt-3 space-y-2">
+              {renderSuggestionGroup('Epics', 'EPIC', suggestions.epics)}
+              {renderSuggestionGroup('Stories', 'STORY', suggestions.stories)}
+              {renderSuggestionGroup('Tasks', 'TASK', suggestions.tasks)}
+              {!hasSuggestions && <p className="text-sm" style={{ color: '#5f6368' }}>Click Suggest to generate dynamic recommendations.</p>}
+            </div>
+
+            <div className="mt-4 pt-3 border-t" style={{ borderColor: '#333' }}>
+              <h4 className="text-[20px] font-bold" style={{ color: '#e0e0e0' }}>Planner Timeline</h4>
+              <div className="mt-2 space-y-2 max-h-[320px] overflow-auto">
+                {plannerChat.map((msg, idx) => (
+                  <div key={`${msg.role}-${idx}`} className="rounded-md border px-3 py-2 text-sm" style={{
+                    borderColor: '#333',
+                    background: msg.role === 'assistant' ? '#242424' : '#1e3a5f',
+                    color: '#e0e0e0',
+                  }}>
+                    <span className="font-semibold mr-2">{msg.role === 'assistant' ? 'AI' : 'You'}:</span>
+                    {msg.text}
+                  </div>
+                ))}
               </div>
-            )}
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-primary" onClick={() => confirmAndPush.mutate()} disabled={confirmAndPush.isPending || !backlogDraft.epics.length || !selectedJiraProjectKey}>
+              {confirmAndPush.isPending ? 'Pushing...' : 'Save and Push to Jira'}
+            </button>
+            <button className="btn-secondary" onClick={() => addBacklogItem('epic')}>+ Add Epic</button>
+          </div>
+
+          <div className="grid lg:grid-cols-[1.08fr_0.92fr] gap-3">
+            <div className="rounded-2xl border p-3" style={{ background: '#1a1a1a', borderColor: '#333' }}>
+              <div className="space-y-2 max-h-[70vh] overflow-auto pr-1">
+                {backlogDraft.epics.map((epic) => (
+                  <div key={epic.tempId} className="rounded-xl border p-2" style={{ borderColor: '#333', background: '#242424' }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <button className="text-left font-semibold text-[15px] flex-1" style={{ color: '#e0e0e0' }} onClick={() => setSelectedItem({ type: 'epic', tempId: epic.tempId })}>
+                        EPIC: {epic.title}
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('story', epic.tempId)}>+ Story</button>
+                        <button className="btn-sm" style={{ background: '#ffe9ee', color: '#b3261e', border: '1px solid #f1c8d3' }} onClick={() => removeByTempId('epics', epic.tempId)}>Delete</button>
+                      </div>
+                    </div>
+
+                    <div className="ml-4 mt-2 space-y-2">
+                      {(storiesByEpic.get(epic.tempId) || []).map((item) => (
+                        <div key={item.tempId} className="rounded-lg border p-2" style={{ borderColor: '#333', background: '#1e1e1e' }}>
+                          <div className="flex items-center justify-between gap-2">
+                            <button className="text-left text-[14px] font-medium flex-1" style={{ color: '#e0e0e0' }} onClick={() => setSelectedItem({ type: item.type, tempId: item.tempId })}>
+                              {item.type === 'task' ? 'TASK' : 'STORY'}: {item.title}
+                            </button>
+                            <div className="flex items-center gap-2">
+                              {item.type !== 'task' ? (
+                                <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('task', item.tempId)}>+ Task</button>
+                              ) : (
+                                <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('subtask', item.tempId)}>+ Subtask</button>
+                              )}
+                              <button className="btn-sm" style={{ background: '#ffe9ee', color: '#b3261e', border: '1px solid #f1c8d3' }} onClick={() => removeByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId)}>Delete</button>
+                            </div>
+                          </div>
+
+                          {(backlogDraft.subtasks || []).filter((st) => st.parentTempId === item.tempId).map((st) => (
+                            <div key={st.tempId} className="ml-4 mt-2 rounded-lg border p-2" style={{ borderColor: '#333', background: '#1a1a1a' }}>
+                              <div className="flex items-center justify-between gap-2">
+                                <button className="text-left text-[13px] font-medium flex-1" style={{ color: '#e0e0e0' }} onClick={() => setSelectedItem({ type: 'subtask', tempId: st.tempId })}>
+                                  SUBTASK: {st.title}
+                                </button>
+                                <button className="btn-sm" style={{ background: '#ffe9ee', color: '#b3261e', border: '1px solid #f1c8d3' }} onClick={() => removeByTempId('subtasks', st.tempId)}>Delete</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {!backlogDraft.epics.length && <p className="text-sm" style={{ color: '#a0a0a0' }}>Generate backlog first to see hierarchy.</p>}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border p-4" style={{ background: '#1a1a1a', borderColor: '#333' }}>
+              <h3 className="text-[30px] font-bold" style={{ color: '#e0e0e0' }}>Item Details</h3>
+              {!selectedBacklogItem ? (
+                <p className="text-sm mt-3" style={{ color: '#a0a0a0' }}>Select a backlog item from tree.</p>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  <input
+                    className="input"
+                    style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                    value={selectedBacklogItem.title || ''}
+                    onChange={(e) => updateByTempId(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, 'title', e.target.value)}
+                    placeholder="Title"
+                  />
+                  <textarea
+                    className="input min-h-[100px]"
+                    style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                    value={selectedBacklogItem.description || ''}
+                    onChange={(e) => updateByTempId(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, 'description', e.target.value)}
+                    placeholder="Description"
+                  />
+                  <select
+                    className="input"
+                    style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                    value={selectedBacklogItem.assignee || ''}
+                    onChange={(e) => updateByTempId(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, 'assignee', e.target.value)}
+                  >
+                    <option value="">Unassigned</option>
+                    {availableAssignees.map((assignee) => (
+                      <option key={assignee.id} value={assignee.id}>{assignee.label}</option>
+                    ))}
+                  </select>
+                  <div className="grid grid-cols-2 gap-2">
+                    <select
+                      className="input"
+                      style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                      value={selectedBacklogItem.priority || 'medium'}
+                      onChange={(e) => updateByTempId(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, 'priority', e.target.value)}
+                    >
+                      <option value="high">high</option>
+                      <option value="medium">medium</option>
+                      <option value="low">low</option>
+                    </select>
+                    <input
+                      type="number"
+                      min="0"
+                      className="input"
+                      style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                      value={selectedBacklogItem.storyPoints || 0}
+                      onChange={(e) => updateByTempId(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, 'storyPoints', Number(e.target.value) || 0)}
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-sm" style={{ color: '#e0e0e0' }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedBacklogItem.selected !== false}
+                      onChange={(e) => toggleSelected(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, e.target.checked)}
+                    />
+                    Include this item in save/push
+                  </label>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,10 +1,12 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
+import logging
 from services.rag_service import RAGService
 from services.llm_service import LLMService
-from services.document_parser import parse_document
+from services.enhanced_document_parser import EnhancedDocumentParser
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 rag_service = RAGService()
 llm_service = LLMService()
@@ -79,11 +81,24 @@ async def generate_stories(req: GenerateStoriesRequest):
 
 @router.post("/extract-requirements")
 async def extract_requirements(req: ExtractRequirementsRequest):
-    try:
-        text = parse_document(req.file_path, req.file_type)
-    except Exception as err:
-        raise HTTPException(status_code=400, detail=f"Failed to parse SRS: {str(err)}")
-
+    """Extract functional/non-functional requirements from SRS document."""
+    
+    # Parse document with validation and magic number detection
+    parse_result = EnhancedDocumentParser.parse_document(
+        file_path=req.file_path,
+        file_type=req.file_type,
+        validate=True,
+        check_magic=True
+    )
+    
+    if not parse_result.success:
+        logger.error(f"Document parsing failed: {parse_result.error}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to parse SRS: {parse_result.error}"
+        )
+    
+    text = parse_result.text
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Could not extract text from document")
 
@@ -92,10 +107,28 @@ async def extract_requirements(req: ExtractRequirementsRequest):
             text=text,
             ai_config=req.ai_config,
         )
+        logger.info(
+            f"Successfully extracted requirements from {req.document_id}: "
+            f"{len(extracted.get('functional_requirements', []))} functional, "
+            f"{len(extracted.get('non_functional_requirements', []))} non-functional, "
+            f"{len(extracted.get('modules', []))} modules, "
+            f"{len(extracted.get('actors', []))} actors"
+        )
     except Exception as err:
+        logger.error(f"Requirement extraction failed: {err}")
         raise HTTPException(status_code=502, detail=f"Requirement extraction failed: {str(err)}")
 
-    return {"success": True, **extracted}
+    return {
+        "success": True,
+        **extracted,
+        "parseMetadata": {
+            "detectedType": parse_result.metadata.get("detected_type"),
+            "detectionMethod": parse_result.metadata.get("detection_method"),
+            "wordCount": parse_result.metadata.get("word_count"),
+            "validationPassed": parse_result.metadata.get("validation_passed"),
+            "warnings": parse_result.metadata.get("warnings", []),
+        },
+    }
 
 
 @router.post("/suggest")

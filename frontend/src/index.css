@@ -33,9 +33,9 @@
   --bg-input:       #ffffff;
   --bg-hover:       rgba(0,0,0,0.04);
   --text-primary:   #0f172a;
-  --text-secondary: #475569;
-  --text-muted:     #64748b;
-  --text-faint:     #94a3b8;
+  --text-secondary: #000000;
+  --text-muted:     #000000;
+  --text-faint:     #000000;
   --border:         rgba(0,0,0,0.07);
   --border-card:    rgba(0,0,0,0.09);
   --border-input:   rgba(0,0,0,0.12);
@@ -369,14 +369,48 @@ main .recharts-text { fill: #475569 !important; }
 
 /* ── Light theme: restore Tailwind defaults for inner content ── */
 :root.light main .text-gray-900  { color: #111827 !important; }
-:root.light main .text-gray-800  { color: #1f2937 !important; }
-:root.light main .text-gray-700  { color: #374151 !important; }
-:root.light main .text-gray-600  { color: #4b5563 !important; }
-:root.light main .text-gray-500  { color: #6b7280 !important; }
+:root.light main .text-white     { color: #000000 !important; }
+:root.light main .text-slate-100 { color: #000000 !important; }
+:root.light main .text-slate-200 { color: #000000 !important; }
+:root.light main .text-gray-800  { color: #000000 !important; }
+:root.light main .text-gray-700  { color: #000000 !important; }
+:root.light main .text-gray-600  { color: #000000 !important; }
+:root.light main .text-gray-500  { color: #000000 !important; }
+:root.light main .text-gray-400  { color: #000000 !important; }
 :root.light main .text-slate-900 { color: #0f172a !important; }
-:root.light main .text-slate-800 { color: #1e293b !important; }
-:root.light main .text-slate-700 { color: #334155 !important; }
-:root.light main .text-slate-600 { color: #475569 !important; }
+:root.light main .text-slate-800 { color: #000000 !important; }
+:root.light main .text-slate-700 { color: #000000 !important; }
+:root.light main .text-slate-600 { color: #000000 !important; }
+:root.light main .text-slate-500 { color: #000000 !important; }
+:root.light main .text-slate-400 { color: #000000 !important; }
+:root.light main .text-slate-300 { color: #000000 !important; }
+:root.light main .text-indigo-200 { color: #000000 !important; }
+:root.light main .text-indigo-300 { color: #000000 !important; }
+:root.light main .text-indigo-400 { color: #000000 !important; }
+:root.light main .text-blue-300 { color: #000000 !important; }
+:root.light main .text-blue-400 { color: #000000 !important; }
+:root.light main .text-emerald-300 { color: #000000 !important; }
+:root.light main .text-amber-300 { color: #000000 !important; }
+:root.light main .text-red-300 { color: #000000 !important; }
+:root.light main .text-red-400 { color: #000000 !important; }
+:root.light main h1,
+:root.light main h2,
+:root.light main h3,
+:root.light main h4,
+:root.light main h5,
+:root.light main h6,
+:root.light main a,
+:root.light main strong,
+:root.light main b {
+  color: #000000 !important;
+}
+:root.light main p,
+:root.light main label,
+:root.light main span,
+:root.light main li,
+:root.light main td,
+:root.light main th,
+:root.light main small { color: #000000 !important; }
 :root.light main .bg-white        { background-color: #ffffff !important; }
 :root.light main .bg-gray-50      { background-color: #f9fafb !important; }
 :root.light main .bg-gray-100     { background-color: #f3f4f6 !important; }
@@ -398,6 +432,19 @@ main .recharts-text { fill: #475569 !important; }
 :root.light .input:is(select) optgroup {
   background-color: #ffffff;
   color: #0f172a;
+}
+
+:root.light .input,
+:root.light input,
+:root.light textarea,
+:root.light select {
+  color: #000000 !important;
+}
+
+:root.light .input::placeholder,
+:root.light input::placeholder,
+:root.light textarea::placeholder {
+  color: rgba(0, 0, 0, 0.72) !important;
 }
 
 :root.light .themed-file {

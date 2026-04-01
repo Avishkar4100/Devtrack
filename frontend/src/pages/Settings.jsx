@@ -10,6 +10,53 @@ import { useAuthStore } from '@/store/authStore'
 import toast from 'react-hot-toast'
 import { motion, AnimatePresence } from 'framer-motion'
 
+/* ── Jira Projects List Component ── */
+function JiraProjectsList({ userEmail, jiraDomain }) {
+  const { data: connectedProjects = [], isLoading } = useQuery({
+    queryKey: ['jira-connected-projects', userEmail, jiraDomain],
+    queryFn: async () => {
+      if (!userEmail || !jiraDomain) return []
+      try {
+        const { data } = await api.get('/projects?jiraConnected=true')
+        return data.data || []
+      } catch (error) {
+        console.error('Failed to fetch Jira-connected projects:', error)
+        return []
+      }
+    },
+    enabled: Boolean(userEmail && jiraDomain),
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  })
+
+  if (isLoading) {
+    return <div style={{ fontSize:'12px', color:'var(--text-muted)' }}>Loading projects...</div>
+  }
+
+  if (connectedProjects.length === 0) {
+    return <div style={{ fontSize:'12px', color:'var(--text-muted)' }}>No projects connected to Jira yet. Create a project and enable Jira sync in settings.</div>
+  }
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+      {connectedProjects.map((project) => (
+        <div key={project._id} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 0', borderTop:'1px solid var(--border-card)' }}>
+          <div>
+            <p style={{ fontSize:'12px', fontWeight:600, color:'var(--text-primary)' }}>{project.name}</p>
+            {project.jiraProjectKey && (
+              <p style={{ fontSize:'11px', color:'var(--text-muted)' }}>
+                Jira Key: <span style={{ fontFamily:'monospace', color:'#0052CC', fontWeight:600 }}>{project.jiraProjectKey}</span>
+              </p>
+            )}
+          </div>
+          <div style={{ fontSize:'10px', fontWeight:600, color:'#0052CC', background:'rgba(0,82,204,0.15)', padding:'3px 8px', borderRadius:'4px' }}>
+            ✓ Synced
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /* ── Animated Section Card ── */
 function Section({ icon: Icon, title, description, accent = '#6366f1', iconBg, children, index = 0 }) {
   return (
@@ -83,25 +130,8 @@ export default function SettingsPage() {
   const [jira, setJira] = useState({ jiraEmail: user?.jiraEmail || '', jiraDomain: user?.jiraDomain || '', jiraApiToken: '' })
   const [github, setGithub] = useState({ githubToken: '', githubUsername: user?.githubUsername || '' })
   const [jiraTestStatus, setJiraTestStatus] = useState(null)
+  const [jiraConnectedUser, setJiraConnectedUser] = useState(null)
   const [activeTab, setActiveTab] = useState('profile')
-
-  useQuery({
-    queryKey: ['auth-me-settings'],
-    queryFn: async () => (await api.get('/auth/me')).data.data,
-    onSuccess: (freshUser) => {
-      updateUser(freshUser)
-      setProfile((prev) => ({ ...prev, name: freshUser?.name || prev.name }))
-      setJira((prev) => ({
-        ...prev,
-        jiraEmail: freshUser?.jiraEmail || prev.jiraEmail,
-        jiraDomain: freshUser?.jiraDomain || prev.jiraDomain,
-      }))
-      setGithub((prev) => ({
-        ...prev,
-        githubUsername: freshUser?.githubUsername || prev.githubUsername,
-      }))
-    },
-  })
 
   const profileMutation = useMutation({
     mutationFn: (body) => api.put('/auth/profile', body),
@@ -110,18 +140,17 @@ export default function SettingsPage() {
 
   const integrationsMutation = useMutation({
     mutationFn: (body) => api.put('/auth/integrations', body),
-    onSuccess: ({ data }) => {
-      updateUser(data.data)
-      setJira((prev) => ({ ...prev, jiraApiToken: '' }))
-      setGithub((prev) => ({ ...prev, githubToken: '' }))
-      toast.success('Integration saved!')
-    },
+    onSuccess: ({ data }) => { updateUser(data.data); toast.success('Integration saved!') },
   })
 
   const testJiraMutation = useMutation({
     mutationFn: () => api.get('/jira/test'),
-    onSuccess: ({ data }) => { setJiraTestStatus('success'); toast.success(`Jira connected as ${data.data?.displayName || 'unknown user'}`) },
-    onError: () => { setJiraTestStatus('error'); toast.error('Jira connection failed. Check credentials.') },
+    onSuccess: ({ data }) => { 
+      setJiraTestStatus('success')
+      setJiraConnectedUser(data.data)
+      toast.success(`Jira connected as ${data.data?.displayName || 'unknown user'}`) 
+    },
+    onError: () => { setJiraTestStatus('error'); setJiraConnectedUser(null); toast.error('Jira connection failed. Check credentials.') },
   })
 
   const handleSaveJira = (e) => {
@@ -235,21 +264,28 @@ export default function SettingsPage() {
                 <Field label="Jira API Token" hint="Generate at id.atlassian.com → Security → API tokens. Leave blank to keep existing.">
                   <SecretInput value={jira.jiraApiToken} onChange={e => setJira({ ...jira, jiraApiToken:e.target.value })} placeholder="Enter new API token..." name="jiraApiToken" />
                 </Field>
-                {(user?.jiraEmail || user?.hasJiraToken || jiraTestStatus) && (
-                  <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <StatusChip status={jiraTestStatus || (user?.hasJiraToken && user?.jiraEmail && user?.jiraDomain ? 'success' : 'default')} />
-                    {!jiraTestStatus && (
-                      <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>
-                        {user?.hasJiraToken ? 'API token saved' : 'API token missing'}{user?.jiraDomain ? ` for ${user.jiraDomain}` : ''}
-                      </span>
+                
+                {/* Connected Jira User Info */}
+                {jiraConnectedUser && (
+                  <div style={{ display:'flex', alignItems:'center', gap:'12px', padding:'12px 14px', borderRadius:'12px', background:'rgba(0,82,204,0.08)', border:'1px solid rgba(0,82,204,0.2)' }}>
+                    {jiraConnectedUser.avatarUrls?.['24x24'] && (
+                      <img src={jiraConnectedUser.avatarUrls['24x24']} alt={jiraConnectedUser.displayName} style={{ width:'32px', height:'32px', borderRadius:'50%' }} />
                     )}
+                    <div style={{ flex:1 }}>
+                      <p style={{ fontSize:'13px', fontWeight:600, color:'#0052CC' }}>{jiraConnectedUser.displayName}</p>
+                      <p style={{ fontSize:'12px', color:'var(--text-muted)' }}>{jiraConnectedUser.emailAddress}</p>
+                    </div>
+                    <div style={{ fontSize:'11px', color:'#0052CC', fontWeight:600, background:'rgba(0,82,204,0.15)', padding:'4px 8px', borderRadius:'6px' }}>✓ Connected</div>
                   </div>
                 )}
-                {user?.jiraTokenPreview && (
-                  <Field label="Saved Jira Token (masked)">
-                    <input type="text" value={user.jiraTokenPreview} className="input" disabled style={{ opacity:0.85 }} />
-                  </Field>
+                
+                {(user?.jiraEmail || jiraTestStatus) && !jiraConnectedUser && (
+                  <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                    <StatusChip status={jiraTestStatus || 'default'} />
+                    {!jiraTestStatus && user?.jiraDomain && <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>for {user.jiraDomain}</span>}
+                  </div>
                 )}
+                
                 <div style={{ display:'flex', justifyContent:'flex-end', gap:'10px' }}>
                   <motion.button type="button" onClick={() => testJiraMutation.mutate()} disabled={testJiraMutation.isPending || !jira.jiraEmail} className="btn-secondary"
                     whileHover={{ scale:1.03 }} whileTap={{ scale:0.97 }}>
@@ -261,6 +297,15 @@ export default function SettingsPage() {
                   </motion.button>
                 </div>
               </form>
+              
+              {/* Connected Projects Section */}
+              {user?.jiraEmail && (
+                <div style={{ marginTop:'24px', padding:'14px', borderRadius:'12px', background:'var(--bg-hover)', border:'1px solid var(--border-card)' }}>
+                  <p style={{ fontSize:'13px', fontWeight:600, color:'var(--text-primary)', marginBottom:'10px' }}>Projects Connected to Jira</p>
+                  <p style={{ fontSize:'12px', color:'var(--text-muted)', marginBottom:'10px' }}>These projects are linked to Jira for story synchronization</p>
+                  <JiraProjectsList userEmail={user.jiraEmail} jiraDomain={user.jiraDomain} />
+                </div>
+              )}
             </Section>
           )}
 
@@ -273,18 +318,11 @@ export default function SettingsPage() {
                 <Field label="Personal Access Token" hint="Needs repo and read:user scopes. Leave blank to keep existing.">
                   <SecretInput value={github.githubToken} onChange={e => setGithub({ ...github, githubToken:e.target.value })} placeholder="ghp_..." name="githubToken" />
                 </Field>
-                {(user?.githubUsername || user?.hasGithubToken) && (
+                {user?.githubUsername && (
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <StatusChip status={user?.hasGithubToken ? 'success' : 'default'} />
-                    <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>
-                      {user?.hasGithubToken ? 'PAT saved' : 'PAT missing'}{user?.githubUsername ? ` as @${user.githubUsername}` : ''}
-                    </span>
+                    <StatusChip status="success" />
+                    <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>Connected as @{user.githubUsername}</span>
                   </div>
-                )}
-                {user?.githubTokenPreview && (
-                  <Field label="Saved GitHub Token (masked)">
-                    <input type="text" value={user.githubTokenPreview} className="input" disabled style={{ opacity:0.85 }} />
-                  </Field>
                 )}
                 <div style={{ display:'flex', justifyContent:'flex-end' }}>
                   <motion.button type="submit" disabled={integrationsMutation.isPending} className="btn-primary"

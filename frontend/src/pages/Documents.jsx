@@ -31,6 +31,9 @@ const statusColors = {
 export default function DocumentsPage() {
   const { id: projectId } = useParams()
   const qc = useQueryClient()
+  const [selectedStrategy, setSelectedStrategy] = useState('standard')
+  const [historyModal, setHistoryModal] = useState({ open: false, docId: null })
+  const [extractionHistory, setExtractionHistory] = useState([])
 
   const { data: documents = [], isLoading } = useQuery({
     queryKey: ['documents', projectId],
@@ -44,14 +47,29 @@ export default function DocumentsPage() {
     },
   })
 
-  // Socket.io: listen for document:ingested events
+  // Socket.io: listen for document:ingested and re-extraction events
   useEffect(() => {
     const socket = connectSocket(projectId)
     socket.on('document:ingested', () => {
       qc.invalidateQueries(['documents', projectId])
     })
+    socket.on('document:re-extraction-start', (data) => {
+      toast.loading('Re-extraction in progress...', { id: `re-ext-${data.docId}` })
+      qc.invalidateQueries(['documents', projectId])
+    })
+    socket.on('document:re-extraction-complete', (data) => {
+      toast.success(`Re-extraction completed with score: ${data.validationScore}/100`, { id: `re-ext-${data.docId}` })
+      qc.invalidateQueries(['documents', projectId])
+    })
+    socket.on('document:re-extraction-failed', (data) => {
+      toast.error(`Re-extraction failed: ${data.error}`, { id: `re-ext-${data.docId}` })
+      qc.invalidateQueries(['documents', projectId])
+    })
     return () => {
       socket.off('document:ingested')
+      socket.off('document:re-extraction-start')
+      socket.off('document:re-extraction-complete')
+      socket.off('document:re-extraction-failed')
       disconnectSocket(projectId)
     }
   }, [projectId, qc])
@@ -91,6 +109,25 @@ export default function DocumentsPage() {
       toast.success('Document deleted')
     },
   })
+
+  const reExtractMutation = useMutation({
+    mutationFn: ({ docId, strategy }) => api.post(`/documents/${docId}/re-extract`, { strategy }),
+    onSuccess: () => {
+      qc.invalidateQueries(['documents', projectId])
+      toast.success('Re-extraction started')
+    },
+    onError: (err) => toast.error(err.response?.data?.message || 'Re-extraction failed'),
+  })
+
+  const openExtractionHistory = async (docId) => {
+    try {
+      const { data } = await api.get(`/documents/${docId}/extraction-history?limit=20`)
+      setExtractionHistory(data.data || [])
+      setHistoryModal({ open: true, docId })
+    } catch (err) {
+      toast.error('Failed to load extraction history')
+    }
+  }
 
   const onDrop = useCallback(
     (acceptedFiles) => {
@@ -196,6 +233,11 @@ export default function DocumentsPage() {
                   <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${statusColors[doc.status]}`}>
                     {doc.status}
                   </span>
+                  {doc.extractedRequirements?.validationScore !== undefined && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                      Score: {doc.extractedRequirements.validationScore}/100
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1">
@@ -219,6 +261,13 @@ export default function DocumentsPage() {
                   </p>
                 )}
 
+                {doc.extractedRequirements?.validationWarnings && doc.extractedRequirements.validationWarnings.length > 0 && (
+                  <div className="text-xs text-yellow-600 mt-1 flex items-start gap-1 bg-yellow-50 p-1.5 rounded">
+                    <ExclamationCircleIcon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <span>{doc.extractedRequirements.validationWarnings.join(', ')}</span>
+                  </div>
+                )}
+
                 {doc.status === 'processing' && (
                   <div className="w-full mt-2 progress-bar">
                     <div className="progress-fill animate-pulse" style={{ width: '60%', background:'linear-gradient(90deg, #3b82f6, #6366f1)' }} />
@@ -228,15 +277,55 @@ export default function DocumentsPage() {
 
               <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                 {(doc.status === 'failed' || doc.status === 'processed') && (
-                  <button
-                    onClick={() => reingestMutation.mutate(doc._id)}
-                    disabled={reingestMutation.isPending}
-                    className="btn-secondary btn-sm"
-                    title="Re-ingest"
-                  >
-                    <ArrowPathIcon className="w-4 h-4" />
-                    <span className="hidden sm:inline">Re-ingest</span>
-                  </button>
+                  <>
+                    <button
+                      onClick={() => reingestMutation.mutate(doc._id)}
+                      disabled={reingestMutation.isPending}
+                      className="btn-secondary btn-sm"
+                      title="Re-ingest"
+                    >
+                      <ArrowPathIcon className="w-4 h-4" />
+                      <span className="hidden sm:inline">Re-ingest</span>
+                    </button>
+                    {doc.status === 'processed' && (
+                      <div className="relative group/strategy">
+                        <button
+                          className="btn-secondary btn-sm"
+                          title="Re-extract"
+                        >
+                          <ArrowPathIcon className="w-4 h-4" />
+                          <span className="hidden sm:inline">Re-extract</span>
+                          <span className="text-xs ml-1">▼</span>
+                        </button>
+                        <div className="absolute right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10 hidden group-hover/strategy:block">
+                          {['standard', 'detail_focused', 'module_first', 'actor_driven', 'constraint_heavy'].map((strategy) => (
+                            <button
+                              key={strategy}
+                              onClick={() => reExtractMutation.mutate({ docId: doc._id, strategy })}
+                              disabled={reExtractMutation.isPending}
+                              className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 first:rounded-t-lg last:rounded-b-lg"
+                            >
+                              {strategy === 'standard' && '📋 Standard'}
+                              {strategy === 'detail_focused' && '🔍 Detail Focused'}
+                              {strategy === 'module_first' && '📦 Module First'}
+                              {strategy === 'actor_driven' && '👤 Actor Driven'}
+                              {strategy === 'constraint_heavy' && '⚖️ Constraint Heavy'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {doc.extractedRequirements && (
+                      <button
+                        onClick={() => openExtractionHistory(doc._id)}
+                        className="btn-secondary btn-sm"
+                        title="View extraction history"
+                      >
+                        <DocumentTextIcon className="w-4 h-4" />
+                        <span className="hidden sm:inline">History</span>
+                      </button>
+                    )}
+                  </>
                 )}
                 <button
                   onClick={() => deleteMutation.mutate(doc._id)}
@@ -260,6 +349,69 @@ export default function DocumentsPage() {
           <li>Go to <strong className="text-gray-800">Stories</strong> and click <em>AI Generate</em> to create User Stories from the document</li>
         </ol>
       </div>
+
+      {/* Extraction History Modal */}
+      {historyModal.open && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900">Extraction History</h3>
+              <button
+                onClick={() => setHistoryModal({ open: false, docId: null })}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="p-4 space-y-3">
+              {extractionHistory.length === 0 ? (
+                <p className="text-center text-gray-500 py-8">No extraction history available</p>
+              ) : (
+                extractionHistory.map((extraction, idx) => (
+                  <div key={idx} className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <p className="font-semibold text-sm text-gray-900">Version {extraction.extractionVersion}</p>
+                        <p className="text-xs text-gray-500">{extraction.lastStrategy?.replace(/_/g, ' ').toUpperCase()}</p>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-lg font-bold text-purple-600">{extraction.validationScore}/100</div>
+                        <p className="text-xs text-gray-500">{new Date(extraction.createdAt).toLocaleDateString()}</p>
+                      </div>
+                    </div>
+                    
+                    {extraction.validationWarnings && extraction.validationWarnings.length > 0 && (
+                      <div className="mt-2 text-xs text-yellow-700 bg-yellow-50 p-2 rounded">
+                        <span className="font-semibold">Warnings:</span> {extraction.validationWarnings.join(', ')}
+                      </div>
+                    )}
+                    
+                    <div className="mt-2 grid grid-cols-4 gap-2 text-xs">
+                      <div className="bg-white p-2 rounded">
+                        <p className="text-gray-600">Functional</p>
+                        <p className="font-semibold text-gray-900">{extraction.functional?.length || 0}</p>
+                      </div>
+                      <div className="bg-white p-2 rounded">
+                        <p className="text-gray-600">Non-functional</p>
+                        <p className="font-semibold text-gray-900">{extraction.nonFunctional?.length || 0}</p>
+                      </div>
+                      <div className="bg-white p-2 rounded">
+                        <p className="text-gray-600">Modules</p>
+                        <p className="font-semibold text-gray-900">{extraction.modules?.length || 0}</p>
+                      </div>
+                      <div className="bg-white p-2 rounded">
+                        <p className="text-gray-600">Actors</p>
+                        <p className="font-semibold text-gray-900">{extraction.actors?.length || 0}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

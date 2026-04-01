@@ -9,7 +9,10 @@ const Requirement = require('../models/Requirement');
 const Sprint = require('../models/Sprint');
 const Commit = require('../models/Commit');
 const AuditLog = require('../models/AuditLog');
+const User = require('../models/User');
 const aiService = require('../services/aiService');
+const SocketService = require('../services/socketService');
+const { sendEmail, storyCreatedEmail, storyAssignedEmail } = require('../services/email');
 const logger = require('../config/logger');
 
 const readSnippetFromDocument = (filePath, maxChars = 4000) => {
@@ -177,14 +180,9 @@ const generateStories = async (req, res) => {
   const project = await Project.findById(req.params.projectId);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
-  // Block generation if no processed SRS document exists for this project
-  const processedDoc = await Document.findOne({ project: project._id, status: 'processed', isActive: true });
-  if (!processedDoc) {
-    return res.status(400).json({
-      success: false,
-      message: 'No processed SRS document found. Please upload and process an SRS/MD document first before generating stories.',
-    });
-  }
+  const processedDoc = await Document.findOne({ project: project._id, status: 'processed', isActive: true })
+    .sort({ updatedAt: -1 })
+    .lean();
 
   const [totalStories, completedStories, activeSprint] = await Promise.all([
     Story.countDocuments({ project: project._id, type: { $in: ['story', 'task'] } }),
@@ -202,6 +200,13 @@ const generateStories = async (req, res) => {
 
   const contextGraph = await buildVectorlessContextGraph(project._id);
   const graphContext = `\n\nVectorless project graph context:\n${JSON.stringify(contextGraph)}`;
+
+  const planningWarnings = [];
+  let contextQuality = 'high';
+  if (!processedDoc) {
+    contextQuality = 'low';
+    planningWarnings.push('No processed SRS found. Generated backlog is using project graph fallback context.');
+  }
 
   const enhancedContext = [additionalContext, projectStateContext, graphContext].filter(Boolean).join('\n\n');
 
@@ -225,7 +230,49 @@ const generateStories = async (req, res) => {
     ipAddress: req.ip,
   });
 
-  res.status(200).json({ success: true, data: result });
+  res.status(200).json({
+    success: true,
+    data: {
+      ...result,
+      planningMeta: {
+        contextQuality,
+        usedProcessedSrs: Boolean(processedDoc),
+        processedDocumentId: processedDoc?._id || null,
+        warnings: planningWarnings,
+      },
+    },
+  });
+};
+
+const buildFallbackSuggestions = ({ moduleName, phase, contextGraph }) => {
+  const moduleLabel = moduleName || 'Core Module';
+  const actorLabel = contextGraph?.actors?.[0] || 'project users';
+  const flowLabel = contextGraph?.functional?.[0] || `${moduleLabel} primary workflow`;
+
+  const epics = [
+    `Define ${moduleLabel} MVP boundaries and acceptance milestones for ${actorLabel} across the first two sprints`,
+    `Map ${moduleLabel} delivery flow from intake to completion and assign ownership checkpoints for handoff visibility`,
+  ];
+
+  const stories = [
+    `Break down ${flowLabel} into implementation-ready user stories with role-scoped acceptance criteria and test notes`,
+    `Prioritize ${moduleLabel} backlog by release value and dependency order before assigning stories into sprint buckets`,
+    `Draft integration stories for Jira synchronization fields, workflow statuses, and verification checkpoints in ${moduleLabel}`,
+    `Prepare review-ready stories that define done criteria for UI behavior, API responses, and data consistency guarantees`,
+  ];
+
+  const tasks = [
+    `Create a dependency matrix for ${moduleLabel} stories and mark blockers that can impact sprint start confidence`,
+    `Finalize role permissions for ${actorLabel} and attach validation criteria to each backlog item before approval`,
+    `Document risk assumptions for ${moduleLabel} scope and convert each risk into a measurable mitigation task`,
+    `Review backlog sequencing with engineering and product to confirm estimates, ownership, and Jira field mapping`,
+  ];
+
+  if (phase === 'mid' || phase === 'late') {
+    tasks[0] = `Audit in-flight ${moduleLabel} stories and convert stalled work into explicit unblocker tasks with owners`;
+  }
+
+  return { epics, stories, tasks };
 };
 
 // @desc    Suggest next planning prompts using vectorless context graph
@@ -245,6 +292,12 @@ const suggestStories = async (req, res) => {
     Story.find({ project: project._id }).sort({ updatedAt: -1 }).limit(120).lean(),
     Commit.find({ projectId: project._id }).sort({ date: -1 }).limit(40).lean(),
   ]);
+
+  const latestProcessedDoc = await Document.findOne({
+    project: project._id,
+    status: 'processed',
+    isActive: true,
+  }).sort({ updatedAt: -1 }).lean();
 
   const doneStories = stories.filter((s) => s.status === 'done').length;
   let phase = 'start';
@@ -288,7 +341,45 @@ const suggestStories = async (req, res) => {
         message: 'AI suggestion service is unavailable. Start ai-service and verify model credentials, then try again.',
       });
     }
-    throw error;
+
+    logger.warn(`Suggest degraded project=${project._id} reason=ai_suggest_failed detail=${error.message}`);
+    const fallbackStructured = buildFallbackSuggestions({
+      moduleName,
+      phase,
+      contextGraph: structuredContext,
+    });
+    const fallbackFlat = [
+      ...fallbackStructured.epics.map((s) => `EPIC: ${s}`),
+      ...fallbackStructured.stories.map((s) => `STORY: ${s}`),
+      ...fallbackStructured.tasks.map((s) => `TASK: ${s}`),
+    ];
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        suggestions: fallbackFlat,
+        structuredSuggestions: fallbackStructured,
+        planningMeta: {
+          contextQuality: latestProcessedDoc ? 'medium' : 'low',
+          usedProcessedSrs: Boolean(latestProcessedDoc),
+          processedDocumentId: latestProcessedDoc?._id || null,
+          warnings: [
+            'AI provider request failed. Showing fallback planning suggestions generated from project context.',
+            ...(latestProcessedDoc
+              ? []
+              : ['No processed SRS found. Suggestions are generated from project graph fallback context.']),
+          ],
+        },
+        contextSummary: {
+          source: 'requirements_structured',
+          phase,
+          moduleCount: structuredContext.modules.length,
+          functionalCount: structuredContext.functional.length,
+          nonFunctionalCount: structuredContext.nonFunctional.length,
+          actorCount: structuredContext.actors.length,
+        },
+      },
+    });
   }
 
   const rawActions = Array.isArray(result?.suggestions) ? result.suggestions : [];
@@ -338,6 +429,14 @@ const suggestStories = async (req, res) => {
     data: {
       suggestions: flatSuggestions,
       structuredSuggestions,
+      planningMeta: {
+        contextQuality: latestProcessedDoc ? 'high' : 'low',
+        usedProcessedSrs: Boolean(latestProcessedDoc),
+        processedDocumentId: latestProcessedDoc?._id || null,
+        warnings: latestProcessedDoc
+          ? []
+          : ['No processed SRS found. Suggestions are generated from project graph fallback context.'],
+      },
       contextSummary: {
         source: 'requirements_structured',
         phase,
@@ -350,11 +449,83 @@ const suggestStories = async (req, res) => {
   });
 };
 
+const normalizeGeneratedPayload = (body = {}) => ({
+  epics: Array.isArray(body.epics) ? body.epics : [],
+  stories: Array.isArray(body.stories) ? body.stories : [],
+  tasks: Array.isArray(body.tasks) ? body.tasks : [],
+  subtasks: Array.isArray(body.subtasks) ? body.subtasks : [],
+});
+
+const hasTitle = (row) => Boolean(String(row?.title || '').trim());
+
+const validateGeneratedPayload = ({ epics, stories, tasks, subtasks }) => {
+  const errors = [];
+
+  epics.forEach((row, idx) => {
+    if (!hasTitle(row)) errors.push(`epics[${idx}] title is required`);
+  });
+  stories.forEach((row, idx) => {
+    if (!hasTitle(row)) errors.push(`stories[${idx}] title is required`);
+  });
+  tasks.forEach((row, idx) => {
+    if (!hasTitle(row)) errors.push(`tasks[${idx}] title is required`);
+  });
+  subtasks.forEach((row, idx) => {
+    if (!hasTitle(row)) errors.push(`subtasks[${idx}] title is required`);
+  });
+
+  const epicIds = new Set(epics.map((e, idx) => e.tempId || e.title || `epic-${idx}`));
+  const storyIds = new Set(stories.map((s, idx) => s.tempId || s.title || `story-${idx}`));
+  const taskIds = new Set(tasks.map((t, idx) => t.tempId || t.title || `task-${idx}`));
+
+  stories.forEach((row, idx) => {
+    if (row.epicTempId && !epicIds.has(row.epicTempId)) {
+      errors.push(`stories[${idx}] references missing epicTempId '${row.epicTempId}'`);
+    }
+  });
+
+  tasks.forEach((row, idx) => {
+    if (row.epicTempId && !epicIds.has(row.epicTempId)) {
+      errors.push(`tasks[${idx}] references missing epicTempId '${row.epicTempId}'`);
+    }
+    if (row.parentTempId && !storyIds.has(row.parentTempId)) {
+      errors.push(`tasks[${idx}] references missing parentTempId '${row.parentTempId}'`);
+    }
+  });
+
+  subtasks.forEach((row, idx) => {
+    if (row.epicTempId && !epicIds.has(row.epicTempId)) {
+      errors.push(`subtasks[${idx}] references missing epicTempId '${row.epicTempId}'`);
+    }
+    if (row.parentTempId && !taskIds.has(row.parentTempId)) {
+      errors.push(`subtasks[${idx}] references missing parentTempId '${row.parentTempId}'`);
+    }
+  });
+
+  return errors;
+};
+
 // @desc    Save/approve generated stories
 // @route   POST /api/stories/save/:projectId
 // @access  Private (Scrum Master)
 const saveGeneratedStories = async (req, res) => {
-  const { epics, stories, tasks, subtasks } = req.body;
+  const { epics, stories, tasks, subtasks } = normalizeGeneratedPayload(req.body);
+
+  if (!epics.length && !stories.length && !tasks.length && !subtasks.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'No backlog items provided. Add at least one epic/story/task/subtask before save.',
+    });
+  }
+
+  const validationErrors = validateGeneratedPayload({ epics, stories, tasks, subtasks });
+  if (validationErrors.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'Generated backlog payload is invalid',
+      errors: validationErrors,
+    });
+  }
 
   const today = new Date();
   const defaultDue = new Date(today);
@@ -472,6 +643,17 @@ const saveGeneratedStories = async (req, res) => {
   // Update project counts
   await updateProjectCounts(project._id);
 
+  // Emit WebSocket event for bulk save
+  const io = req.app.get('io');
+  if (io) {
+    SocketService.storiesSaved(io, project._id.toString(), {
+      epicCount: savedEpics.length,
+      storyCount: savedStories.filter((s) => !s.type || s.type === 'story').length,
+      taskCount: savedStories.filter((s) => s.type === 'task').length,
+      subtaskCount: (subtasks || []).length,
+    });
+  }
+
   res.status(201).json({
     success: true,
     data: { epics: savedEpics, stories: savedStories },
@@ -482,41 +664,130 @@ const saveGeneratedStories = async (req, res) => {
 // @route   POST /api/stories
 // @access  Private
 const createStory = async (req, res) => {
-  const story = await Story.create({ ...req.body, reporter: req.user.id });
-  await updateProjectCounts(story.project);
-  res.status(201).json({ success: true, data: story });
+  try {
+    const story = await Story.create({ ...req.body, reporter: req.user.id });
+    await updateProjectCounts(story.project);
+
+    // Populate for email
+    const populatedStory = await story.populate([
+      { path: 'reporter', select: 'name email' },
+      { path: 'epic', select: 'title' },
+      { path: 'project', select: 'name' },
+    ]);
+
+    // Send creation email to team members
+    try {
+      const project = await Project.findById(story.project).populate('members.user', 'email name');
+      if (project && project.members && project.members.length > 0) {
+        const teamEmails = project.members
+          .map((m) => m.user?.email)
+          .filter((email) => email && email !== req.user.email);
+
+        if (teamEmails.length > 0) {
+          const htmlContent = storyCreatedEmail(
+            story.title,
+            story.description,
+            populatedStory.epic?.title || 'Unassigned',
+            project.name,
+            req.user.name || 'Team'
+          );
+
+          await Promise.all(
+            teamEmails.map((email) =>
+              sendEmail({
+                to: email,
+                subject: `📋 New Story: ${story.title}`,
+                html: htmlContent,
+              }).catch((err) => logger.error('Failed to send story creation email:', err.message))
+            )
+          );
+        }
+      }
+    } catch (emailErr) {
+      logger.error('Email notification error (non-blocking):', emailErr.message);
+    }
+
+    // Emit WebSocket event
+    const io = req.app.get('io');
+    if (io) {
+      SocketService.storyCreated(io, story.project.toString(), story);
+    }
+
+    res.status(201).json({ success: true, data: story });
+  } catch (err) {
+    logger.error('Story creation error:', err);
+    res.status(500).json({ success: false, message: 'Failed to create story', error: err.message });
+  }
 };
 
 // @desc    Update story
 // @route   PUT /api/stories/:id
 // @access  Private
 const updateStory = async (req, res) => {
-  const story = await Story.findByIdAndUpdate(req.params.id, req.body, {
-    new: true,
-    runValidators: true,
-  }).populate('assignee', 'name email avatar').populate('epic', 'title').populate('parentStory', 'title storyKey');
+  try {
+    const previousStory = await Story.findById(req.params.id).select('assignee');
+    const wasAssigneeChanged = previousStory && req.body.assignee && previousStory.assignee?.toString() !== req.body.assignee;
 
-  if (!story) return res.status(404).json({ success: false, message: 'Story not found' });
+    const story = await Story.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true,
+    }).populate('assignee', 'name email avatar').populate('epic', 'title').populate('parentStory', 'title storyKey').populate('project', 'name');
 
-  await updateProjectCounts(story.project);
+    if (!story) return res.status(404).json({ success: false, message: 'Story not found' });
 
-  // Emit socket event
-  const io = req.app.get('io');
-  if (io) {
-    io.to(`project:${story.project}`).emit('story:updated', story);
+    await updateProjectCounts(story.project._id);
+
+    // Send assignment notification email
+    if (wasAssigneeChanged && story.assignee?.email) {
+      try {
+        const reporter = await User.findById(req.user.id).select('name');
+        const htmlContent = storyAssignedEmail(
+          story.title,
+          story.assignee.name,
+          story.project.name,
+          reporter?.name || 'Team',
+          {
+            epicTitle: story.epic?.title,
+            priority: story.priority,
+            dueDate: story.dueDate,
+            storyPoints: story.storyPoints,
+          }
+        );
+
+        await sendEmail({
+          to: story.assignee.email,
+          subject: `📋 Assigned to You: ${story.title}`,
+          html: htmlContent,
+        }).catch((err) => logger.error('Failed to send assignment email:', err.message));
+      } catch (emailErr) {
+        logger.error('Assignment email error (non-blocking):', emailErr.message);
+      }
+    }
+
+    // Emit socket event
+    const io = req.app.get('io');
+    if (io) {
+      SocketService.storyUpdated(io, story.project._id.toString(), story);
+      if (wasAssigneeChanged) {
+        SocketService.storyAssigned(io, story.project._id.toString(), story);
+      }
+    }
+
+    await AuditLog.create({
+      project: story.project._id,
+      user: req.user.id,
+      action: 'story_edited',
+      entity: 'story',
+      entityId: story._id,
+      details: { changes: Object.keys(req.body) },
+      ipAddress: req.ip,
+    });
+
+    res.status(200).json({ success: true, data: story });
+  } catch (err) {
+    logger.error('Story update error:', err);
+    res.status(500).json({ success: false, message: 'Failed to update story', error: err.message });
   }
-
-  await AuditLog.create({
-    project: story.project,
-    user: req.user.id,
-    action: 'story_edited',
-    entity: 'story',
-    entityId: story._id,
-    details: { changes: Object.keys(req.body) },
-    ipAddress: req.ip,
-  });
-
-  res.status(200).json({ success: true, data: story });
 };
 
 // @desc    Delete story
@@ -526,11 +797,18 @@ const deleteStory = async (req, res) => {
   const story = await Story.findById(req.params.id);
   if (!story) return res.status(404).json({ success: false, message: 'Story not found' });
 
+  const projectId = story.project;
   await story.deleteOne();
-  await updateProjectCounts(story.project);
+  await updateProjectCounts(projectId);
+
+  // Emit WebSocket event
+  const io = req.app.get('io');
+  if (io) {
+    SocketService.storyDeleted(io, projectId.toString(), story._id.toString());
+  }
 
   await AuditLog.create({
-    project: story.project,
+    project: projectId,
     user: req.user.id,
     action: 'story_deleted',
     entity: 'story',
@@ -568,6 +846,85 @@ const updateProjectCounts = async (projectId) => {
   }
 };
 
+// @desc    Bulk assign stories to user
+// @route   POST /api/stories/bulk-assign
+// @access  Private (Manager/Scrum Master)
+const bulkAssignStories = async (req, res) => {
+  try {
+    const { storyIds = [], assigneeId, projectId } = req.body;
+
+    if (!storyIds.length || !assigneeId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Story IDs and assignee ID are required',
+      });
+    }
+
+    // Fetch assignee
+    const assignee = await User.findById(assigneeId).select('name email');
+    if (!assignee) {
+      return res.status(404).json({ success: false, message: 'Assignee not found' });
+    }
+
+    // Update all stories
+    const result = await Story.updateMany(
+      { _id: { $in: storyIds }, project: projectId },
+      { assignee: assigneeId },
+      { runValidators: true }
+    );
+
+    // Fetch updated stories for email
+    const updatedStories = await Story.find({ _id: { $in: storyIds } }).select('title storyPoints priority epic');
+    const project = await Project.findById(projectId).select('name');
+    const reporter = await User.findById(req.user.id).select('name');
+
+    // Send bulk assignment email
+    if (assignee.email) {
+      try {
+        const { bulkAssignmentEmail } = require('../services/email');
+        const htmlContent = bulkAssignmentEmail(
+          assignee.name,
+          project.name,
+          updatedStories,
+          reporter?.name || 'Team'
+        );
+
+        await sendEmail({
+          to: assignee.email,
+          subject: `📚 ${storyIds.length} Stories Assigned to You in ${project.name}`,
+          html: htmlContent,
+        }).catch((err) => logger.error('Failed to send bulk assignment email:', err.message));
+      } catch (emailErr) {
+        logger.error('Bulk assignment email error (non-blocking):', emailErr.message);
+      }
+    }
+
+    // Emit WebSocket event for each story
+    const io = req.app.get('io');
+    if (io) {
+      updatedStories.forEach((story) => {
+        SocketService.storyAssigned(io, projectId.toString(), story);
+      });
+      SocketService.notify(io, projectId.toString(), `${storyIds.length} stories assigned to ${assignee.name}`, 'success');
+    }
+
+    await updateProjectCounts(projectId);
+
+    res.status(200).json({
+      success: true,
+      message: `${result.modifiedCount} stories assigned to ${assignee.name}`,
+      data: { modifiedCount: result.modifiedCount, assignee },
+    });
+  } catch (err) {
+    logger.error('Bulk assignment error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to bulk assign stories',
+      error: err.message,
+    });
+  }
+};
+
 module.exports = {
   getStoriesByProject,
   getEpics,
@@ -577,4 +934,5 @@ module.exports = {
   createStory,
   updateStory,
   deleteStory,
+  bulkAssignStories,
 };

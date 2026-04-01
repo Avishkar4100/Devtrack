@@ -13,7 +13,7 @@ const generateInsightsController = async (req, res) => {
   }
 
   const isMember =
-    req.user.role === 'manager' ||
+    req.user.role === 'admin' ||
     project.owner.toString() === req.user.id ||
     project.members.some((m) => m.user.toString() === req.user.id);
 
@@ -29,7 +29,7 @@ const generateInsightsController = async (req, res) => {
 // @route   GET /api/insights/global
 // @access  Private
 const generateGlobalInsightsController = async (req, res) => {
-  const filter = req.user.role === 'manager'
+  const filter = req.user.role === 'admin'
     ? {}
     : { $or: [{ owner: req.user.id }, { 'members.user': req.user.id }] };
 

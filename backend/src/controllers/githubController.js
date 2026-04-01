@@ -6,6 +6,8 @@ const Commit = require('../models/Commit');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const aiService = require('../services/aiService');
+const GitHubValidator = require('../services/githubValidator');
+const logger = require('../config/logger');
 
 const getDefaultRepoFromEnv = () => {
   const owner = (process.env.GITHUB_REPO_OWNER || '').trim();
@@ -306,4 +308,156 @@ const triggerAnalysisFromWebhook = async (project, payload, io) => {
   }
 };
 
-module.exports = { connectRepo, getCommits, triggerAnalysis, handleWebhook };
+// @desc    Validate GitHub token
+// @route   POST /api/github/validate-token
+// @access  Private
+const validateToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'GitHub token is required' });
+    }
+
+    const result = await GitHubValidator.validateToken(token);
+    res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
+  } catch (error) {
+    logger.error('Token validation error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Validate GitHub repository access
+// @route   POST /api/github/validate-repo
+// @access  Private
+const validateRepo = async (req, res) => {
+  try {
+    const { repo } = req.body;
+    if (!repo) {
+      return res.status(400).json({ success: false, message: 'Repository name required' });
+    }
+
+    const headers = await getGitHubHeaders(req.user.id);
+    const token = headers.Authorization.replace('token ', '');
+
+    const result = await GitHubValidator.validateRepository(token, repo);
+    res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
+  } catch (error) {
+    logger.error('Repo validation error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Validate GitHub branch
+// @route   POST /api/github/validate-branch
+// @access  Private
+const validateBranch = async (req, res) => {
+  try {
+    const { repo, branch } = req.body;
+    if (!repo || !branch) {
+      return res.status(400).json({ success: false, message: 'Repository and branch are required' });
+    }
+
+    const headers = await getGitHubHeaders(req.user.id);
+    const token = headers.Authorization.replace('token ', '');
+
+    const result = await GitHubValidator.validateBranch(token, repo, branch);
+    res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
+  } catch (error) {
+    logger.error('Branch validation error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Check GitHub API rate limits
+// @route   GET /api/github/rate-limit
+// @access  Private
+const getRateLimit = async (req, res) => {
+  try {
+    const headers = await getGitHubHeaders(req.user.id);
+    const token = headers.Authorization.replace('token ', '');
+
+    const result = await GitHubValidator.checkRateLimit(token);
+    res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
+  } catch (error) {
+    logger.error('Rate limit check error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get list of accessible repositories
+// @route   GET /api/github/repositories
+// @access  Private
+const getRepositories = async (req, res) => {
+  try {
+    const headers = await getGitHubHeaders(req.user.id);
+    const token = headers.Authorization.replace('token ', '');
+
+    const result = await GitHubValidator.getAccessibleRepositories(token, 30);
+    res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
+  } catch (error) {
+    logger.error('Get repositories error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Full connection validation
+// @route   POST /api/github/validate-connection
+// @access  Private
+const validateConnection = async (req, res) => {
+  try {
+    const { repo, branch = 'main' } = req.body;
+    if (!repo) {
+      return res.status(400).json({ success: false, message: 'Repository is required' });
+    }
+
+    const headers = await getGitHubHeaders(req.user.id);
+    const token = headers.Authorization.replace('token ', '');
+
+    const result = await GitHubValidator.validateFullConnection(token, repo, branch);
+    res.status(result.allValid ? 200 : 400).json({ success: result.allValid, data: result });
+  } catch (error) {
+    logger.error('Connection validation error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    GitHub health check
+// @route   GET /api/github/health
+// @access  Private
+const getHealth = async (req, res) => {
+  try {
+    const headers = await getGitHubHeaders(req.user.id);
+    const token = headers.Authorization.replace('token ', '');
+
+    const [tokenResult, rateLimitResult] = await Promise.all([
+      GitHubValidator.validateToken(token),
+      GitHubValidator.checkRateLimit(token),
+    ]);
+
+    const health = {
+      status: tokenResult.valid ? 'healthy' : 'error',
+      token: tokenResult,
+      rateLimit: rateLimitResult,
+      timestamp: new Date().toISOString(),
+    };
+
+    res.status(health.status === 'healthy' ? 200 : 400).json({ success: true, data: health });
+  } catch (error) {
+    logger.error('Health check error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = {
+  connectRepo,
+  getCommits,
+  triggerAnalysis,
+  handleWebhook,
+  validateToken,
+  validateRepo,
+  validateBranch,
+  getRateLimit,
+  getRepositories,
+  validateConnection,
+  getHealth,
+};

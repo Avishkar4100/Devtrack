@@ -1,9 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
+import { useState } from 'react'
 import { useAuthStore } from '@/store/authStore'
 import { useProjectStore } from '@/store/projectStore'
 import api from '@/lib/api'
 import { motion, AnimatePresence } from 'framer-motion'
+import PageErrorBoundary from '@/components/PageErrorBoundary'
+import { useProjectSocket } from '@/lib/useProjectSocket'
+import toast from 'react-hot-toast'
 import {
   FolderIcon, RocketLaunchIcon, DocumentTextIcon, SparklesIcon,
   ArrowTrendingUpIcon, ClockIcon, ChevronRightIcon, BoltIcon,
@@ -116,22 +120,55 @@ function ProjectCard({ project, index }) {
 }
 
 export default function DashboardPage() {
+  return (
+    <PageErrorBoundary pageName="Dashboard">
+      <DashboardContent />
+    </PageErrorBoundary>
+  )
+}
+
+function DashboardContent() {
   const { user } = useAuthStore()
   const { setProjects } = useProjectStore()
   const { theme } = useThemeStore()
   const isLight = theme === 'light'
+  const [realtimeUpdates, setRealtimeUpdates] = useState({})
 
-  const { data: projectsData } = useQuery({
+  const { data: projectsData, refetch: refetchProjects } = useQuery({
     queryKey: ['projects'],
     queryFn: async () => { const { data } = await api.get('/projects'); setProjects(data.data); return data.data },
   })
-  const { data: overviewData } = useQuery({
+  const { data: overviewData, refetch: refetchOverview } = useQuery({
     queryKey: ['dashboard-overview'],
     queryFn: async () => { const { data } = await api.get('/dashboard/overview'); return data.data },
   })
 
   const projects = projectsData || []
   const activeProjects = projects.filter(p => p.status === 'active')
+
+  // Listen to real-time updates from active projects
+  const firstActiveProjectId = activeProjects[0]?._id
+  useProjectSocket(firstActiveProjectId, {
+    onStoryCreated: () => {
+      setRealtimeUpdates(prev => ({ ...prev, lastUpdate: `Story created at ${new Date().toLocaleTimeString()}` }))
+      refetchOverview()
+      toast.success('📖 New story created!', { position: 'bottom-right' })
+    },
+    onStoryUpdated: () => {
+      setRealtimeUpdates(prev => ({ ...prev, lastUpdate: `Story updated at ${new Date().toLocaleTimeString()}` }))
+      refetchOverview()
+    },
+    onStoriesSaved: (data) => {
+      setRealtimeUpdates(prev => ({ ...prev, lastUpdate: `Backlog saved: ${data.totalCount} items` }))
+      refetchOverview()
+      refetchProjects()
+      toast.success(`✅ Saved ${data.totalCount} backlog items!`, { position: 'bottom-right' })
+    },
+    onSprintUpdated: () => {
+      refetchOverview()
+      toast.success('🎯 Sprint updated!', { position: 'bottom-right' })
+    },
+  })
 
   const stats = [
     { label:'Projects',        value:projects.length,                   Icon:FolderIcon,         accent:'#6366f1', delay:0,    sub:'total' },
@@ -329,4 +366,5 @@ export default function DashboardPage() {
       </div>
     </div>
   )
+}
 }

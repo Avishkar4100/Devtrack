@@ -8,7 +8,11 @@ const AuditLog = require('../models/AuditLog');
 // @route   GET /api/projects
 // @access  Private
 const getProjects = async (req, res) => {
-  const projects = await Project.find({})
+  const filter = req.user.role === 'admin'
+    ? {}
+    : { $or: [{ owner: req.user.id }, { 'members.user': req.user.id }] };
+
+  const projects = await Project.find(filter)
     .populate('owner', 'name email avatar')
     .populate('members.user', 'name email avatar')
     .sort('-createdAt');
@@ -29,7 +33,7 @@ const getProject = async (req, res) => {
   }
 
   const isMember =
-    req.user.role === 'manager' ||
+    req.user.role === 'admin' ||
     project.owner._id.toString() === req.user.id ||
     project.members.some((m) => m.user._id.toString() === req.user.id);
 

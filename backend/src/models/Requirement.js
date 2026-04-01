@@ -33,6 +33,20 @@ const RequirementSchema = new mongoose.Schema(
       type: String,
       default: 'srs_extract',
     },
+    extractionVersion: {
+      type: Number,
+      default: 1,
+    },
+    lastStrategy: {
+      type: String,
+      default: 'standard',
+    },
+    validationScore: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100,
+    },
   },
   { timestamps: true }
 );

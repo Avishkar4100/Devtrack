@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {
   getStoriesByProject, getEpics, generateStories, saveGeneratedStories,
-  createStory, updateStory, deleteStory, suggestStories,
+  createStory, updateStory, deleteStory, suggestStories, bulkAssignStories,
 } = require('../controllers/storyController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -12,6 +12,7 @@ router.get('/epics/:projectId', getEpics);
 router.post('/generate/:projectId', authorize('manager', 'scrum_master', 'admin'), generateStories);
 router.post('/suggest/:projectId', authorize('manager', 'scrum_master', 'admin'), suggestStories);
 router.post('/save/:projectId', authorize('manager', 'scrum_master', 'admin'), saveGeneratedStories);
+router.post('/bulk-assign', authorize('manager', 'scrum_master', 'admin'), bulkAssignStories);
 router.post('/', createStory);
 router.route('/:id').put(updateStory).delete(deleteStory);
 

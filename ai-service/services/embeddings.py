@@ -34,10 +34,16 @@ class EmbeddingService:
                 SentenceTransformerEmbeddingFunction,
             )
 
-            if self.model_provider in ("sentence-transformers", "sentence_transformers", "st"):
+            # Handle local-onnx and sentence-transformers models
+            if self.model_name == "local-onnx" or self.model_provider in ("sentence-transformers", "sentence_transformers", "st"):
                 try:
-                    self._ef = SentenceTransformerEmbeddingFunction(model_name=self.model_name)
-                except Exception:
+                    # For local-onnx or sentence-transformers, use the default local model
+                    if self.model_name == "local-onnx":
+                        self._ef = DefaultEmbeddingFunction()
+                    else:
+                        self._ef = SentenceTransformerEmbeddingFunction(model_name=self.model_name)
+                except Exception as e:
+                    print(f"Warning: Failed to load {self.model_name}, falling back to default: {e}")
                     self._ef = DefaultEmbeddingFunction()
             else:
                 self._ef = DefaultEmbeddingFunction()

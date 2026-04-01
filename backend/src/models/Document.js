@@ -34,7 +34,7 @@ const DocumentSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['uploaded', 'processing', 'processed', 'failed'],
+      enum: ['uploaded', 'validating', 'parsing', 'extracting', 'processed', 'failed'],
       default: 'uploaded',
     },
     ingestionStatus: {
@@ -42,10 +42,34 @@ const DocumentSchema = new mongoose.Schema(
       embeddings: { type: Number, default: 0 },
       processingTime: { type: Number, default: 0 }, // ms
       errorMessage: { type: String },
+      errorStage: { type: String }, // Stage where error occurred
+      detectedFileType: { type: String }, // Actual detected file type
+      detectionMethod: { type: String }, // 'magic_number' or 'extension'
+      textLength: { type: Number, default: 0 },
+      wordCount: { type: Number, default: 0 },
+      validationPassed: { type: Boolean, default: false },
+      warnings: [String], // Array of warning messages
     },
     extractedText: {
       type: String,
       select: false,
+    },
+    extractedRequirements: {
+      functional: [String],
+      nonFunctional: [String],
+      modules: [String],
+      actors: [String],
+      extractedAt: Date,
+      extractionVersion: { type: Number, default: 1 },
+      lastStrategy: { type: String, default: 'standard' },
+      quality: {
+        functionalCount: { type: Number, default: 0 },
+        nonFunctionalCount: { type: Number, default: 0 },
+        moduleCount: { type: Number, default: 0 },
+        actorCount: { type: Number, default: 0 },
+      },
+      validationWarnings: [String],
+      validationScore: { type: Number, default: 0 }, // 0-100 score
     },
     version: {
       type: Number,

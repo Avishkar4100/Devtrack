@@ -39,19 +39,32 @@ api.interceptors.response.use(
   },
   (error) => {
     const message = error.response?.data?.message || error.message || 'Something went wrong'
+    const status = error.response?.status
+    const normalizedMessage = String(message || '').toLowerCase()
+
+    const isAuthSessionFailure =
+      status === 401 && (
+        normalizedMessage.includes('not authorized') ||
+        normalizedMessage.includes('invalid token') ||
+        normalizedMessage.includes('token has expired') ||
+        normalizedMessage.includes('user not found') ||
+        normalizedMessage.includes('account has been deactivated')
+      )
+
     appLogger.error('API response error', {
       method: error.config?.method,
       url: error.config?.url,
-      status: error.response?.status,
+      status,
       message,
     })
 
-    if (error.response?.status === 401) {
+    // Do not log out for Jira upstream 401s; only log out when app session auth is invalid.
+    if (isAuthSessionFailure) {
       useAuthStore.getState().logout()
       return Promise.reject(error)
     }
 
-    if (error.response?.status !== 404) {
+    if (status !== 404) {
       toast.error(message)
     }
 

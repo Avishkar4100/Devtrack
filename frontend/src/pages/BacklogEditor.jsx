@@ -4,6 +4,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import api from '@/lib/api'
 import toast from 'react-hot-toast'
 import { useWorkspaceStateStore } from '@/store/workspaceStateStore'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -100,13 +101,25 @@ export default function BacklogEditorPage() {
 
   const initialDraft = useMemo(() => {
     const fromRoute = location.state?.generatedBacklog
-    if (fromRoute) return normalizeBacklog(fromRoute)
-    if (workspaceState?.generatedBacklogDraft) return normalizeBacklog(workspaceState.generatedBacklogDraft)
-    return { epics: [], stories: [], tasks: [], subtasks: [] }
+    const normalized = fromRoute 
+      ? normalizeBacklog(fromRoute)
+      : workspaceState?.generatedBacklogDraft 
+        ? normalizeBacklog(workspaceState.generatedBacklogDraft)
+        : { epics: [], stories: [], tasks: [], subtasks: [] }
+    
+    // Ensure all required properties exist
+    return {
+      epics: normalized.epics || [],
+      stories: normalized.stories || [],
+      tasks: normalized.tasks || [],
+      subtasks: normalized.subtasks || [],
+    }
   }, [location.state, workspaceState])
 
   const [draft, setDraft] = useState(initialDraft)
   const [selected, setSelected] = useState({ type: 'epic', tempId: initialDraft.epics[0]?.tempId || '' })
+  const [selectedForDelete, setSelectedForDelete] = useState(new Set())
+  const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, itemCount: 0 })
 
   const { data: users = [] } = useQuery({
     queryKey: ['project-users', id],
@@ -158,10 +171,14 @@ export default function BacklogEditorPage() {
   const selectedItem = (allByType[selected.type] || []).find((x) => x.tempId === selected.tempId) || null
 
   const updateItem = (type, tempId, field, value) => {
-    setDraft((prev) => ({
-      ...prev,
-      [`${type}s`]: prev[`${type}s`].map((item) => item.tempId === tempId ? { ...item, [field]: value } : item),
-    }))
+    setDraft((prev) => {
+      const arrayKey = `${type}s`
+      const currentArray = prev[arrayKey] || []
+      return {
+        ...prev,
+        [arrayKey]: currentArray.map((item) => item.tempId === tempId ? { ...item, [field]: value } : item),
+      }
+    })
   }
 
   const addItem = (type, parent = null) => {
@@ -196,58 +213,190 @@ export default function BacklogEditorPage() {
       item.acceptanceCriteria = []
     }
 
-    setDraft((prev) => ({
-      ...prev,
-      [`${type}s`]: [...prev[`${type}s`], item],
-    }))
+    setDraft((prev) => {
+      const arrayKey = `${type}s`
+      const currentArray = prev[arrayKey] || []
+      return {
+        ...prev,
+        [arrayKey]: [...currentArray, item],
+      }
+    })
     setSelected({ type, tempId: item.tempId })
   }
 
   const deleteItem = (type, tempId) => {
     setDraft((prev) => {
-      const next = { ...prev }
+      // Ensure all arrays exist
+      const next = {
+        epics: prev.epics || [],
+        stories: prev.stories || [],
+        tasks: prev.tasks || [],
+        subtasks: prev.subtasks || [],
+      }
+      
       if (type === 'epic') {
-        next.epics = prev.epics.filter((e) => e.tempId !== tempId)
-        const storyIds = prev.stories.filter((s) => s.epicTempId === tempId).map((s) => s.tempId)
-        const taskIds = prev.tasks.filter((t) => t.epicTempId === tempId || storyIds.includes(t.parentTempId)).map((t) => t.tempId)
-        next.stories = prev.stories.filter((s) => s.epicTempId !== tempId)
-        next.tasks = prev.tasks.filter((t) => !taskIds.includes(t.tempId))
-        next.subtasks = prev.subtasks.filter((st) => !taskIds.includes(st.parentTempId))
+        const storyIds = next.stories.filter((s) => s.epicTempId === tempId).map((s) => s.tempId)
+        const taskIds = next.tasks.filter((t) => t.epicTempId === tempId || storyIds.includes(t.parentTempId)).map((t) => t.tempId)
+        next.epics = next.epics.filter((e) => e.tempId !== tempId)
+        next.stories = next.stories.filter((s) => s.epicTempId !== tempId)
+        next.tasks = next.tasks.filter((t) => !taskIds.includes(t.tempId))
+        next.subtasks = next.subtasks.filter((st) => !taskIds.includes(st.parentTempId))
       } else if (type === 'story') {
-        const taskIds = prev.tasks.filter((t) => t.parentTempId === tempId).map((t) => t.tempId)
-        next.stories = prev.stories.filter((s) => s.tempId !== tempId)
-        next.tasks = prev.tasks.filter((t) => t.parentTempId !== tempId)
-        next.subtasks = prev.subtasks.filter((st) => !taskIds.includes(st.parentTempId))
+        const taskIds = next.tasks.filter((t) => t.parentTempId === tempId).map((t) => t.tempId)
+        next.stories = next.stories.filter((s) => s.tempId !== tempId)
+        next.tasks = next.tasks.filter((t) => t.parentTempId !== tempId)
+        next.subtasks = next.subtasks.filter((st) => !taskIds.includes(st.parentTempId))
       } else if (type === 'task') {
-        next.tasks = prev.tasks.filter((t) => t.tempId !== tempId)
-        next.subtasks = prev.subtasks.filter((st) => st.parentTempId !== tempId)
-      } else {
-        next.subtasks = prev.subtasks.filter((st) => st.tempId !== tempId)
+        next.tasks = next.tasks.filter((t) => t.tempId !== tempId)
+        next.subtasks = next.subtasks.filter((st) => st.parentTempId !== tempId)
+      } else if (type === 'subtask') {
+        next.subtasks = next.subtasks.filter((st) => st.tempId !== tempId)
       }
       return next
     })
     setSelected({ type: 'epic', tempId: draft.epics[0]?.tempId || '' })
   }
 
-  const validateDraft = () => {
-    if (draft.epics.length < 2) return 'Minimum 2 epics are required.'
+  const toggleSelectForDelete = (type, tempId) => {
+    const key = `${type}:${tempId}`
+    const newSet = new Set(selectedForDelete)
+    if (newSet.has(key)) {
+      newSet.delete(key)
+    } else {
+      newSet.add(key)
+    }
+    setSelectedForDelete(newSet)
+  }
 
-    const hasEmpty = [...draft.epics, ...draft.stories, ...draft.tasks, ...draft.subtasks]
+  const bulkDelete = () => {
+    if (selectedForDelete.size === 0) return
+
+    setDraft((prev) => {
+      // Ensure all arrays exist
+      let next = {
+        epics: prev.epics || [],
+        stories: prev.stories || [],
+        tasks: prev.tasks || [],
+        subtasks: prev.subtasks || [],
+      }
+
+      // Collect all items to delete
+      const toDelete = Array.from(selectedForDelete).map((key) => {
+        const [type, tempId] = key.split(':')
+        return { type, tempId }
+      })
+
+      // Sort by type order (process epics first, then stories, then tasks, then subtasks)
+      const typeOrder = { epic: 0, story: 1, task: 2, subtask: 3 }
+      toDelete.sort((a, b) => typeOrder[a.type] - typeOrder[b.type])
+
+      // Delete each item (will cascade as needed)
+      toDelete.forEach(({ type, tempId }) => {
+        if (type === 'epic') {
+          const storyIds = next.stories.filter((s) => s.epicTempId === tempId).map((s) => s.tempId)
+          const taskIds = next.tasks.filter((t) => t.epicTempId === tempId || storyIds.includes(t.parentTempId)).map((t) => t.tempId)
+          next.epics = next.epics.filter((e) => e.tempId !== tempId)
+          next.stories = next.stories.filter((s) => s.epicTempId !== tempId)
+          next.tasks = next.tasks.filter((t) => !taskIds.includes(t.tempId))
+          next.subtasks = next.subtasks.filter((st) => !taskIds.includes(st.parentTempId))
+        } else if (type === 'story') {
+          const taskIds = next.tasks.filter((t) => t.parentTempId === tempId).map((t) => t.tempId)
+          next.stories = next.stories.filter((s) => s.tempId !== tempId)
+          next.tasks = next.tasks.filter((t) => t.parentTempId !== tempId)
+          next.subtasks = next.subtasks.filter((st) => !taskIds.includes(st.parentTempId))
+        } else if (type === 'task') {
+          next.tasks = next.tasks.filter((t) => t.tempId !== tempId)
+          next.subtasks = next.subtasks.filter((st) => st.parentTempId !== tempId)
+        } else if (type === 'subtask') {
+          next.subtasks = next.subtasks.filter((st) => st.tempId !== tempId)
+        }
+      })
+
+      return next
+    })
+
+    setSelectedForDelete(new Set())
+    setConfirmDialog({ isOpen: false, itemCount: 0 })
+    toast.success(`Deleted ${selectedForDelete.size} item(s)`)
+  }
+
+  const fixOrphans = () => {
+    setDraft((prev) => {
+      // Ensure all arrays exist
+      const epics = prev.epics || []
+      const stories = prev.stories || []
+      const tasks = prev.tasks || []
+      const subtasks = prev.subtasks || []
+      
+      const epicIds = new Set(epics.map((e) => e.tempId))
+      const storyIds = new Set(stories.map((s) => s.tempId))
+      const taskIds = new Set(tasks.map((t) => t.tempId))
+      const firstTaskId = tasks[0]?.tempId || null
+      const firstStoryId = stories[0]?.tempId || null
+      const firstEpicId = epics[0]?.tempId || null
+
+      let fixed = false
+
+      // Fix orphan stories
+      const fixedStories = stories.map((s) => {
+        if (!s.epicTempId || !epicIds.has(s.epicTempId)) {
+          fixed = true
+          return { ...s, epicTempId: firstEpicId, parentId: firstEpicId }
+        }
+        return s
+      })
+
+      // Fix orphan tasks
+      const fixedTasks = tasks.map((t) => {
+        if (!t.parentTempId || !storyIds.has(t.parentTempId)) {
+          fixed = true
+          const newParentId = firstStoryId
+          const parentStory = fixedStories.find((s) => s.tempId === newParentId)
+          return { ...t, parentTempId: newParentId, parentId: newParentId, epicTempId: parentStory?.epicTempId || firstEpicId }
+        }
+        return t
+      })
+
+      // Fix orphan subtasks
+      const fixedSubtasks = subtasks.map((st) => {
+        if (!st.parentTempId || !taskIds.has(st.parentTempId)) {
+          fixed = true
+          const newParentId = firstTaskId
+          const parentTask = fixedTasks.find((t) => t.tempId === newParentId)
+          return { ...st, parentTempId: newParentId, parentId: newParentId, epicTempId: parentTask?.epicTempId || firstEpicId }
+        }
+        return st
+      })
+
+      if (fixed) toast.success('Fixed orphaned items')
+      return { epics, stories: fixedStories, tasks: fixedTasks, subtasks: fixedSubtasks }
+    })
+  }
+
+  const validateDraft = () => {
+    const epics = draft.epics || []
+    const stories = draft.stories || []
+    const tasks = draft.tasks || []
+    const subtasks = draft.subtasks || []
+    
+    if (epics.length < 3) return 'Backlog must have 3 epics (will be auto-generated if missing).'
+
+    const hasEmpty = [...epics, ...stories, ...tasks, ...subtasks]
       .some((item) => !String(item.title || '').trim())
     if (hasEmpty) return 'All backlog items must have a title.'
 
-    const epicIds = new Set(draft.epics.map((e) => e.tempId))
-    const storyIds = new Set(draft.stories.map((s) => s.tempId))
-    const taskIds = new Set(draft.tasks.map((t) => t.tempId))
+    const epicIds = new Set(epics.map((e) => e.tempId))
+    const storyIds = new Set(stories.map((s) => s.tempId))
+    const taskIds = new Set(tasks.map((t) => t.tempId))
 
-    if (draft.stories.some((s) => !s.epicTempId || !epicIds.has(s.epicTempId))) return 'Found orphan story without epic link.'
-    if (draft.tasks.some((t) => !t.parentTempId || !storyIds.has(t.parentTempId))) return 'Found orphan task without story link.'
-    if (draft.subtasks.some((st) => !st.parentTempId || !taskIds.has(st.parentTempId))) return 'Found orphan subtask without task link.'
+    if (stories.some((s) => !s.epicTempId || !epicIds.has(s.epicTempId))) return 'All stories must be linked to an epic.'
+    if (tasks.some((t) => !t.parentTempId || !storyIds.has(t.parentTempId))) return 'All tasks must be linked to a story.'
+    if (subtasks.some((st) => !st.parentTempId || !taskIds.has(st.parentTempId))) return 'All subtasks must be linked to a task.'
 
-    const epicWithoutStories = draft.epics.some((e) => !draft.stories.some((s) => s.epicTempId === e.tempId))
-    if (epicWithoutStories) return 'Each epic must contain at least one story.'
+    // Not all epics need stories (they might be placeholders), so we skip this check
+    // const epicWithoutStories = epics.some((e) => !stories.some((s) => s.epicTempId === e.tempId))
 
-    const storyWithoutTasks = draft.stories.some((s) => !draft.tasks.some((t) => t.parentTempId === s.tempId))
+    const storyWithoutTasks = stories.some((s) => !tasks.some((t) => t.parentTempId === s.tempId))
     if (storyWithoutTasks) return 'Each story must contain at least one task.'
 
     return ''
@@ -258,11 +407,16 @@ export default function BacklogEditorPage() {
       const validationError = validateDraft()
       if (validationError) throw new Error(validationError)
 
+      const epics = draft.epics || []
+      const stories = draft.stories || []
+      const tasks = draft.tasks || []
+      const subtasks = draft.subtasks || []
+
       await api.post(`/stories/save/${id}`, {
-        epics: draft.epics,
-        stories: draft.stories,
-        tasks: draft.tasks,
-        subtasks: draft.subtasks,
+        epics,
+        stories,
+        tasks,
+        subtasks,
       })
 
       const freshEpics = (await api.get(`/stories/epics/${id}`)).data.data || []
@@ -280,7 +434,7 @@ export default function BacklogEditorPage() {
     onError: (error) => toast.error(error?.message || 'Failed to save backlog'),
   })
 
-  if (!draft.epics.length) {
+  if (!(draft.epics || []).length) {
     return (
       <div className="p-6 max-w-3xl mx-auto">
         <div className="card p-6 space-y-3">
@@ -296,16 +450,35 @@ export default function BacklogEditorPage() {
     <div className="p-4 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-3">
         <h1 className="text-xl font-semibold">Backlog Editor</h1>
-        <button className="btn-primary" onClick={() => saveAndPush.mutate()} disabled={saveAndPush.isPending}>
-          {saveAndPush.isPending ? 'Saving...' : 'Save and Push to Jira'}
-        </button>
+        <div className="flex gap-2">
+          {selectedForDelete.size > 0 && (
+            <button
+              className="btn-danger text-sm"
+              onClick={() => setConfirmDialog({ isOpen: true, itemCount: selectedForDelete.size })}
+            >
+              🗑️ Delete {selectedForDelete.size} ({selectedForDelete.size === 1 ? 'item' : 'items'})
+            </button>
+          )}
+          <button className="btn-secondary text-sm" onClick={fixOrphans}>
+            🔧 Fix Orphans
+          </button>
+          <button className="btn-primary" onClick={() => saveAndPush.mutate()} disabled={saveAndPush.isPending}>
+            {saveAndPush.isPending ? 'Saving...' : 'Save and Push to Jira'}
+          </button>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-[1.1fr_1fr] gap-3">
         <div className="card p-3 max-h-[76vh] overflow-auto space-y-2">
-          {draft.epics.map((epic) => (
+          {(draft.epics || []).map((epic) => (
             <div key={epic.tempId} className="border border-slate-700 rounded-md p-2">
               <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={selectedForDelete.has(`epic:${epic.tempId}`)}
+                  onChange={() => toggleSelectForDelete('epic', epic.tempId)}
+                  className="w-4 h-4 cursor-pointer"
+                />
                 <button className="text-left flex-1" onClick={() => setSelected({ type: 'epic', tempId: epic.tempId })}>EPIC: {epic.title}</button>
                 <button className="text-xs btn-secondary" onClick={() => addItem('story', epic.tempId)}>+ Story</button>
                 <button className="text-xs text-rose-300" onClick={() => deleteItem('epic', epic.tempId)}>Delete</button>
@@ -314,6 +487,12 @@ export default function BacklogEditorPage() {
               {(storiesByEpic.get(epic.tempId) || []).map((story) => (
                 <div key={story.tempId} className="ml-4 mt-2 border border-slate-800 rounded p-2">
                   <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedForDelete.has(`story:${story.tempId}`)}
+                      onChange={() => toggleSelectForDelete('story', story.tempId)}
+                      className="w-4 h-4 cursor-pointer"
+                    />
                     <button className="text-left flex-1" onClick={() => setSelected({ type: 'story', tempId: story.tempId })}>STORY: {story.title}</button>
                     <button className="text-xs btn-secondary" onClick={() => addItem('task', story.tempId)}>+ Task</button>
                     <button className="text-xs text-rose-300" onClick={() => deleteItem('story', story.tempId)}>Delete</button>
@@ -322,6 +501,12 @@ export default function BacklogEditorPage() {
                   {(tasksByStory.get(story.tempId) || []).map((task) => (
                     <div key={task.tempId} className="ml-4 mt-2 border border-slate-800 rounded p-2">
                       <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedForDelete.has(`task:${task.tempId}`)}
+                          onChange={() => toggleSelectForDelete('task', task.tempId)}
+                          className="w-4 h-4 cursor-pointer"
+                        />
                         <button className="text-left flex-1" onClick={() => setSelected({ type: 'task', tempId: task.tempId })}>TASK: {task.title}</button>
                         <button className="text-xs btn-secondary" onClick={() => addItem('subtask', task.tempId)}>+ Subtask</button>
                         <button className="text-xs text-rose-300" onClick={() => deleteItem('task', task.tempId)}>Delete</button>
@@ -329,6 +514,12 @@ export default function BacklogEditorPage() {
 
                       {(subtasksByTask.get(task.tempId) || []).map((subtask) => (
                         <div key={subtask.tempId} className="ml-4 mt-2 border border-slate-800 rounded p-2 flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedForDelete.has(`subtask:${subtask.tempId}`)}
+                            onChange={() => toggleSelectForDelete('subtask', subtask.tempId)}
+                            className="w-4 h-4 cursor-pointer"
+                          />
                           <button className="text-left flex-1" onClick={() => setSelected({ type: 'subtask', tempId: subtask.tempId })}>SUBTASK: {subtask.title}</button>
                           <button className="text-xs text-rose-300" onClick={() => deleteItem('subtask', subtask.tempId)}>Delete</button>
                         </div>
@@ -379,7 +570,7 @@ export default function BacklogEditorPage() {
                     updateItem('story', selected.tempId, 'parentId', e.target.value)
                   }}
                 >
-                  {draft.epics.map((e) => <option key={e.tempId} value={e.tempId}>Parent Epic: {e.title}</option>)}
+                  {(draft.epics || []).map((e) => <option key={e.tempId} value={e.tempId}>Parent Epic: {e.title}</option>)}
                 </select>
               )}
 
@@ -388,13 +579,13 @@ export default function BacklogEditorPage() {
                   className="input"
                   value={selectedItem.parentTempId || ''}
                   onChange={(e) => {
-                    const parentStory = draft.stories.find((s) => s.tempId === e.target.value)
+                    const parentStory = (draft.stories || []).find((s) => s.tempId === e.target.value)
                     updateItem('task', selected.tempId, 'parentTempId', e.target.value)
                     updateItem('task', selected.tempId, 'parentId', e.target.value)
                     if (parentStory?.epicTempId) updateItem('task', selected.tempId, 'epicTempId', parentStory.epicTempId)
                   }}
                 >
-                  {draft.stories.map((s) => <option key={s.tempId} value={s.tempId}>Parent Story: {s.title}</option>)}
+                  {(draft.stories || []).map((s) => <option key={s.tempId} value={s.tempId}>Parent Story: {s.title}</option>)}
                 </select>
               )}
 
@@ -403,19 +594,31 @@ export default function BacklogEditorPage() {
                   className="input"
                   value={selectedItem.parentTempId || ''}
                   onChange={(e) => {
-                    const parentTask = draft.tasks.find((t) => t.tempId === e.target.value)
+                    const parentTask = (draft.tasks || []).find((t) => t.tempId === e.target.value)
                     updateItem('subtask', selected.tempId, 'parentTempId', e.target.value)
                     updateItem('subtask', selected.tempId, 'parentId', e.target.value)
                     if (parentTask?.epicTempId) updateItem('subtask', selected.tempId, 'epicTempId', parentTask.epicTempId)
                   }}
                 >
-                  {draft.tasks.map((t) => <option key={t.tempId} value={t.tempId}>Parent Task: {t.title}</option>)}
+                  {(draft.tasks || []).map((t) => <option key={t.tempId} value={t.tempId}>Parent Task: {t.title}</option>)}
                 </select>
               )}
             </>
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        title="Delete Items"
+        message="Are you sure you want to delete the selected items? This action cannot be undone in unsaved draft."
+        confirmText="Delete"
+        cancelText="Keep"
+        isDangerous={true}
+        itemCount={confirmDialog.itemCount}
+        onConfirm={bulkDelete}
+        onCancel={() => setConfirmDialog({ isOpen: false, itemCount: 0 })}
+      />
     </div>
   )
 }

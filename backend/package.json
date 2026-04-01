@@ -7,6 +7,7 @@
     "start": "node server.js",
     "dev": "node scripts/kill-port.js 5000 && nodemon server.js",
     "dev:clean": "node scripts/kill-port.js 5000 && nodemon server.js",
+    "seed:dynamic": "node scripts/seed-dynamic-data.js",
     "test": "jest --passWithNoTests"
   },
   "dependencies": {
@@ -26,6 +27,7 @@
     "mongoose": "^8.4.3",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
     "nodemailer": "^6.9.14",
     "resend": "^6.9.3",
     "socket.io": "^4.7.5",

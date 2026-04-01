@@ -44,6 +44,17 @@ const SprintSchema = new mongoose.Schema(
     ],
     jiraSprintId: { type: String },
     order: { type: Number, default: 0 },
+    
+    // Auto-closure tracking
+    completedAt: { type: Date }, // When sprint was completed (manual or auto)
+    autoClosedAt: { type: Date }, // When auto-closure was triggered
+    wasAutoClosed: { type: Boolean, default: false }, // Whether it was auto-closed
+    closureReason: { type: String }, // 'manual' | 'auto_expired' | 'auto_overdue'
+    
+    // Closure statistics
+    storiesClosed: { type: Number, default: 0 },
+    storiesIncomplete: { type: Number, default: 0 },
+    storiesMoved: { type: Number, default: 0 },
   },
   {
     timestamps: true,

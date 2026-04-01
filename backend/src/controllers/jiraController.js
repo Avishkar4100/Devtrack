@@ -545,7 +545,15 @@ const listServerProjectMembers = async (req, res) => {
   const includeApps = String(req.query.includeApps || 'false').toLowerCase() === 'true';
   const includeGroups = String(req.query.includeGroups || 'true').toLowerCase() !== 'false';
 
-  const roleMap = await jiraRequest(client, 'get', `/project/${projectIdOrKey}/role`);
+  let roleMap = {};
+  try {
+    roleMap = await jiraRequest(client, 'get', `/project/${projectIdOrKey}/role`);
+  } catch (roleError) {
+    // If role endpoint fails due to permissions, log and continue to fallback
+    logger.warn(`Failed to fetch roles for project ${projectIdOrKey}: ${roleError.message}. Using fallback approach.`);
+    roleMap = {};
+  }
+
   const roleEntries = Object.entries(roleMap || {});
 
   const memberMap = new Map();
