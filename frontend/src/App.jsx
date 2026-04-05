@@ -15,6 +15,7 @@ import SettingsPage from '@/pages/Settings'
 import InsightsPage from '@/pages/Insights'
 import AIPlannerPage from '@/pages/AIPlanner'
 import WorkspacePage from '@/pages/Workspace'
+import ComponentsDemo from '@/pages/ComponentsDemo'
 import AdminLayout from '@/components/AdminLayout'
 import AdminLoginPage from '@/pages/AdminLogin'
 import AdminOverviewPage from '@/pages/AdminOverview'
@@ -58,6 +59,7 @@ export default function App() {
       <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
       <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
       <Route path="/admin/login" element={<AdminPublicRoute><AdminLoginPage /></AdminPublicRoute>} />
+      <Route path="/components-demo" element={<ComponentsDemo />} />
 
       {/* Password reset — public, no auth needed */}
       <Route path="/reset-password/:token" element={<ResetPasswordPage />} />

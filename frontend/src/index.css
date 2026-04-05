@@ -1,6 +1,10 @@
 ﻿/* Inter + JetBrains Mono fonts */
 @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:wght@400;600;700&display=swap');
 
+/* Import component styles */
+@import './components/effects/effects.css';
+@import './components/effects/micro-interactions.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

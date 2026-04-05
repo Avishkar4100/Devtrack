@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import api from '@/lib/api'
 import { useProjectStore } from '@/store/projectStore'
 import { useWorkspaceStateStore } from '@/store/workspaceStateStore'
+import { useThemeStore } from '@/store/themeStore'
 import { appLogger } from '@/lib/logger'
 import toast from 'react-hot-toast'
 
@@ -376,14 +377,14 @@ export default function AIPlannerPage() {
     if (!items.length) return null
     return (
       <div className="space-y-1">
-        <p className="text-[11px] uppercase tracking-wide px-1" style={{ color: '#a0a0a0' }}>{title}</p>
+        <p className="text-[11px] uppercase tracking-wide px-1" style={{ color: 'var(--text-secondary)' }}>{title}</p>
         {items.map((s, idx) => {
           const value = `${prefix}: ${s}`
           return (
             <button
               key={`${prefix}-${idx}-${s}`}
               className="w-full text-left px-3 py-2 rounded-[10px] text-sm font-semibold border"
-              style={{ background: '#242424', color: '#e0e0e0', borderColor: '#333' }}
+              style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text-primary)', borderColor: 'var(--border-card)' }}
               onClick={() => addSuggestionChip(value)}
             >
               {value}
@@ -711,15 +712,15 @@ export default function AIPlannerPage() {
 
   return (
     <div className="p-5 max-w-[1250px] mx-auto">
-      <h1 className="text-[40px] font-bold leading-none mb-4" style={{ color: '#e0e0e0' }}>AI Planner</h1>
+      <h1 className="text-[40px] font-bold leading-none mb-4" style={{ color: 'var(--text-primary)' }}>AI Planner</h1>
 
       <div className="flex items-center gap-2 mb-3">
         <button
           className="px-4 py-1.5 text-[14px] font-semibold rounded-[10px] border"
           style={{
-            background: aiPlannerTab === 'planner' ? 'rgba(26, 115, 232, 0.20)' : '#2a2a2a',
-            borderColor: aiPlannerTab === 'planner' ? 'rgba(26, 115, 232, 0.5)' : '#444',
-            color: aiPlannerTab === 'planner' ? '#90caf9' : '#a0a0a0',
+            background: aiPlannerTab === 'planner' ? 'rgba(26, 115, 232, 0.20)' : 'var(--bg-card)',
+            borderColor: aiPlannerTab === 'planner' ? 'rgba(26, 115, 232, 0.5)' : 'var(--border-card)',
+            color: aiPlannerTab === 'planner' ? '#90caf9' : 'var(--text-secondary)',
           }}
           onClick={() => setAiPlannerTab('planner')}
         >
@@ -728,9 +729,9 @@ export default function AIPlannerPage() {
         <button
           className="px-4 py-1.5 text-[14px] font-semibold rounded-[10px] border"
           style={{
-            background: aiPlannerTab === 'backlog' ? 'rgba(26, 115, 232, 0.20)' : '#2a2a2a',
-            borderColor: aiPlannerTab === 'backlog' ? 'rgba(26, 115, 232, 0.5)' : '#444',
-            color: aiPlannerTab === 'backlog' ? '#90caf9' : '#a0a0a0',
+            background: aiPlannerTab === 'backlog' ? 'rgba(26, 115, 232, 0.20)' : 'var(--bg-card)',
+            borderColor: aiPlannerTab === 'backlog' ? 'rgba(26, 115, 232, 0.5)' : 'var(--border-card)',
+            color: aiPlannerTab === 'backlog' ? '#90caf9' : 'var(--text-secondary)',
           }}
           onClick={() => setAiPlannerTab('backlog')}
         >
@@ -740,21 +741,21 @@ export default function AIPlannerPage() {
 
       {aiPlannerTab === 'planner' ? (
         <div className="grid lg:grid-cols-[1.08fr_0.92fr] gap-3">
-          <div className="rounded-2xl border p-4" style={{ background: '#1a1a1a', borderColor: '#333' }}>
+          <div className="rounded-2xl border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border-card)' }}>
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h3 className="text-[30px] font-bold" style={{ color: '#e0e0e0' }}>SRS Ingestion</h3>
-                <p className="text-sm" style={{ color: '#a0a0a0' }}>Upload - Process - Suggest - Generate</p>
+                <h3 className="text-[30px] font-bold" style={{ color: 'var(--text-primary)' }}>SRS Ingestion</h3>
+                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Upload - Process - Suggest - Generate</p>
               </div>
               <span className="px-3 py-1 rounded-full text-[12px] font-bold" style={{
-                background: latestDoc?.status === 'processed' ? 'rgba(24,128,56,0.14)' : 'rgba(251,188,4,0.16)',
-                color: latestDoc?.status === 'processed' ? '#188038' : '#8d5a00',
+                background: latestDoc?.status === 'processed' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(14, 165, 233, 0.15)',
+                color: latestDoc?.status === 'processed' ? '#22c55e' : '#0ea5e9',
               }}>
                 {(latestDoc?.status || 'uploaded').toUpperCase()}
               </span>
             </div>
 
-            <p className="mt-2 text-sm" style={{ color: '#a0a0a0' }}>Current SRS: {srsStatusLabel}</p>
+            <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>Current SRS: {srsStatusLabel}</p>
 
             <div className="flex flex-wrap items-center gap-2 mt-3">
               <input
@@ -771,13 +772,13 @@ export default function AIPlannerPage() {
               </button>
             </div>
 
-            <p className="text-xs mt-2" style={{ color: '#a0a0a0' }}>Selected file: {selectedFileSummary}</p>
+            <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)' }}>Selected file: {selectedFileSummary}</p>
 
             <div className="mt-3">
-              <label className="block text-sm font-semibold mb-1" style={{ color: '#e0e0e0' }}>Planning Prompt</label>
+              <label className="block text-sm font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Planning Prompt</label>
               <textarea
                 className="input min-h-[110px]"
-                style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'var(--border-card)', color: 'var(--text-primary)' }}
                 value={planningPrompt}
                 onChange={(e) => setPlanningPrompt(e.target.value)}
                 placeholder="Describe planning direction"
@@ -785,10 +786,10 @@ export default function AIPlannerPage() {
             </div>
 
             <div className="mt-3">
-              <label className="block text-sm font-semibold mb-1" style={{ color: '#e0e0e0' }}>Chat Input</label>
+              <label className="block text-sm font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Chat Input</label>
               <input
                 className="input"
-                style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'var(--border-card)', color: 'var(--text-primary)' }}
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 placeholder="Ask planner for next sprint plan"
@@ -816,13 +817,13 @@ export default function AIPlannerPage() {
             </div>
 
             <div className="mt-4">
-              <p className="text-sm font-semibold" style={{ color: '#e0e0e0' }}>Selected Suggestion Chips</p>
+              <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Selected Suggestion Chips</p>
               {!selectedSuggestionChips.length ? (
-                <p className="text-sm mt-1" style={{ color: '#a0a0a0' }}>No chips selected.</p>
+                <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>No chips selected.</p>
               ) : (
                 <div className="flex flex-wrap gap-2 mt-2">
                   {selectedSuggestionChips.map((chip) => (
-                    <button key={chip} className="px-2 py-1 text-xs rounded-full border" style={{ borderColor: '#555', color: '#90caf9', background: '#1e3a5f' }} onClick={() => removeSuggestionChip(chip)}>
+                    <button key={chip} className="px-2 py-1 text-xs rounded-full border" style={{ borderColor: 'rgba(99, 102, 241, 0.4)', color: '#90caf9', background: 'rgba(99, 102, 241, 0.15)' }} onClick={() => removeSuggestionChip(chip)}>
                       {chip} x
                     </button>
                   ))}
@@ -831,25 +832,25 @@ export default function AIPlannerPage() {
             </div>
           </div>
 
-          <div className="rounded-2xl border p-4" style={{ background: '#1a1a1a', borderColor: '#333' }}>
-            <h3 className="text-[30px] font-bold" style={{ color: '#e0e0e0' }}>Suggested Structure</h3>
-            <p className="text-sm mt-1" style={{ color: '#a0a0a0' }}>Based on project module, phase, requirements, and commit history context</p>
+          <div className="rounded-2xl border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border-card)' }}>
+            <h3 className="text-[30px] font-bold" style={{ color: 'var(--text-primary)' }}>Suggested Structure</h3>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Based on project module, phase, requirements, and commit history context</p>
 
             <div className="mt-3 space-y-2">
               {renderSuggestionGroup('Epics', 'EPIC', suggestions.epics)}
               {renderSuggestionGroup('Stories', 'STORY', suggestions.stories)}
               {renderSuggestionGroup('Tasks', 'TASK', suggestions.tasks)}
-              {!hasSuggestions && <p className="text-sm" style={{ color: '#5f6368' }}>Click Suggest to generate dynamic recommendations.</p>}
+              {!hasSuggestions && <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Click Suggest to generate dynamic recommendations.</p>}
             </div>
 
-            <div className="mt-4 pt-3 border-t" style={{ borderColor: '#333' }}>
-              <h4 className="text-[20px] font-bold" style={{ color: '#e0e0e0' }}>Planner Timeline</h4>
+            <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--border-card)' }}>
+              <h4 className="text-[20px] font-bold" style={{ color: 'var(--text-primary)' }}>Planner Timeline</h4>
               <div className="mt-2 space-y-2 max-h-[320px] overflow-auto">
                 {plannerChat.map((msg, idx) => (
                   <div key={`${msg.role}-${idx}`} className="rounded-md border px-3 py-2 text-sm" style={{
-                    borderColor: '#333',
-                    background: msg.role === 'assistant' ? '#242424' : '#1e3a5f',
-                    color: '#e0e0e0',
+                    borderColor: 'var(--border-card)',
+                    background: msg.role === 'assistant' ? 'rgba(255,255,255,0.05)' : 'rgba(99, 102, 241, 0.15)',
+                    color: 'var(--text-primary)',
                   }}>
                     <span className="font-semibold mr-2">{msg.role === 'assistant' ? 'AI' : 'You'}:</span>
                     {msg.text}
@@ -869,25 +870,25 @@ export default function AIPlannerPage() {
           </div>
 
           <div className="grid lg:grid-cols-[1.08fr_0.92fr] gap-3">
-            <div className="rounded-2xl border p-3" style={{ background: '#1a1a1a', borderColor: '#333' }}>
+            <div className="rounded-2xl border p-3" style={{ background: 'var(--bg-card)', borderColor: 'var(--border-card)' }}>
               <div className="space-y-2 max-h-[70vh] overflow-auto pr-1">
                 {backlogDraft.epics.map((epic) => (
-                  <div key={epic.tempId} className="rounded-xl border p-2" style={{ borderColor: '#333', background: '#242424' }}>
+                  <div key={epic.tempId} className="rounded-xl border p-2" style={{ borderColor: 'var(--border-card)', background: 'rgba(255,255,255,0.05)' }}>
                     <div className="flex items-center justify-between gap-2">
-                      <button className="text-left font-semibold text-[15px] flex-1" style={{ color: '#e0e0e0' }} onClick={() => setSelectedItem({ type: 'epic', tempId: epic.tempId })}>
+                      <button className="text-left font-semibold text-[15px] flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'epic', tempId: epic.tempId })}>
                         EPIC: {epic.title}
                       </button>
                       <div className="flex items-center gap-2">
                         <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('story', epic.tempId)}>+ Story</button>
-                        <button className="btn-sm" style={{ background: '#ffe9ee', color: '#b3261e', border: '1px solid #f1c8d3' }} onClick={() => removeByTempId('epics', epic.tempId)}>Delete</button>
+                        <button className="btn-sm" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }} onClick={() => removeByTempId('epics', epic.tempId)}>Delete</button>
                       </div>
                     </div>
 
                     <div className="ml-4 mt-2 space-y-2">
                       {(storiesByEpic.get(epic.tempId) || []).map((item) => (
-                        <div key={item.tempId} className="rounded-lg border p-2" style={{ borderColor: '#333', background: '#1e1e1e' }}>
+                        <div key={item.tempId} className="rounded-lg border p-2" style={{ borderColor: 'var(--border-card)', background: 'rgba(255,255,255,0.03)' }}>
                           <div className="flex items-center justify-between gap-2">
-                            <button className="text-left text-[14px] font-medium flex-1" style={{ color: '#e0e0e0' }} onClick={() => setSelectedItem({ type: item.type, tempId: item.tempId })}>
+                            <button className="text-left text-[14px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: item.type, tempId: item.tempId })}>
                               {item.type === 'task' ? 'TASK' : 'STORY'}: {item.title}
                             </button>
                             <div className="flex items-center gap-2">
@@ -896,17 +897,17 @@ export default function AIPlannerPage() {
                               ) : (
                                 <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('subtask', item.tempId)}>+ Subtask</button>
                               )}
-                              <button className="btn-sm" style={{ background: '#ffe9ee', color: '#b3261e', border: '1px solid #f1c8d3' }} onClick={() => removeByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId)}>Delete</button>
+                              <button className="btn-sm" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }} onClick={() => removeByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId)}>Delete</button>
                             </div>
                           </div>
 
                           {(backlogDraft.subtasks || []).filter((st) => st.parentTempId === item.tempId).map((st) => (
-                            <div key={st.tempId} className="ml-4 mt-2 rounded-lg border p-2" style={{ borderColor: '#333', background: '#1a1a1a' }}>
+                            <div key={st.tempId} className="ml-4 mt-2 rounded-lg border p-2" style={{ borderColor: 'var(--border-card)', background: 'var(--bg-card)' }}>
                               <div className="flex items-center justify-between gap-2">
-                                <button className="text-left text-[13px] font-medium flex-1" style={{ color: '#e0e0e0' }} onClick={() => setSelectedItem({ type: 'subtask', tempId: st.tempId })}>
+                                <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'subtask', tempId: st.tempId })}>
                                   SUBTASK: {st.title}
                                 </button>
-                                <button className="btn-sm" style={{ background: '#ffe9ee', color: '#b3261e', border: '1px solid #f1c8d3' }} onClick={() => removeByTempId('subtasks', st.tempId)}>Delete</button>
+                                <button className="btn-sm" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }} onClick={() => removeByTempId('subtasks', st.tempId)}>Delete</button>
                               </div>
                             </div>
                           ))}
@@ -915,33 +916,33 @@ export default function AIPlannerPage() {
                     </div>
                   </div>
                 ))}
-                {!backlogDraft.epics.length && <p className="text-sm" style={{ color: '#a0a0a0' }}>Generate backlog first to see hierarchy.</p>}
+                {!backlogDraft.epics.length && <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Generate backlog first to see hierarchy.</p>}
               </div>
             </div>
 
-            <div className="rounded-2xl border p-4" style={{ background: '#1a1a1a', borderColor: '#333' }}>
-              <h3 className="text-[30px] font-bold" style={{ color: '#e0e0e0' }}>Item Details</h3>
+            <div className="rounded-2xl border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border-card)' }}>
+              <h3 className="text-[30px] font-bold" style={{ color: 'var(--text-primary)' }}>Item Details</h3>
               {!selectedBacklogItem ? (
-                <p className="text-sm mt-3" style={{ color: '#a0a0a0' }}>Select a backlog item from tree.</p>
+                <p className="text-sm mt-3" style={{ color: 'var(--text-secondary)' }}>Select a backlog item from tree.</p>
               ) : (
                 <div className="mt-3 space-y-2">
                   <input
                     className="input"
-                    style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                    style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'var(--border-card)', color: 'var(--text-primary)' }}
                     value={selectedBacklogItem.title || ''}
                     onChange={(e) => updateByTempId(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, 'title', e.target.value)}
                     placeholder="Title"
                   />
                   <textarea
                     className="input min-h-[100px]"
-                    style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                    style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'var(--border-card)', color: 'var(--text-primary)' }}
                     value={selectedBacklogItem.description || ''}
                     onChange={(e) => updateByTempId(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, 'description', e.target.value)}
                     placeholder="Description"
                   />
                   <select
                     className="input"
-                    style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                    style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'var(--border-card)', color: 'var(--text-primary)' }}
                     value={selectedBacklogItem.assignee || ''}
                     onChange={(e) => updateByTempId(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, 'assignee', e.target.value)}
                   >
@@ -953,7 +954,7 @@ export default function AIPlannerPage() {
                   <div className="grid grid-cols-2 gap-2">
                     <select
                       className="input"
-                      style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                      style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'var(--border-card)', color: 'var(--text-primary)' }}
                       value={selectedBacklogItem.priority || 'medium'}
                       onChange={(e) => updateByTempId(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, 'priority', e.target.value)}
                     >
@@ -965,12 +966,12 @@ export default function AIPlannerPage() {
                       type="number"
                       min="0"
                       className="input"
-                      style={{ background: '#242424', borderColor: '#333', color: '#e0e0e0' }}
+                      style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'var(--border-card)', color: 'var(--text-primary)' }}
                       value={selectedBacklogItem.storyPoints || 0}
                       onChange={(e) => updateByTempId(getCollectionFromType(selectedBacklogItem.type), selectedBacklogItem.tempId, 'storyPoints', Number(e.target.value) || 0)}
                     />
                   </div>
-                  <label className="flex items-center gap-2 text-sm" style={{ color: '#e0e0e0' }}>
+                  <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-primary)' }}>
                     <input
                       type="checkbox"
                       checked={selectedBacklogItem.selected !== false}

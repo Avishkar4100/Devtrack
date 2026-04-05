@@ -1,0 +1,257 @@
+/* ─────────────────────────────────────────────────────────────
+   MICRO-INTERACTIONS & POLISH
+   ───────────────────────────────────────────────────────────── */
+
+/* Smooth hover scale effect */
+.hover-scale {
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), 
+              box-shadow 0.3s ease-out;
+}
+
+.hover-scale:hover {
+  transform: scale(1.05);
+}
+
+/* Magnetic hover effect */
+.magnetic-hover {
+  position: relative;
+  cursor: pointer;
+  transition: all 0.3s ease-out;
+}
+
+/* Smooth color transitions */
+.color-transition {
+  transition: color 0.2s ease-out, background-color 0.2s ease-out;
+}
+
+/* Focus ring styles */
+.focus-ring:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Press animation */
+@keyframes press {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.press {
+  animation: press 0.2s ease-out;
+}
+
+/* Ripple effect */
+@keyframes ripple {
+  to {
+    transform: scale(4);
+    opacity: 0;
+  }
+}
+
+.ripple-effect::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  background: rgba(99, 102, 241, 0.6);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  animation: ripple 0.6s ease-out;
+}
+
+/* Smooth entrance animations */
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-entrance {
+  animation: slideInUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Loading pulse */
+@keyframes pulse-neon {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.pulse-neon {
+  animation: pulse-neon 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Shake effect for errors */
+@keyframes shake {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  10%, 30%, 50%, 70%, 90% {
+    transform: translateX(-4px);
+  }
+  20%, 40%, 60%, 80% {
+    transform: translateX(4px);
+  }
+}
+
+.shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+/* Smooth dropdown animation */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dropdown-menu {
+  animation: slideDown 0.2s ease-out;
+}
+
+/* Button press feedback */
+button, [role="button"] {
+  position: relative;
+  overflow: hidden;
+}
+
+button:active, [role="button"]:active {
+  transform: scale(0.98);
+}
+
+/* Active state highlight */
+.active-indicator {
+  position: relative;
+}
+
+.active-indicator::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  animation: slideInLeft 0.3s ease-out;
+}
+
+/* Smooth backdrop transitions */
+.backdrop-transition {
+  transition: backdrop-filter 0.3s ease-out, 
+              background-color 0.3s ease-out;
+}
+
+/* Icon spin animation */
+@keyframes spin-smooth {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.icon-spin {
+  animation: spin-smooth 2s linear infinite;
+}
+
+/* Text underline animation */
+@keyframes underline-expand {
+  from {
+    width: 0;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+.underline-animate::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: #6366f1;
+  animation: underline-expand 0.3s ease-out forwards;
+}
+
+/* Number counter animation */
+@keyframes counter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.counter-transition {
+  animation: counter 0.4s ease-out;
+}
+
+/* Smooth color blend */
+.color-blend {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Neon flicker effect */
+@keyframes neon-flicker {
+  0%, 100% {
+    opacity: 1;
+  }
+  7% {
+    opacity: 0.9;
+  }
+  15% {
+    opacity: 0.8;
+  }
+}
+
+.neon-flicker {
+  animation: neon-flicker 0.15s infinite;
+}
