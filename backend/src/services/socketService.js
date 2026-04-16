@@ -12,9 +12,21 @@ class SocketService {
       return;
     }
     try {
+      const timestamp = new Date().toISOString();
+
+      if (event === 'notification' && data && typeof data === 'object') {
+        io.to(`project:${projectId}`).emit(event, {
+          event,
+          timestamp,
+          ...data,
+        });
+        return;
+      }
+
       io.to(`project:${projectId}`).emit(event, {
         type: event,
-        timestamp: new Date().toISOString(),
+        event,
+        timestamp,
         data,
       });
     } catch (err) {

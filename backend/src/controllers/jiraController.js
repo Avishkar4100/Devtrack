@@ -5,6 +5,8 @@ const Story = require('../models/Story');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const logger = require('../config/logger');
+const { getActiveAIConfigPayload } = require('../services/aiConfigService');
+const { resolveAiServiceBaseUrl } = require('../utils/aiServiceUrl');
 
 const normalizeJiraDomain = (domain = '') => {
   const raw = domain.toString().trim().replace(/^"|"$/g, '');
@@ -30,6 +32,24 @@ const toAdfText = (text = '') => ({
 });
 
 const capitalize = (value = '') => value.charAt(0).toUpperCase() + value.slice(1);
+
+const toIdString = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    if (typeof value.toHexString === 'function') {
+      return value.toHexString();
+    }
+    if (value._id && value._id !== value) {
+      return toIdString(value._id);
+    }
+    if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) {
+      const text = value.toString();
+      return text === '[object Object]' ? '' : text;
+    }
+  }
+  return '';
+};
 
 const jiraStatusToLocal = (statusName = '') => {
   const name = statusName.toLowerCase();
@@ -79,13 +99,45 @@ const isUserRoleActor = (actor) => actor?.type === 'atlassian-user-role-actor';
 
 const buildMemberFromUser = (user = {}, roleName = '') => ({
   accountId: user?.accountId || null,
-  name: user?.displayName || user?.name || 'Unknown',
+  name: user?.displayName || user?.name || user?.publicName || user?.emailAddress || 'Unknown',
   email: user?.emailAddress || 'N/A',
   avatar: user?.avatarUrls?.['48x48'] || null,
   type: 'atlassian-user-role-actor',
   accountType: user?.accountType || null,
   roles: roleName ? [roleName] : [],
 });
+
+const jiraAgileRequest = async (client, method, path, options = {}) => {
+  const safePath = sanitizeJiraPath(path);
+  if (!safePath) {
+    const err = new Error('Invalid Jira Agile API path');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const { params, data } = options;
+  const agileBaseURL = `https://${client.jiraDomain}/rest/agile/1.0`;
+
+  try {
+    const response = await axios({
+      method,
+      url: `${agileBaseURL}${safePath}`,
+      auth: client.auth,
+      params,
+      data,
+    });
+    return response.data;
+  } catch (error) {
+    const status = error.response?.status || 500;
+    const remoteMessage =
+      error.response?.data?.errorMessages?.[0] ||
+      error.response?.data?.message ||
+      error.message;
+    const err = new Error(`Jira Agile API ${method.toUpperCase()} ${safePath} failed: ${remoteMessage}`);
+    err.statusCode = status;
+    throw err;
+  }
+};
 
 const fetchGroupMembers = async (client, actorGroup = {}) => {
   const members = [];
@@ -212,6 +264,48 @@ const jiraSearch = async ({ client, jql, maxResults = 100, startAt = 0, fields =
   throw lastError || new Error('No compatible Jira search API variant succeeded');
 };
 
+const jiraSearchAllIssues = async ({ client, jql, fields = [], pageSize = 200, maxPages = 100 }) => {
+  const allIssues = [];
+  let startAt = 0;
+  let page = 0;
+  let total = 0;
+
+  while (page < maxPages) {
+    const data = await jiraSearch({
+      client,
+      jql,
+      startAt,
+      maxResults: pageSize,
+      fields,
+    });
+
+    const issues = Array.isArray(data?.issues) ? data.issues : [];
+    const currentStartAt = Number(data?.startAt ?? startAt) || startAt;
+    const pageMaxResults = Number(data?.maxResults ?? pageSize) || pageSize;
+    total = Number(data?.total ?? total) || total;
+
+    allIssues.push(...issues);
+
+    const nextStartAt = currentStartAt + (issues.length || pageMaxResults);
+    const reachedEndByTotal = total > 0 && nextStartAt >= total;
+    const reachedEndByCount = issues.length < pageMaxResults;
+
+    if (issues.length === 0 || reachedEndByTotal || reachedEndByCount) {
+      break;
+    }
+
+    startAt = nextStartAt;
+    page += 1;
+  }
+
+  return {
+    startAt: 0,
+    maxResults: allIssues.length,
+    total: total || allIssues.length,
+    issues: allIssues,
+  };
+};
+
 const ensureProjectAccess = async (projectId, user) => {
   const project = await Project.findById(projectId);
   if (!project) {
@@ -223,8 +317,8 @@ const ensureProjectAccess = async (projectId, user) => {
   const isMember =
     user.role === 'manager' ||
     user.role === 'scrum_master' ||
-    project.owner.toString() === user.id ||
-    project.members.some((m) => m.user.toString() === user.id);
+    toIdString(project.owner) === user.id ||
+    project.members.some((m) => toIdString(m?.user) === user.id);
 
   if (!isMember) {
     const err = new Error('Not authorized to access this project');
@@ -488,11 +582,26 @@ const pushToJira = async (req, res) => {
 // @route   GET /api/jira/server/projects
 // @access  Private
 const listServerProjects = async (req, res) => {
-  const client = await getJiraClient(req.user.id);
-  const data = await jiraRequest(client, 'get', '/project/search', {
-    params: { maxResults: 100 },
-  });
-  res.status(200).json({ success: true, data: data.values || [] });
+  try {
+    const client = await getJiraClient(req.user.id);
+    const data = await jiraRequest(client, 'get', '/project/search', {
+      params: { maxResults: 100 },
+    });
+    return res.status(200).json({ success: true, data: data.values || [] });
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (message.toLowerCase().includes('jira credentials not configured')) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        integration: {
+          jiraConfigured: false,
+          message: 'Jira credentials not configured for this user yet.',
+        },
+      });
+    }
+    throw error;
+  }
 };
 
 // @desc    Create Jira project
@@ -581,10 +690,11 @@ const listServerProjectMembers = async (req, res) => {
     actors.forEach((actor) => {
       if (!isUserRoleActor(actor)) return;
 
-      const user = actor?.actorUser || {
+      const user = {
+        ...(actor?.actorUser || {}),
         accountId: actor?.accountId,
-        displayName: actor?.displayName || actor?.name,
-        emailAddress: actor?.emailAddress,
+        displayName: actor?.actorUser?.displayName || actor?.displayName || actor?.name,
+        emailAddress: actor?.actorUser?.emailAddress || actor?.emailAddress,
         accountType: actor?.accountType,
       };
       const item = buildMemberFromUser(user, roleName);
@@ -655,6 +765,109 @@ const listServerProjectMembers = async (req, res) => {
   });
 };
 
+// @desc    Get Jira active sprint and sprint timeline for a project key
+// @route   GET /api/jira/server/projects/:projectIdOrKey/active-sprint
+// @access  Private
+const getServerProjectActiveSprint = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  const { projectIdOrKey } = req.params;
+
+  const boardSearch = await jiraAgileRequest(client, 'get', '/board', {
+    params: {
+      projectKeyOrId: projectIdOrKey,
+      type: 'scrum',
+      maxResults: 50,
+    },
+  });
+
+  const boards = Array.isArray(boardSearch?.values) ? boardSearch.values : [];
+  const board = boards[0] || null;
+
+  if (!board) {
+    return res.status(200).json({
+      success: true,
+      data: {
+        projectKey: projectIdOrKey,
+        board: null,
+        activeSprint: null,
+        sprints: [],
+        activeIssues: [],
+      },
+    });
+  }
+
+  const allSprints = [];
+  let startAt = 0;
+  let done = false;
+
+  while (!done) {
+    const sprintPage = await jiraAgileRequest(client, 'get', `/board/${board.id}/sprint`, {
+      params: {
+        state: 'active,closed,future',
+        startAt,
+        maxResults: 50,
+      },
+    });
+
+    const pageValues = Array.isArray(sprintPage?.values) ? sprintPage.values : [];
+    allSprints.push(...pageValues);
+
+    const pageStartAt = Number(sprintPage?.startAt || startAt);
+    const pageMaxResults = Number(sprintPage?.maxResults || 50);
+    const isLast = sprintPage?.isLast === true;
+    const nextStartAt = pageStartAt + pageValues.length;
+
+    done = isLast || pageValues.length < pageMaxResults;
+    startAt = nextStartAt;
+
+    if (pageValues.length === 0) done = true;
+  }
+
+  const activeSprint = allSprints.find((s) => s?.state?.toLowerCase() === 'active') || null;
+
+  let activeIssues = [];
+  if (activeSprint?.id) {
+    let issueStartAt = 0;
+    let issueDone = false;
+
+    while (!issueDone) {
+      const issuePage = await jiraAgileRequest(client, 'get', `/board/${board.id}/sprint/${activeSprint.id}/issue`, {
+        params: {
+          startAt: issueStartAt,
+          maxResults: 100,
+          fields: 'summary,status,assignee,priority,issuetype,updated',
+        },
+      });
+
+      const pageIssues = Array.isArray(issuePage?.issues) ? issuePage.issues : [];
+      activeIssues.push(...pageIssues);
+
+      const pageStartAt = Number(issuePage?.startAt || issueStartAt);
+      const pageMaxResults = Number(issuePage?.maxResults || 100);
+      const total = Number(issuePage?.total || activeIssues.length);
+      const nextStartAt = pageStartAt + pageIssues.length;
+
+      issueDone = pageIssues.length === 0 || nextStartAt >= total || pageIssues.length < pageMaxResults;
+      issueStartAt = nextStartAt;
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      projectKey: projectIdOrKey,
+      board: {
+        id: board.id,
+        name: board.name,
+        type: board.type,
+      },
+      activeSprint,
+      sprints: allSprints,
+      activeIssues,
+    },
+  });
+};
+
 // @desc    List Jira issues by project/JQL
 // @route   GET /api/jira/server/issues
 // @access  Private
@@ -663,13 +876,23 @@ const listServerIssues = async (req, res) => {
   const client = await getJiraClient(req.user.id);
   const resolvedJql = jql || (projectKey ? `project=${projectKey} ORDER BY updated DESC` : 'ORDER BY updated DESC');
 
-  const data = await jiraSearch({
-    client,
-    jql: resolvedJql,
-    startAt,
-    maxResults,
-    fields: ['summary', 'description', 'priority', 'status', 'issuetype', 'parent', 'project', 'assignee', 'updated'],
-  });
+  const fetchAll = String(req.query.fetchAll || 'false').toLowerCase() === 'true';
+  const fields = ['summary', 'description', 'priority', 'status', 'issuetype', 'parent', 'project', 'assignee', 'updated'];
+
+  const data = fetchAll
+    ? await jiraSearchAllIssues({
+        client,
+        jql: resolvedJql,
+        fields,
+        pageSize: Number(maxResults) || 200,
+      })
+    : await jiraSearch({
+        client,
+        jql: resolvedJql,
+        startAt,
+        maxResults,
+        fields,
+      });
 
   res.status(200).json({ success: true, data });
 };
@@ -679,7 +902,17 @@ const listServerIssues = async (req, res) => {
 // @access  Private
 const getServerIssue = async (req, res) => {
   const client = await getJiraClient(req.user.id);
-  const data = await jiraRequest(client, 'get', `/issue/${req.params.issueKey}`);
+  const params = {};
+  if (req.query.expand) {
+    params.expand = req.query.expand;
+  } else {
+    params.expand = 'names,renderedFields';
+  }
+  if (req.query.fields) {
+    params.fields = req.query.fields;
+  }
+
+  const data = await jiraRequest(client, 'get', `/issue/${req.params.issueKey}`, { params });
   res.status(200).json({ success: true, data });
 };
 
@@ -712,12 +945,17 @@ const createServerIssue = async (req, res) => {
 // @access  Private
 const updateServerIssue = async (req, res) => {
   const client = await getJiraClient(req.user.id);
-  const { summary, description, priority, issueType } = req.body;
+  const { summary, description, priority, issueType, labels, dueDate, assigneeAccountId } = req.body;
   const fields = {};
   if (summary !== undefined) fields.summary = summary;
   if (description !== undefined) fields.description = toAdfText(description || '');
   if (priority !== undefined) fields.priority = { name: priority };
   if (issueType !== undefined) fields.issuetype = { name: issueType };
+  if (Array.isArray(labels)) fields.labels = labels;
+  if (dueDate !== undefined) fields.duedate = dueDate || null;
+  if (assigneeAccountId !== undefined) {
+    fields.assignee = assigneeAccountId ? { accountId: assigneeAccountId } : null;
+  }
 
   await jiraRequest(client, 'put', `/issue/${req.params.issueKey}`, { data: { fields } });
   res.status(200).json({ success: true, message: 'Jira issue updated' });
@@ -730,6 +968,144 @@ const deleteServerIssue = async (req, res) => {
   const client = await getJiraClient(req.user.id);
   await jiraRequest(client, 'delete', `/issue/${req.params.issueKey}`);
   res.status(200).json({ success: true, message: 'Jira issue deleted' });
+};
+
+// @desc    List transitions for Jira issue
+// @route   GET /api/jira/server/issues/:issueKey/transitions
+// @access  Private
+const listServerIssueTransitions = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  const data = await jiraRequest(client, 'get', `/issue/${req.params.issueKey}/transitions`);
+  res.status(200).json({ success: true, data: data?.transitions || [] });
+};
+
+// @desc    Assign Jira issue to current user
+// @route   POST /api/jira/server/issues/:issueKey/assign-me
+// @access  Private
+const assignServerIssueToMe = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  const me = await jiraRequest(client, 'get', '/myself');
+  if (!me?.accountId) {
+    return res.status(400).json({ success: false, message: 'Could not resolve current Jira account.' });
+  }
+
+  await jiraRequest(client, 'put', `/issue/${req.params.issueKey}/assignee`, {
+    data: { accountId: me.accountId },
+  });
+  res.status(200).json({ success: true, message: 'Issue assigned to you' });
+};
+
+// @desc    Create Jira issue comment
+// @route   POST /api/jira/server/issues/:issueKey/comments
+// @access  Private
+const createServerIssueComment = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  const { body } = req.body;
+  if (!body || !String(body).trim()) {
+    return res.status(400).json({ success: false, message: 'Comment body is required' });
+  }
+
+  const data = await jiraRequest(client, 'post', `/issue/${req.params.issueKey}/comment`, {
+    data: { body: toAdfText(String(body).trim()) },
+  });
+  res.status(201).json({ success: true, data, message: 'Comment added' });
+};
+
+// @desc    Update Jira issue comment
+// @route   PUT /api/jira/server/issues/:issueKey/comments/:commentId
+// @access  Private
+const updateServerIssueComment = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  const { body } = req.body;
+  if (!body || !String(body).trim()) {
+    return res.status(400).json({ success: false, message: 'Comment body is required' });
+  }
+
+  const data = await jiraRequest(client, 'put', `/issue/${req.params.issueKey}/comment/${req.params.commentId}`, {
+    data: { body: toAdfText(String(body).trim()) },
+  });
+  res.status(200).json({ success: true, data, message: 'Comment updated' });
+};
+
+// @desc    Delete Jira issue comment
+// @route   DELETE /api/jira/server/issues/:issueKey/comments/:commentId
+// @access  Private
+const deleteServerIssueComment = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  await jiraRequest(client, 'delete', `/issue/${req.params.issueKey}/comment/${req.params.commentId}`);
+  res.status(200).json({ success: true, message: 'Comment deleted' });
+};
+
+// @desc    Create subtask under Jira issue
+// @route   POST /api/jira/server/issues/:issueKey/subtasks
+// @access  Private
+const createServerIssueSubtask = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  const { summary, description = '' } = req.body;
+  if (!summary || !String(summary).trim()) {
+    return res.status(400).json({ success: false, message: 'Subtask summary is required' });
+  }
+
+  const parentIssue = await jiraRequest(client, 'get', `/issue/${req.params.issueKey}`, {
+    params: { fields: 'project' },
+  });
+
+  const data = await jiraRequest(client, 'post', '/issue', {
+    data: {
+      fields: {
+        project: { key: parentIssue?.fields?.project?.key },
+        parent: { key: req.params.issueKey },
+        summary: String(summary).trim(),
+        description: toAdfText(description),
+        issuetype: { name: 'Sub-task' },
+      },
+    },
+  });
+
+  res.status(201).json({ success: true, data, message: 'Subtask created' });
+};
+
+// @desc    Delete Jira subtask
+// @route   DELETE /api/jira/server/issues/:issueKey/subtasks/:subtaskKey
+// @access  Private
+const deleteServerIssueSubtask = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  await jiraRequest(client, 'delete', `/issue/${req.params.subtaskKey}`);
+  res.status(200).json({ success: true, message: 'Subtask deleted' });
+};
+
+// @desc    Create Jira issue link
+// @route   POST /api/jira/server/issues/:issueKey/links
+// @access  Private
+const createServerIssueLink = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  const { linkedIssueKey, linkTypeName = 'Relates', direction = 'outward' } = req.body;
+  if (!linkedIssueKey || !String(linkedIssueKey).trim()) {
+    return res.status(400).json({ success: false, message: 'linkedIssueKey is required' });
+  }
+
+  const data = {
+    type: { name: linkTypeName },
+    outwardIssue: { key: req.params.issueKey },
+    inwardIssue: { key: String(linkedIssueKey).trim().toUpperCase() },
+  };
+
+  if (String(direction).toLowerCase() === 'inward') {
+    data.outwardIssue = { key: String(linkedIssueKey).trim().toUpperCase() };
+    data.inwardIssue = { key: req.params.issueKey };
+  }
+
+  await jiraRequest(client, 'post', '/issueLink', { data });
+  res.status(201).json({ success: true, message: 'Issue link created' });
+};
+
+// @desc    Delete Jira issue link
+// @route   DELETE /api/jira/server/issue-links/:linkId
+// @access  Private
+const deleteServerIssueLink = async (req, res) => {
+  const client = await getJiraClient(req.user.id);
+  await jiraRequest(client, 'delete', `/issueLink/${req.params.linkId}`);
+  res.status(200).json({ success: true, message: 'Issue link removed' });
 };
 
 // @desc    AI summary for Jira project
@@ -753,13 +1129,15 @@ const getJiraAISummary = async (req, res) => {
     type: issue.fields?.issuetype?.name || '',
   }));
 
-  const aiUrl = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+  const aiUrl = resolveAiServiceBaseUrl(process.env.AI_SERVICE_URL);
   try {
+    const aiConfig = await getActiveAIConfigPayload();
     const { data } = await axios.post(
       `${aiUrl}/jira/summarize`,
       {
         project_key: projectKey,
         issues,
+        ai_config: aiConfig,
       },
       { timeout: 20000 }
     );
@@ -812,10 +1190,10 @@ const syncFromJira = async (req, res) => {
   }
 
   const client = await getJiraClient(req.user.id);
-  const search = await jiraSearch({
+  const search = await jiraSearchAllIssues({
     client,
     jql: `project=${project.jiraProjectKey} ORDER BY updated DESC`,
-    maxResults: 200,
+    pageSize: 200,
     fields: ['summary', 'description', 'priority', 'status', 'issuetype', 'parent'],
   });
 
@@ -895,12 +1273,22 @@ module.exports = {
   updateServerProject,
   deleteServerProject,
   listServerProjectMembers,
+  getServerProjectActiveSprint,
   listServerIssues,
   getServerIssue,
   createServerIssue,
   updateServerIssue,
   deleteServerIssue,
+  listServerIssueTransitions,
   transitionServerIssue,
+  assignServerIssueToMe,
+  createServerIssueComment,
+  updateServerIssueComment,
+  deleteServerIssueComment,
+  createServerIssueSubtask,
+  deleteServerIssueSubtask,
+  createServerIssueLink,
+  deleteServerIssueLink,
   jiraProxy,
   syncFromJira,
   getJiraAISummary,

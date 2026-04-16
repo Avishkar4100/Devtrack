@@ -15,6 +15,7 @@ import {
 } from '@heroicons/react/24/outline'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '@/store/themeStore'
+import RequestTerminal from '@/components/RequestTerminal'
 
 // Click-outside detector hook
 function useClickOutside(ref, callback) {
@@ -80,6 +81,7 @@ export default function Layout() {
   const bellButtonRef = useRef(null)
   const notificationPanelRef = useRef(null)
   const [notificationPanelPos, setNotificationPanelPos] = useState({ top: 56, right: 16 })
+  const lastProjectsSyncSigRef = useRef('')
   const avatarLetter = user?.name?.[0]?.toUpperCase()
   const unseenCount = notifications.filter((item) => !item.seen).length
 
@@ -95,24 +97,28 @@ export default function Layout() {
 
   const { data: jiraProjects = [] } = useQuery({
     queryKey: ['layout-jira-projects'],
+    enabled: Boolean(user?.jiraEmail && user?.jiraDomain),
     queryFn: async () => (await api.get('/jira/server/projects')).data.data || [],
   })
 
-  const fetchedProjects = useMemo(() => fetchedProjectsData || [], [fetchedProjectsData])
-
   useEffect(() => {
-    if (!fetchedProjectsData) return
+    if (!Array.isArray(fetchedProjectsData)) return
 
-    const sameLength = projects.length === fetchedProjects.length
-    const sameIds = sameLength && projects.every((p, idx) => p?._id === fetchedProjects[idx]?._id)
-    if (sameIds) return
+    const nextSig = fetchedProjectsData.map((p) => p?._id || '').join('|')
+    if (nextSig === lastProjectsSyncSigRef.current) return
 
-    setProjects(fetchedProjects)
-  }, [fetchedProjectsData, fetchedProjects, projects, setProjects])
+    lastProjectsSyncSigRef.current = nextSig
+    setProjects(fetchedProjectsData)
+  }, [fetchedProjectsData, setProjects])
 
   const activeProject = useMemo(
     () => projects.find((p) => p._id === selectedProjectId) || null,
     [projects, selectedProjectId]
+  )
+
+  const jiraLinkedProject = useMemo(
+    () => projects.find((p) => p?.jiraProjectKey && p.jiraProjectKey === selectedJiraProjectKey) || null,
+    [projects, selectedJiraProjectKey]
   )
 
   useEffect(() => {
@@ -122,6 +128,20 @@ export default function Layout() {
       setSelectedJiraProjectKey(connectedJiraKey)
     }
   }, [activeProject, selectedJiraProjectKey, setSelectedJiraProjectKey])
+
+  useEffect(() => {
+    if (!selectedJiraProjectKey) return
+
+    if (!jiraLinkedProject?._id) return
+    if (selectedProjectId !== jiraLinkedProject._id) {
+      setSelectedProjectId(jiraLinkedProject._id)
+    }
+  }, [
+    jiraLinkedProject,
+    selectedJiraProjectKey,
+    selectedProjectId,
+    setSelectedProjectId,
+  ])
 
   useEffect(() => {
     if (!notificationOpen) return
@@ -188,9 +208,10 @@ export default function Layout() {
         <nav className="flex-1 px-2.5 py-3 overflow-y-auto no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {[
             { to: '/overview', end: true, Icon: HomeIcon, label: 'Overview' },
+            { to: '/projects', end: false, Icon: FolderIcon, label: 'Projects' },
             { to: '/ai-planner', end: false, Icon: SparklesIcon, label: 'AI Planner' },
             { to: '/workspace', end: false, Icon: FolderIcon, label: 'Workspace' },
-            { to: '/progress', end: false, Icon: BoltIcon, label: 'Progress' },
+            { to: '/insights', end: false, Icon: BoltIcon, label: 'Delivery Insights' },
           ].map(({ to, end, Icon, label }, i) => (
             <motion.div key={to} initial={{ opacity: 0, x: -14 }} animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.07 + 0.1, duration: 0.35, ease: [0.16, 1, 0.3, 1] }}>
@@ -222,9 +243,9 @@ export default function Layout() {
                 className="input"
                 value={selectedProjectId}
                 onChange={(e) => setSelectedProjectId(e.target.value)}
-                aria-label="Select active project"
+                aria-label="Select workspace project"
               >
-                <option value="">Local Project</option>
+                <option value="">Select Workspace Project</option>
                 {projects.map((p) => (
                   <option key={p._id} value={p._id}>{p.key} - {p.name}</option>
                 ))}
@@ -234,15 +255,16 @@ export default function Layout() {
                 value={selectedJiraProjectKey}
                 onChange={(e) => setSelectedJiraProjectKey(e.target.value)}
                 aria-label="Select Jira project"
+                disabled={!user?.jiraEmail || !user?.jiraDomain}
               >
-                <option value="">Select Jira Project</option>
+                <option value="">{user?.jiraEmail && user?.jiraDomain ? 'Select Jira Project' : 'Configure Jira in Settings'}</option>
                 {jiraProjects.map((jp) => (
                   <option key={jp.id || jp.key} value={jp.key}>{jp.key} - {jp.name}</option>
                 ))}
               </select>
-              {activeProject && (
+              {jiraLinkedProject && (
                 <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  Active: {activeProject.name}
+                  Linked workspace: {jiraLinkedProject.name}
                 </p>
               )}
             </div>
@@ -403,6 +425,8 @@ export default function Layout() {
             <Outlet />
           </motion.div>
         </main>
+
+        <RequestTerminal projectId={selectedProjectId || undefined} />
       </div>
 
       {/* Mobile overlay */}

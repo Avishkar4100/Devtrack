@@ -8,8 +8,6 @@ import {
   ArrowRightOnRectangleIcon,
   HomeIcon,
   SparklesIcon,
-  BuildingOffice2Icon,
-  FolderIcon,
   BellIcon,
 } from '@heroicons/react/24/outline'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -23,8 +21,6 @@ export default function AdminLayout() {
   const adminNav = [
     { to: '/admin/overview', label: 'Overview', Icon: HomeIcon },
     { to: '/admin/ai-config', label: 'AI Config', Icon: SparklesIcon },
-    { to: '/admin/organizations', label: 'Organizations', Icon: BuildingOffice2Icon },
-    { to: '/admin/projects', label: 'Project Management', Icon: FolderIcon },
   ]
 
   return (

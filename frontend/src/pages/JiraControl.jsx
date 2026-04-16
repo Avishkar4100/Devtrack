@@ -97,7 +97,7 @@ export default function JiraControlPage() {
       qc.invalidateQueries(['stories', currentProject._id])
       qc.invalidateQueries(['epics', currentProject._id])
     },
-    onError: (err) => toast.error(err.response?.data?.message || 'Failed to sync Jira to local'),
+    onError: (err) => toast.error(err.response?.data?.message || 'Failed to sync Jira to workspace'),
   })
 
   const proxyMutation = useMutation({
@@ -147,8 +147,8 @@ export default function JiraControlPage() {
         </div>
 
         <div className="card p-4 space-y-3">
-          <h2 className="text-base font-semibold text-gray-100">Current DevTrack Project Sync</h2>
-          <p className="text-sm text-gray-400">Selected local project: {currentProject?.name || 'None selected'}</p>
+          <h2 className="text-base font-semibold text-gray-100">Current Workspace Project Sync</h2>
+          <p className="text-sm text-gray-400">Selected workspace project: {currentProject?.name || 'None selected'}</p>
           <select className="input" value={activeProjectKey} onChange={(e) => setActiveProjectKey(e.target.value)}>
             <option value="">Select Jira project key</option>
             {projectKeys.map((k) => <option key={k} value={k}>{k}</option>)}
@@ -159,7 +159,7 @@ export default function JiraControlPage() {
               disabled={!currentProject || !activeProjectKey || connectCurrentProjectMutation.isPending}
               onClick={() => connectCurrentProjectMutation.mutate(activeProjectKey)}
             >
-              {connectCurrentProjectMutation.isPending ? 'Connecting...' : 'Connect Local Project'}
+              {connectCurrentProjectMutation.isPending ? 'Connecting...' : 'Connect Workspace Project'}
             </button>
             <button
               className="btn-primary flex-1"

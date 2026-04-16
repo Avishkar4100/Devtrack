@@ -10,12 +10,22 @@ const {
 	updateServerProject,
 	deleteServerProject,
 	listServerProjectMembers,
+	getServerProjectActiveSprint,
 	listServerIssues,
 	getServerIssue,
 	createServerIssue,
 	updateServerIssue,
 	deleteServerIssue,
+	listServerIssueTransitions,
 	transitionServerIssue,
+	assignServerIssueToMe,
+	createServerIssueComment,
+	updateServerIssueComment,
+	deleteServerIssueComment,
+	createServerIssueSubtask,
+	deleteServerIssueSubtask,
+	createServerIssueLink,
+	deleteServerIssueLink,
 	jiraProxy,
 	syncFromJira,
 	getJiraAISummary,
@@ -32,6 +42,7 @@ router.post('/sync/:projectId', syncFromJira);
 // Full Jira server control
 router.get('/server/projects', listServerProjects);
 router.get('/server/projects/:projectIdOrKey/members', listServerProjectMembers);
+router.get('/server/projects/:projectIdOrKey/active-sprint', getServerProjectActiveSprint);
 router.post('/server/projects', createServerProject);
 router.put('/server/projects/:projectIdOrKey', updateServerProject);
 router.patch('/server/projects/:projectIdOrKey', updateServerProject);
@@ -44,7 +55,17 @@ router.post('/server/issues', createServerIssue);
 router.put('/server/issues/:issueKey', updateServerIssue);
 router.patch('/server/issues/:issueKey', updateServerIssue);
 router.delete('/server/issues/:issueKey', deleteServerIssue);
+router.get('/server/issues/:issueKey/transitions', listServerIssueTransitions);
 router.post('/server/issues/:issueKey/transitions', transitionServerIssue);
+router.post('/server/issues/:issueKey/assign-me', assignServerIssueToMe);
+router.post('/server/issues/:issueKey/comments', createServerIssueComment);
+router.put('/server/issues/:issueKey/comments/:commentId', updateServerIssueComment);
+router.patch('/server/issues/:issueKey/comments/:commentId', updateServerIssueComment);
+router.delete('/server/issues/:issueKey/comments/:commentId', deleteServerIssueComment);
+router.post('/server/issues/:issueKey/subtasks', createServerIssueSubtask);
+router.delete('/server/issues/:issueKey/subtasks/:subtaskKey', deleteServerIssueSubtask);
+router.post('/server/issues/:issueKey/links', createServerIssueLink);
+router.delete('/server/issue-links/:linkId', deleteServerIssueLink);
 
 router.post('/server/proxy', jiraProxy);
 

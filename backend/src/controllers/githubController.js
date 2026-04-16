@@ -8,6 +8,21 @@ const AuditLog = require('../models/AuditLog');
 const aiService = require('../services/aiService');
 const GitHubValidator = require('../services/githubValidator');
 const logger = require('../config/logger');
+const { getClientErrorMessage } = require('../utils/errorUtils');
+
+const getHttpStatus = (error, fallback = 500) => {
+  if (error?.name === 'ValidationError' || error?.name === 'CastError') return 400;
+  const parsed = Number(error?.statusCode || error?.response?.status || fallback);
+  if (!Number.isFinite(parsed) || parsed < 400 || parsed > 599) return fallback;
+  return parsed;
+};
+
+const sendError = (res, error, fallbackMessage) => {
+  return res.status(getHttpStatus(error)).json({
+    success: false,
+    message: getClientErrorMessage(error, fallbackMessage),
+  });
+};
 
 const getDefaultRepoFromEnv = () => {
   const owner = (process.env.GITHUB_REPO_OWNER || '').trim();
@@ -322,7 +337,7 @@ const validateToken = async (req, res) => {
     res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
   } catch (error) {
     logger.error('Token validation error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    sendError(res, error, 'Unable to validate GitHub token');
   }
 };
 
@@ -343,7 +358,7 @@ const validateRepo = async (req, res) => {
     res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
   } catch (error) {
     logger.error('Repo validation error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    sendError(res, error, 'Unable to validate repository access');
   }
 };
 
@@ -364,7 +379,7 @@ const validateBranch = async (req, res) => {
     res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
   } catch (error) {
     logger.error('Branch validation error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    sendError(res, error, 'Unable to validate branch');
   }
 };
 
@@ -380,7 +395,7 @@ const getRateLimit = async (req, res) => {
     res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
   } catch (error) {
     logger.error('Rate limit check error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    sendError(res, error, 'Unable to fetch GitHub rate-limit status');
   }
 };
 
@@ -396,7 +411,7 @@ const getRepositories = async (req, res) => {
     res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
   } catch (error) {
     logger.error('Get repositories error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    sendError(res, error, 'Unable to fetch accessible repositories');
   }
 };
 
@@ -417,7 +432,7 @@ const validateConnection = async (req, res) => {
     res.status(result.allValid ? 200 : 400).json({ success: result.allValid, data: result });
   } catch (error) {
     logger.error('Connection validation error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    sendError(res, error, 'Unable to validate full GitHub connection');
   }
 };
 
@@ -444,7 +459,7 @@ const getHealth = async (req, res) => {
     res.status(health.status === 'healthy' ? 200 : 400).json({ success: true, data: health });
   } catch (error) {
     logger.error('Health check error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    sendError(res, error, 'Unable to fetch GitHub health status');
   }
 };
 

@@ -6,6 +6,9 @@ const AuditLog = require('../models/AuditLog');
 const Commit = require('../models/Commit');
 const Document = require('../models/Document');
 const { generateGlobalInsights } = require('../services/insightService');
+const mongoose = require('mongoose');
+
+const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(String(value || ''));
 
 const percent = (num, den) => {
   if (!den) return 0;
@@ -31,6 +34,10 @@ const weekKey = (date) => {
 // @route   GET /api/dashboard/:projectId
 // @access  Private
 const getDashboard = async (req, res) => {
+  if (!isValidObjectId(req.params.projectId)) {
+    return res.status(400).json({ success: false, message: 'Invalid project id' });
+  }
+
   const project = await Project.findById(req.params.projectId)
     .populate('owner', 'name email avatar')
     .populate('members.user', 'name email avatar');
@@ -164,7 +171,7 @@ const getOverviewSummary = async (req, res) => {
   const enrichedProjects = projects.map((project) => {
     const insight = insightByProjectId.get(project._id.toString()) || {};
     return {
-      _id: project._id,
+      _id: project._id.toString(),
       name: project.name,
       key: project.key,
       status: project.status,
@@ -200,7 +207,7 @@ const getOverviewSummary = async (req, res) => {
       },
       summary: insights.summary,
       projects: enrichedProjects,
-      selectedProjectId: defaultProject?._id || null,
+      selectedProjectId: defaultProject?._id?.toString?.() || defaultProject?._id || null,
       selectedJiraProjectKey: defaultProject?.jiraProjectKey || null,
       selectedProjectSummary: defaultProject?.summary || '',
       generatedAt: new Date().toISOString(),
@@ -212,6 +219,10 @@ const getOverviewSummary = async (req, res) => {
 // @route   GET /api/dashboard/:projectId/control-tower
 // @access  Private
 const getControlTower = async (req, res) => {
+  if (!isValidObjectId(req.params.projectId)) {
+    return res.status(400).json({ success: false, message: 'Invalid project id' });
+  }
+
   const project = await Project.findById(req.params.projectId).lean();
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 

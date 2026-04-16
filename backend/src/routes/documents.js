@@ -2,11 +2,14 @@ const express = require('express');
 const router = express.Router();
 const {
   upload,
+  mapUpload,
   getDocuments,
   uploadDocument,
   deleteDocument,
   reingestDocument,
   getDocumentQuality,
+  generateRequirementMap,
+  uploadRequirementMap,
   reExtractDocument,
   getExtractionHistory,
   compareExtractions,
@@ -16,6 +19,8 @@ const { protect } = require('../middleware/auth');
 router.use(protect);
 router.get('/project/:projectId', getDocuments);
 router.post('/upload/:projectId', upload.single('document'), uploadDocument);
+router.post('/project/:projectId/generate-map', generateRequirementMap);
+router.post('/project/:projectId/upload-map', mapUpload.single('map'), uploadRequirementMap);
 router.delete('/:id', deleteDocument);
 router.post('/:id/reingest', reingestDocument);
 router.get('/:id/quality', getDocumentQuality);

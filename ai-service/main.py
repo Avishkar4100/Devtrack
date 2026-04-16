@@ -1,13 +1,17 @@
 import os
+import logging
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from routers import documents, stories, github_analysis, jira
+from routers import documents, stories, github_analysis, jira, manual_bridge
 from services.embeddings import EmbeddingService
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="DevTrack AI Microservice",
@@ -35,6 +39,7 @@ app.include_router(documents.router, prefix="/documents", tags=["Documents"])
 app.include_router(stories.router, prefix="/stories", tags=["Stories"])
 app.include_router(github_analysis.router, prefix="/github", tags=["GitHub Analysis"])
 app.include_router(jira.router, prefix="/jira", tags=["Jira"])
+app.include_router(manual_bridge.router, prefix="/manual-bridge", tags=["Manual Bridge"])
 
 
 @app.get("/")
@@ -48,7 +53,7 @@ async def health():
     health_status = {
         "status": "healthy",
         "llm_model": os.getenv("LLM_MODEL", "deepseek-chat"),
-        "embedding_model": os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
+        "embedding_model": os.getenv("EMBEDDING_MODEL", "local-onnx"),
         "chroma_dir": os.getenv("CHROMA_PERSIST_DIR", "./chroma_store"),
     }
     
@@ -126,10 +131,65 @@ async def health_detailed():
 
 
 @app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
+async def global_exception_handler(request: Request, exc: Exception):
+    request_id = request.headers.get("x-request-id")
+    logger.exception(
+        "Unhandled AI service error request_id=%s method=%s path=%s",
+        request_id,
+        request.method,
+        request.url.path,
+    )
+
+    message = str(exc or '').strip()
+    lower_message = message.lower()
+
+    if 'api key' in lower_message:
+        public_message = 'AI provider API key is not configured. Update AI settings and try again.'
+    elif 'rate limit' in lower_message or '429' in lower_message:
+        public_message = 'AI provider rate limit reached. Please retry shortly.'
+    elif 'invalid json' in lower_message:
+        public_message = 'AI provider returned an invalid structured response. Please retry.'
+    elif 'unsupported file type' in lower_message:
+        public_message = message
+    elif 'file not found' in lower_message:
+        public_message = message
+    elif isinstance(exc, (ValueError, RuntimeError)) and message:
+        public_message = message[:260]
+    else:
+        public_message = 'AI service failed to process the request.'
+
     return JSONResponse(
         status_code=500,
-        content={"success": False, "message": str(exc)},
+        content={
+            "success": False,
+            "message": public_message,
+            "errorCode": "AI_INTERNAL_ERROR",
+            "requestId": request_id,
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    request_id = request.headers.get("x-request-id")
+
+    details = []
+    for item in exc.errors():
+        loc = '.'.join(str(part) for part in item.get('loc', []) if part != 'body')
+        msg = item.get('msg', 'Invalid value')
+        details.append(f"{loc}: {msg}" if loc else msg)
+
+    message = ', '.join(details[:5]) if details else 'Request validation failed'
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "message": message,
+            "detail": details,
+            "errorCode": "AI_VALIDATION_ERROR",
+            "requestId": request_id,
+        },
     )
 
 

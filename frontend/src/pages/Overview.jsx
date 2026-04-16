@@ -69,15 +69,36 @@ export default function OverviewPage() {
   }, [overviewSummary, projects])
 
   const applyProjectContext = (project) => {
-    if (!project?._id) return
-    setSelectedProjectId(project._id)
+    const projectId = String(project?._id || '')
+    if (!projectId) return
+    setSelectedProjectId(projectId)
     setSelectedJiraProjectKey(project.jiraProjectKey || '')
   }
 
   if (isLoading) {
     return (
-      <div className="p-6 max-w-7xl mx-auto">
-        <div className="card p-4 text-sm text-slate-300">Loading overview...</div>
+      <div className="p-6 max-w-7xl mx-auto space-y-4">
+        <div className="grid md:grid-cols-4 gap-3">
+          {[0, 1, 2, 3].map((k) => (
+            <div key={k} className="card p-4 animate-pulse">
+              <div className="h-3 w-24 rounded bg-slate-700/60" />
+              <div className="h-7 w-14 rounded bg-slate-700/70 mt-3" />
+            </div>
+          ))}
+        </div>
+        <div className="grid lg:grid-cols-[1fr_320px] gap-4">
+          <div className="card p-4 animate-pulse space-y-3">
+            <div className="h-4 w-36 rounded bg-slate-700/60" />
+            {[0, 1, 2].map((k) => (
+              <div key={k} className="h-20 rounded bg-slate-800/60" />
+            ))}
+          </div>
+          <div className="card p-4 animate-pulse space-y-2">
+            <div className="h-4 w-28 rounded bg-slate-700/60" />
+            <div className="h-3 w-full rounded bg-slate-800/60" />
+            <div className="h-3 w-10/12 rounded bg-slate-800/60" />
+          </div>
+        </div>
       </div>
     )
   }
@@ -108,11 +129,12 @@ export default function OverviewPage() {
           <h2 className="text-base font-semibold text-gray-100">Projects</h2>
           <div className="grid md:grid-cols-2 gap-3">
             {projects.map((project) => {
+              const projectId = String(project?._id || '')
               const risk = project.risk || riskFromProgress(project.completionPercentage)
               return (
                 <Link
-                  key={project._id}
-                  to={`/projects/${project._id}`}
+                  key={projectId || project.name}
+                  to={projectId ? `/projects/${projectId}` : '/projects'}
                   onClick={() => applyProjectContext(project)}
                   className="block border border-slate-700/70 rounded-lg p-3 hover:border-indigo-400/40 transition-colors"
                 >

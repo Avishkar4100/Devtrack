@@ -7,7 +7,48 @@ const Project = require('../models/Project');
 const AuditLog = require('../models/AuditLog');
 const DocumentService = require('../services/documentService');
 const ReExtractionService = require('../services/reExtractionService');
+const { emitPendingSnapshot } = require('./manualBridgeController');
 const logger = require('../config/logger');
+const { getClientErrorMessage } = require('../utils/errorUtils');
+
+const IN_PROGRESS_DOCUMENT_STATUSES = ['uploaded', 'validating', 'parsing', 'embedding', 'extracting'];
+const DEFAULT_STALE_INGESTION_MS = 45 * 60 * 1000;
+
+const getHttpStatus = (error, fallback = 500) => {
+  if (error?.name === 'ValidationError' || error?.name === 'CastError') return 400;
+  const parsed = Number(error?.statusCode || error?.response?.status || fallback);
+  if (!Number.isFinite(parsed) || parsed < 400 || parsed > 599) return fallback;
+  return parsed;
+};
+
+const markStaleIngestionAsFailed = async (projectId) => {
+  const staleMs = Number(process.env.DOCUMENT_INGESTION_STALE_MS || DEFAULT_STALE_INGESTION_MS);
+  const cutoff = new Date(Date.now() - Math.max(60 * 1000, staleMs));
+
+  const staleDocs = await Document.find({
+    project: projectId,
+    isActive: true,
+    status: { $in: IN_PROGRESS_DOCUMENT_STATUSES },
+    updatedAt: { $lt: cutoff },
+  }).select('_id status updatedAt');
+
+  if (!staleDocs.length) return 0;
+
+  const staleIds = staleDocs.map((doc) => doc._id);
+  await Document.updateMany(
+    { _id: { $in: staleIds } },
+    {
+      $set: {
+        status: 'failed',
+        'ingestionStatus.errorStage': 'stale_in_progress',
+        'ingestionStatus.errorMessage': 'Ingestion was interrupted during processing (service restart or timeout). Please re-ingest or re-upload the document.',
+      },
+    }
+  );
+
+  logger.warn(`Marked stale ingestion documents as failed for project ${projectId}: ${staleIds.length}`);
+  return staleIds.length;
+};
 
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -32,11 +73,21 @@ const fileFilter = (req, file, cb) => {
 
 const upload = multer({ storage, fileFilter, limits: { fileSize: 50 * 1024 * 1024 } });
 
+const mapJsonFileFilter = (req, file, cb) => {
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (ext === '.json' || file.mimetype === 'application/json') cb(null, true);
+  else cb(new Error('Only JSON map files are allowed'), false);
+};
+
+const mapUpload = multer({ storage, fileFilter: mapJsonFileFilter, limits: { fileSize: 10 * 1024 * 1024 } });
+
 /**
  * Get documents for a project with quality information
  */
 const getDocuments = async (req, res) => {
   try {
+    await markStaleIngestionAsFailed(req.params.projectId);
+
     const docs = await Document.find({ project: req.params.projectId, isActive: true })
       .populate('uploadedBy', 'name email avatar')
       .sort('-createdAt');
@@ -53,7 +104,10 @@ const getDocuments = async (req, res) => {
     res.status(200).json({ success: true, count: enrichedDocs.length, data: enrichedDocs });
   } catch (error) {
     logger.error(`Get documents error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error fetching documents' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to fetch documents for this project'),
+    });
   }
 };
 
@@ -106,7 +160,10 @@ const uploadDocument = async (req, res) => {
     res.status(201).json({ success: true, data: doc });
   } catch (error) {
     logger.error(`Upload document error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error uploading document' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to upload this document'),
+    });
   }
 };
 
@@ -142,15 +199,6 @@ const ingestDocument = async (doc, project, io) => {
       project._id.toString(),
       io
     );
-
-    // Status: extracting
-    await Document.findByIdAndUpdate(doc._id, { status: 'extracting' });
-    if (io) {
-      io.to(`project:${project._id}`).emit('document:status', {
-        documentId: doc._id,
-        status: 'extracting',
-      });
-    }
 
     // Update document with ingestion metadata
     const updateData = {
@@ -283,7 +331,10 @@ const deleteDocument = async (req, res) => {
     res.status(200).json({ success: true, message: 'Document deleted', data: doc });
   } catch (error) {
     logger.error(`Delete document error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error deleting document' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to delete this document'),
+    });
   }
 };
 
@@ -317,7 +368,10 @@ const reingestDocument = async (req, res) => {
     res.status(200).json({ success: true, message: 'Re-ingestion triggered', data: doc });
   } catch (error) {
     logger.error(`Re-ingest document error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error re-ingesting document' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to re-ingest this document'),
+    });
   }
 };
 
@@ -343,7 +397,10 @@ const getDocumentQuality = async (req, res) => {
     res.status(200).json({ success: true, data: qualityReport });
   } catch (error) {
     logger.error(`Get document quality error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error fetching quality report' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to fetch document quality report'),
+    });
   }
 };
 
@@ -367,6 +424,13 @@ const reExtractDocument = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Document not found' });
     }
 
+    if (!doc.project?._id) {
+      return res.status(409).json({
+        success: false,
+        message: 'Document is linked to an invalid project. Re-upload or relink the document, then retry extraction.',
+      });
+    }
+
     if (doc.status === 'uploaded' || doc.status === 'validating' || doc.status === 'parsing') {
       return res.status(400).json({
         success: false,
@@ -376,6 +440,7 @@ const reExtractDocument = async (req, res) => {
     }
 
     const io = req.app.get('io');
+    const projectId = doc.project._id.toString();
     
     logger.info(`Re-extraction triggered for document ${doc._id} with strategy: ${strategy}`);
 
@@ -383,14 +448,14 @@ const reExtractDocument = async (req, res) => {
     ReExtractionService.reExtractRequirements(
       doc._id.toString(),
       strategy,
-      doc.project._id.toString(),
+      projectId,
       io
     ).catch(error => {
       logger.error(`Async re-extraction error for ${doc._id}: ${error.message}`);
       if (io) {
-        io.to(`project:${doc.project._id}`).emit('document:re-extraction-failed', {
+        io.to(`project:${projectId}`).emit('document:re-extraction-failed', {
           documentId: doc._id,
-          error: error.message,
+          error: getClientErrorMessage(error, 'Re-extraction failed'),
         });
       }
     });
@@ -406,7 +471,10 @@ const reExtractDocument = async (req, res) => {
     });
   } catch (error) {
     logger.error(`Re-extract document error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error triggering re-extraction' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to trigger re-extraction'),
+    });
   }
 };
 
@@ -436,7 +504,10 @@ const getExtractionHistory = async (req, res) => {
     });
   } catch (error) {
     logger.error(`Get extraction history error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error fetching extraction history' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to fetch extraction history'),
+    });
   }
 };
 
@@ -466,17 +537,100 @@ const compareExtractions = async (req, res) => {
     });
   } catch (error) {
     logger.error(`Compare extractions error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error comparing extractions' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to compare extraction versions'),
+    });
+  }
+};
+
+/**
+ * Generate minified requirement map from Requirement records and persist on latest document.
+ */
+const generateRequirementMap = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.projectId);
+    if (!project) {
+      return res.status(404).json({ success: false, message: 'Project not found' });
+    }
+
+    const result = await DocumentService.generateRequirementMap(project._id.toString(), {
+      source: 'generated',
+    });
+
+    const io = req.app.get('io');
+    await emitPendingSnapshot(io);
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    logger.error(`Generate requirement map error: ${error.message}`);
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to generate requirement map'),
+    });
+  }
+};
+
+/**
+ * Upload requirement map JSON and persist as minified map on latest active document.
+ */
+const uploadRequirementMap = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.projectId);
+    if (!project) {
+      return res.status(404).json({ success: false, message: 'Project not found' });
+    }
+
+    const latestDoc = await Document.findOne({ project: project._id, isActive: true }).sort({ updatedAt: -1 });
+    if (!latestDoc) {
+      return res.status(404).json({ success: false, message: 'No active document found for this project' });
+    }
+
+    if (!req.file?.path) {
+      return res.status(400).json({ success: false, message: 'Upload a .json map file' });
+    }
+
+    const jsonText = fs.readFileSync(req.file.path, 'utf-8');
+    const items = DocumentService.parseRequirementMapJson(jsonText);
+
+    latestDoc.requirementMap = {
+      items,
+      source: 'uploaded_json',
+      generatedAt: new Date(),
+      version: (latestDoc.requirementMap?.version || 0) + 1,
+    };
+    await latestDoc.save();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        projectId: project._id,
+        documentId: latestDoc._id,
+        requirementMap: latestDoc.requirementMap,
+      },
+    });
+  } catch (error) {
+    logger.error(`Upload requirement map error: ${error.message}`);
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to upload requirement map'),
+    });
   }
 };
 
 module.exports = {
   upload,
+  mapUpload,
   getDocuments,
   uploadDocument,
   deleteDocument,
   reingestDocument,
   getDocumentQuality,
+  generateRequirementMap,
+  uploadRequirementMap,
   reExtractDocument,
   getExtractionHistory,
   compareExtractions,

@@ -1495,6 +1495,7 @@
       selectedJiraKey: "FIN",
       workspaceTab: "active-sprints",
       selectedChips: [],
+      simulationStep: 0,
       plannerChat: [
         { role: "assistant", text: "Upload SRS, click Suggest, pick chips, then Generate Backlog and edit in AI Planner > Backlog tab." },
         { role: "assistant", text: "Current project context loaded from FinCore Revamp with processed SRS and requirement memory." }
@@ -2268,6 +2269,257 @@
 
     function randomId(prefix) { return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
 
+    function clamp(num, min, max) {
+      return Math.min(max, Math.max(min, num))
+    }
+
+    function pushNotification(type, title, message) {
+      data.notifications.unshift({
+        id: randomId("n"),
+        type,
+        title,
+        message,
+        seen: false,
+        createdAt: new Date().toISOString()
+      })
+    }
+
+    function backlogTotals() {
+      const epics = state.backlog.epics.length
+      const stories = state.backlog.stories.length
+      const tasks = state.backlog.tasks.length
+      const subtasks = state.backlog.subtasks.length
+      const points = [
+        ...state.backlog.epics,
+        ...state.backlog.stories,
+        ...state.backlog.tasks,
+        ...state.backlog.subtasks
+      ].reduce((sum, row) => sum + (Number(row.storyPoints) || 0), 0)
+
+      return { epics, stories, tasks, subtasks, points }
+    }
+
+    function refreshAllPanels() {
+      normalizeDataConsistency()
+      renderProjectContext()
+      renderOverview()
+      renderWorkspaceDetails()
+      renderInsights()
+      renderAcceptanceReadiness()
+      renderConsistencyAudit()
+      renderBacklogTree()
+      renderDetailsForm()
+      renderNotifications()
+    }
+
+    function addEngineeringSignal(projectId, signal) {
+      const automation = data.automationByProject?.[projectId]
+      if (!automation) return
+      automation.engineeringSignals = [signal, ...(automation.engineeringSignals || [])].slice(0, 5)
+    }
+
+    function upsertRisk(projectId, text) {
+      const insights = data.insightsByProject?.[projectId]
+      if (!insights) return
+      const risks = insights.risks || []
+      insights.risks = [text, ...risks.filter(r => r !== text)].slice(0, 4)
+    }
+
+    function setProjectRisk(projectId, throughputCompleted, incidents) {
+      const project = data.projects.find(p => p.id === projectId)
+      if (!project) return
+      if (throughputCompleted >= 60 && incidents <= 3) project.risk = "low"
+      else if (throughputCompleted >= 35 && incidents <= 6) project.risk = "medium"
+      else project.risk = "high"
+    }
+
+    function projectIssuePrefix() {
+      const key = state.selectedJiraKey || "FIN"
+      return `${key}-${Math.floor(120 + Math.random() * 200)}`
+    }
+
+    function buildDemoSuggestions(contextText) {
+      const project = selectedProject()
+      const moduleName = project?.key === "FIN" ? "Payments" : project?.key === "AIP" ? "Planner Engine" : project?.key === "JBR" ? "Bridge Sync" : "Telemetry"
+      const promptHint = contextText || "stability"
+      return {
+        epics: [
+          `Epic: ${moduleName} reliability sprint for ${project?.key}`,
+          `Epic: Reduce carry-over in ${project?.name}`
+        ],
+        stories: [
+          `Story: Improve ${moduleName} validation using ${promptHint}`,
+          "Story: Add acceptance gates before Jira transition",
+          "Story: Auto-generate standup summary from commits"
+        ],
+        tasks: [
+          "Task: Add sync retry budget observability",
+          "Task: Add context snapshot in notification center",
+          "Task: Add backlog guard for orphan tasks"
+        ]
+      }
+    }
+
+    function materializeBacklogFromChips() {
+      const chips = state.selectedChips.length ? state.selectedChips : ["EPIC: Reliability hardening", "STORY: Validation alignment", "TASK: Add audit hook"]
+      const created = { epics: 0, stories: 0, tasks: 0, subtasks: 0 }
+
+      let anchorEpic = state.backlog.epics[0]?.tempId
+      let anchorStory = state.backlog.stories[0]?.tempId
+      let anchorTask = state.backlog.tasks[0]?.tempId
+
+      chips.forEach(chip => {
+        const label = String(chip || "").replace(/^\w+:\s*/, "").trim() || "Generated item"
+        if (chip.startsWith("EPIC:")) {
+          const epicId = randomId("e")
+          state.backlog.epics.push({
+            tempId: epicId,
+            type: "epic",
+            title: label,
+            description: "Generated from planner suggestion and context signals.",
+            assignee: "u1",
+            priority: "medium",
+            startDate: "2026-04-10",
+            dueDate: "2026-04-22",
+            storyPoints: 8
+          })
+          anchorEpic = epicId
+          created.epics += 1
+          return
+        }
+
+        if (chip.startsWith("STORY:")) {
+          const storyId = randomId("s")
+          const epicId = anchorEpic || state.backlog.epics[0]?.tempId
+          if (!epicId) return
+          state.backlog.stories.push({
+            tempId: storyId,
+            type: "story",
+            epicTempId: epicId,
+            title: label,
+            description: "Generated story linked to selected epic.",
+            assignee: "u2",
+            priority: "medium",
+            startDate: "2026-04-10",
+            dueDate: "2026-04-16",
+            storyPoints: 5
+          })
+          anchorStory = storyId
+          created.stories += 1
+          return
+        }
+
+        const taskId = randomId("t")
+        const parentStory = anchorStory || state.backlog.stories[0]?.tempId
+        if (!parentStory) return
+        const story = state.backlog.stories.find(s => s.tempId === parentStory)
+        state.backlog.tasks.push({
+          tempId: taskId,
+          type: "task",
+          parentTempId: parentStory,
+          epicTempId: story?.epicTempId || anchorEpic,
+          title: label,
+          description: "Generated execution task from selected planning chips.",
+          assignee: "u3",
+          priority: "medium",
+          startDate: "2026-04-10",
+          dueDate: "2026-04-14",
+          storyPoints: 3
+        })
+        anchorTask = taskId
+        created.tasks += 1
+      })
+
+      if (anchorTask) {
+        state.backlog.subtasks.push({
+          tempId: randomId("st"),
+          type: "subtask",
+          parentTempId: anchorTask,
+          epicTempId: state.backlog.tasks.find(t => t.tempId === anchorTask)?.epicTempId,
+          title: "Generated QA checklist",
+          description: "Smoke tests and regression checks for generated scope.",
+          assignee: "u4",
+          priority: "low",
+          startDate: "2026-04-11",
+          dueDate: "2026-04-13",
+          storyPoints: 1
+        })
+        created.subtasks += 1
+      }
+
+      return created
+    }
+
+    function applyBacklogImpact() {
+      const project = selectedProject()
+      const insights = selectedInsights()
+      const automation = activeAutomation()
+      if (!project || !insights || !automation) return
+
+      const totals = backlogTotals()
+      const addedCoverage = Math.max(1, Math.round(totals.stories * 0.28 + totals.tasks * 0.16))
+      const newProgress = clamp(project.completionPercentage + Math.max(1, Math.round(addedCoverage / 4)), 0, 99)
+      project.completionPercentage = newProgress
+      project.updatedAt = new Date().toISOString()
+
+      const aiIssues = Number(automation.kpis?.[0]?.value || 0)
+      const currentValidation = parsePercent(automation.kpis?.[1]?.value)
+      const currentSync = parsePercent(automation.kpis?.[2]?.value)
+      const standupSaved = Number(String(automation.kpis?.[3]?.value || "0").replace(/[^\d.]/g, "")) || 0
+
+      const validationBoost = clamp(currentValidation + 1 + Math.round(totals.points / 30), 55, 98)
+      const syncBoost = clamp(currentSync + 0.2, 88, 99.4)
+      const standupBoost = clamp(standupSaved + 0.2, 0.8, 4.4)
+
+      automation.kpis[0].value = aiIssues + Math.max(1, Math.round((totals.stories + totals.tasks) / 2))
+      automation.kpis[1].value = `${validationBoost}%`
+      automation.kpis[2].value = `${syncBoost.toFixed(1)}%`
+      automation.kpis[3].value = `${standupBoost.toFixed(1)}h/week`
+
+      const trend = automation.validationTrend || []
+      if (trend.length >= 6) trend.shift()
+      trend.push(validationBoost)
+
+      const throughput = automation.throughput || { created: [], completed: [] }
+      if (throughput.created.length >= 6) throughput.created.shift()
+      if (throughput.completed.length >= 6) throughput.completed.shift()
+      throughput.created.push(Math.max(4, Math.round((totals.stories + totals.tasks) / 1.5)))
+      throughput.completed.push(Math.max(3, Math.round((totals.stories + totals.tasks + totals.subtasks) / 1.8)))
+      automation.throughput = throughput
+
+      const generated = Number(automation.kpis[0].value || 0)
+      automation.funnel = [
+        { stage: "Generated", value: generated },
+        { stage: "Reviewed", value: Math.round(generated * 0.82) },
+        { stage: "Approved", value: Math.round(generated * 0.69) },
+        { stage: "Merged", value: Math.round(generated * 0.58) },
+        { stage: "Released", value: Math.round(generated * 0.47) }
+      ]
+
+      const incidents = (insights.dailyReport || []).reduce((sum, row) => sum + (row.incidents || 0), 0)
+      setProjectRisk(project.id, derivedThroughput(automation).completed, incidents)
+
+      addEngineeringSignal(project.id, `${totals.stories} stories and ${totals.tasks} tasks synced from planner to Jira context`)
+      upsertRisk(project.id, "Generated scope added; monitor parent linkage and dependency readiness")
+
+      const nextIssue = {
+        id: projectIssuePrefix(),
+        severity: project.risk === "high" ? "high" : "medium",
+        title: `Generated backlog rollout for ${project.key} sync`,
+        owner: "Akshay",
+        status: "to_do",
+        eta: "Next sprint"
+      }
+
+      insights.issueWise = [nextIssue, ...(insights.issueWise || [])].slice(0, 4)
+      insights.dailySummary = [
+        `${totals.points} story points synchronized to demo backlog`,
+        ...(insights.dailySummary || [])
+      ].slice(0, 4)
+
+      data.summaryByProject[project.id] = `${project.name} now reflects planner-to-workspace-to-insights flow with ${totals.stories} stories, ${totals.tasks} tasks, and validation confidence at ${validationBoost}%.`
+    }
+
     window.addChip = function(chip) {
       if (!state.selectedChips.includes(chip)) state.selectedChips.push(chip)
       renderChips()
@@ -2280,13 +2532,7 @@
 
     window.selectProject = function(projectId) {
       syncContextFromProject(projectId, true)
-      normalizeDataConsistency()
-      renderProjectContext()
-      renderOverview()
-      renderWorkspaceDetails()
-      renderInsights()
-      renderAcceptanceReadiness()
-      renderConsistencyAudit()
+      refreshAllPanels()
       toast("success", "Project Switched", "Workspace context updated")
     }
 
@@ -2335,6 +2581,8 @@
       state.selectedItem = { type, tempId: base.tempId }
       renderBacklogTree()
       renderDetailsForm()
+      renderWorkspaceDetails()
+      renderConsistencyAudit()
       toast("success", "Backlog Updated", `${type} added`)
     }
 
@@ -2364,6 +2612,8 @@
       state.selectedItem = null
       renderBacklogTree()
       renderDetailsForm()
+      renderWorkspaceDetails()
+      renderConsistencyAudit()
       toast("success", "Backlog Updated", `${type} deleted`)
     }
 
@@ -2399,22 +2649,12 @@
 
       el("projectSelect").addEventListener("change", e => {
         syncContextFromProject(e.target.value, true)
-        normalizeDataConsistency()
-        renderProjectContext()
-        renderOverview()
-        renderWorkspaceDetails()
-        renderInsights()
-        renderAcceptanceReadiness()
-        renderConsistencyAudit()
+        refreshAllPanels()
       })
 
       el("jiraSelect").addEventListener("change", e => {
         state.selectedJiraKey = e.target.value
-        normalizeDataConsistency()
-        renderWorkspaceDetails()
-        renderInsights()
-        renderAcceptanceReadiness()
-        renderConsistencyAudit()
+        refreshAllPanels()
         toast("success", "Jira Context", `Selected ${state.selectedJiraKey}`)
       })
 
@@ -2467,9 +2707,9 @@
           el("docStatusPill").className = "status-pill status-processed"
           el("docMeta").textContent = "Current SRS: ai-planning-srs-v4.md (processed + requirements extracted)"
           state.plannerChat.push({ role: "assistant", text: "SRS ingestion completed and requirements extracted." })
-          data.notifications.unshift({ id: randomId("n"), type: "success", title: "SRS Processed", message: "Requirements extracted for planning context.", seen: false, createdAt: new Date().toISOString() })
+          pushNotification("success", "SRS Processed", "Requirements extracted for planning context.")
           renderChat()
-          renderNotifications()
+          refreshAllPanels()
           toast("success", "Processing Complete", "Requirements are ready")
         }, 1400)
       })
@@ -2481,17 +2721,27 @@
       el("suggestBtn").addEventListener("click", () => {
         const prompt = el("planningPrompt").value.trim()
         const chat = el("chatInput").value.trim()
+        const contextText = [prompt, chat].filter(Boolean).join(" | ")
+        data.suggestionBuckets = buildDemoSuggestions(contextText)
         if (chat) state.plannerChat.push({ role: "user", text: chat })
-        state.plannerChat.push({ role: "assistant", text: "Generated phase-aware suggestions using requirements + commits + existing stories context." })
+        state.simulationStep += 1
+        state.plannerChat.push({ role: "assistant", text: `Generated phase-aware suggestions run #${state.simulationStep} using requirements, commits, and active Jira context (${state.selectedJiraKey}).` })
         renderChat()
         renderSuggestionBox()
+        pushNotification("info", "Suggestions Ready", `Planner generated contextual suggestions for ${selectedProject().key}.`)
+        renderNotifications()
         toast("success", "Suggestions Ready", prompt || chat ? "Based on your context input" : "Default planning suggestions loaded")
       })
 
       el("generateBtn").addEventListener("click", () => {
+        const created = materializeBacklogFromChips()
         state.plannerChat.push({ role: "assistant", text: "Backlog generated. Opening AI Planner Backlog tab for final review." })
         renderChat()
         renderBacklogTree()
+        if (created) {
+          pushNotification("info", "Backlog Generated", `${created.epics} epics, ${created.stories} stories, ${created.tasks + created.subtasks} task items created from planner.`)
+        }
+        renderNotifications()
         switchView("ai-planner")
         switchAiPlannerTab("backlog")
         toast("success", "Backlog Generated", "Structured hierarchy created")
@@ -2500,13 +2750,16 @@
       el("workspaceGenerateBtn").addEventListener("click", () => {
         switchView("ai-planner")
         switchAiPlannerTab("planner")
+        state.plannerChat.push({ role: "assistant", text: `Workspace telemetry loaded for ${selectedProject().name}. Click Suggest to generate sprint-ready scope.` })
+        renderChat()
         toast("success", "Workspace Context Applied", "Using module + sprint signals for planning")
       })
 
       el("savePushBtn").addEventListener("click", () => {
+        applyBacklogImpact()
         toast("success", "Saved + Pushed", `Backlog synced to Jira project ${state.selectedJiraKey}`)
-        data.notifications.unshift({ id: randomId("n"), type: "success", title: "Jira Push Completed", message: "Epics and stories were created with parent mapping.", seen: false, createdAt: new Date().toISOString() })
-        renderNotifications()
+        pushNotification("success", "Jira Push Completed", "Epics and stories were created with parent mapping.")
+        refreshAllPanels()
       })
 
       el("addEpicBtn").addEventListener("click", () => window.addItem("epic"))
@@ -2516,13 +2769,20 @@
         window.deleteItem(state.selectedItem.type, state.selectedItem.tempId)
       })
 
-      el("fieldTitle").addEventListener("input", e => { updateSelectedField("title", e.target.value); renderBacklogTree() })
+      el("fieldTitle").addEventListener("input", e => {
+        updateSelectedField("title", e.target.value)
+        renderBacklogTree()
+        renderWorkspaceDetails()
+      })
       el("fieldDescription").addEventListener("input", e => updateSelectedField("description", e.target.value))
       el("fieldAssignee").addEventListener("change", e => updateSelectedField("assignee", e.target.value))
       el("fieldPriority").addEventListener("change", e => updateSelectedField("priority", e.target.value))
       el("fieldStart").addEventListener("change", e => updateSelectedField("startDate", e.target.value))
       el("fieldDue").addEventListener("change", e => updateSelectedField("dueDate", e.target.value))
-      el("fieldPoints").addEventListener("input", e => updateSelectedField("storyPoints", Number(e.target.value) || 0))
+      el("fieldPoints").addEventListener("input", e => {
+        updateSelectedField("storyPoints", Number(e.target.value) || 0)
+        renderWorkspaceDetails()
+      })
 
       el("fieldParent").addEventListener("change", e => {
         if (!state.selectedItem) return

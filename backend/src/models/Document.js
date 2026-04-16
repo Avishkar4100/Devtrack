@@ -34,7 +34,7 @@ const DocumentSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['uploaded', 'validating', 'parsing', 'extracting', 'processed', 'failed'],
+      enum: ['uploaded', 'validating', 'parsing', 'embedding', 'extracting', 'processed', 'failed'],
       default: 'uploaded',
     },
     ingestionStatus: {
@@ -81,6 +81,19 @@ const DocumentSchema = new mongoose.Schema(
     },
     vectorNamespace: {
       type: String,
+    },
+    requirementMap: {
+      items: [
+        {
+          id: { type: String, trim: true },
+          title: { type: String, trim: true },
+          module: { type: String, trim: true },
+          status: { type: String, default: 'draft' },
+        },
+      ],
+      source: { type: String, default: 'generated' },
+      generatedAt: { type: Date },
+      version: { type: Number, default: 1 },
     },
   },
   {

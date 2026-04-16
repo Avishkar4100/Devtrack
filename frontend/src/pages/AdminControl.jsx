@@ -5,8 +5,7 @@ import toast from 'react-hot-toast'
 
 export default function AdminControlPage() {
   const qc = useQueryClient()
-  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'developer' })
-  const [newOrg, setNewOrg] = useState({ name: '', domain: '', owner: '' })
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'manager' })
 
   const { data: overview } = useQuery({
     queryKey: ['admin-overview'],
@@ -23,11 +22,6 @@ export default function AdminControlPage() {
     queryFn: async () => (await api.get('/admin/users')).data.data,
   })
 
-  const { data: orgs = [] } = useQuery({
-    queryKey: ['admin-orgs'],
-    queryFn: async () => (await api.get('/admin/organizations')).data.data,
-  })
-
   const [aiForm, setAiForm] = useState(null)
 
   const saveAI = useMutation({
@@ -38,7 +32,7 @@ export default function AdminControlPage() {
 
   const createUser = useMutation({
     mutationFn: (body) => api.post('/admin/users', body),
-    onSuccess: () => { toast.success('User created'); setNewUser({ name: '', email: '', password: '', role: 'developer' }); qc.invalidateQueries(['admin-users']); qc.invalidateQueries(['admin-overview']) },
+    onSuccess: () => { toast.success('User created'); setNewUser({ name: '', email: '', password: '', role: 'manager' }); qc.invalidateQueries(['admin-users']); qc.invalidateQueries(['admin-overview']) },
     onError: (e) => toast.error(e.response?.data?.message || 'Failed to create user'),
   })
 
@@ -46,18 +40,6 @@ export default function AdminControlPage() {
     mutationFn: (id) => api.delete(`/admin/users/${id}`),
     onSuccess: () => { toast.success('User deactivated'); qc.invalidateQueries(['admin-users']); qc.invalidateQueries(['admin-overview']) },
     onError: (e) => toast.error(e.response?.data?.message || 'Failed to deactivate user'),
-  })
-
-  const createOrg = useMutation({
-    mutationFn: (body) => api.post('/admin/organizations', body),
-    onSuccess: () => { toast.success('Organization created'); setNewOrg({ name: '', domain: '', owner: '' }); qc.invalidateQueries(['admin-orgs']); qc.invalidateQueries(['admin-overview']) },
-    onError: (e) => toast.error(e.response?.data?.message || 'Failed to create organization'),
-  })
-
-  const deleteOrg = useMutation({
-    mutationFn: (id) => api.delete(`/admin/organizations/${id}`),
-    onSuccess: () => { toast.success('Organization deleted'); qc.invalidateQueries(['admin-orgs']); qc.invalidateQueries(['admin-overview']) },
-    onError: (e) => toast.error(e.response?.data?.message || 'Failed to delete organization'),
   })
 
   const cfg = aiCfgData?.config
@@ -71,6 +53,7 @@ export default function AdminControlPage() {
       deepseekModel: cfg.deepseekModel,
       temperature: cfg.temperature,
       maxTokens: cfg.maxTokens,
+      manualBridgeTimeoutSeconds: cfg.manualBridgeTimeoutSeconds || opts?.manualBridgeDefaultTimeoutSeconds || 1800,
     })
   }
 
@@ -78,12 +61,12 @@ export default function AdminControlPage() {
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-100">Admin Control Center</h1>
-        <p className="text-sm text-slate-400">Manage AI providers, users, organizations, and live platform stats.</p>
+        <p className="text-sm text-slate-400">Manage AI providers, users, and live platform stats.</p>
       </div>
 
       <div className="grid md:grid-cols-4 gap-3">
         <StatCard label="Total Users" value={overview?.users?.total || 0} />
-        <StatCard label="Active Organizations" value={overview?.organizations?.active || 0} />
+        <StatCard label="Active Users" value={overview?.users?.active || 0} />
         <StatCard label="Total Projects" value={overview?.projects?.total || 0} />
         <StatCard label="Running Projects" value={overview?.projects?.running || 0} />
       </div>
@@ -103,6 +86,7 @@ export default function AdminControlPage() {
             <input className="input" placeholder="DeepSeek Model" value={aiForm.deepseekModel} onChange={(e) => setAiForm((s) => ({ ...s, deepseekModel: e.target.value }))} />
             <input className="input" type="number" placeholder="Temperature" value={aiForm.temperature} onChange={(e) => setAiForm((s) => ({ ...s, temperature: Number(e.target.value) }))} />
             <input className="input" type="number" placeholder="Max Tokens" value={aiForm.maxTokens} onChange={(e) => setAiForm((s) => ({ ...s, maxTokens: Number(e.target.value) }))} />
+            <input className="input" type="number" placeholder="Manual Bridge Timeout (seconds)" value={aiForm.manualBridgeTimeoutSeconds} onChange={(e) => setAiForm((s) => ({ ...s, manualBridgeTimeoutSeconds: Number(e.target.value) }))} />
           </div>
           <button className="btn-primary" onClick={() => saveAI.mutate(aiForm)} disabled={saveAI.isPending}>{saveAI.isPending ? 'Saving...' : 'Save AI Configuration'}</button>
         </div>
@@ -118,9 +102,7 @@ export default function AdminControlPage() {
             <select className="input" value={newUser.role} onChange={(e) => setNewUser((s) => ({ ...s, role: e.target.value }))}>
               <option value="admin">admin</option>
               <option value="scrum_master">scrum_master</option>
-              <option value="developer">developer</option>
-              <option value="product_manager">product_manager</option>
-              <option value="designer">designer</option>
+              <option value="manager">manager</option>
             </select>
           </div>
           <button className="btn-primary" onClick={() => createUser.mutate(newUser)} disabled={createUser.isPending}>Create User</button>
@@ -135,24 +117,11 @@ export default function AdminControlPage() {
         </div>
 
         <div className="card p-4 space-y-3">
-          <h2 className="text-base font-semibold text-gray-100">Organization Management</h2>
-          <div className="grid grid-cols-1 gap-2">
-            <input className="input" placeholder="Organization Name" value={newOrg.name} onChange={(e) => setNewOrg((s) => ({ ...s, name: e.target.value }))} />
-            <input className="input" placeholder="Domain (example.com)" value={newOrg.domain} onChange={(e) => setNewOrg((s) => ({ ...s, domain: e.target.value }))} />
-            <select className="input" value={newOrg.owner} onChange={(e) => setNewOrg((s) => ({ ...s, owner: e.target.value }))}>
-              <option value="">Select owner</option>
-              {users.map((u) => <option key={u._id} value={u._id}>{u.name} - {u.email}</option>)}
-            </select>
-          </div>
-          <button className="btn-primary" onClick={() => createOrg.mutate(newOrg)} disabled={createOrg.isPending}>Create Organization</button>
-          <div className="max-h-64 overflow-y-auto space-y-2">
-            {orgs.map((o) => (
-              <div key={o._id} className="border border-slate-700 rounded-lg p-2 flex items-center justify-between">
-                <p className="text-xs text-slate-200">{o.name} ({o.domain}) - {o.isActive ? 'active' : 'inactive'}</p>
-                <button className="btn-secondary btn-sm" onClick={() => deleteOrg.mutate(o._id)}>Delete</button>
-              </div>
-            ))}
-          </div>
+          <h2 className="text-base font-semibold text-gray-100">Workspace Provisioning</h2>
+          <p className="text-sm text-slate-300">
+            Organization and starter project are auto-created when a user logs in.
+            Users manage their own projects from the Projects section.
+          </p>
         </div>
       </div>
     </div>

@@ -8,6 +8,24 @@ const Story = require('../models/Story');
 const AuditLog = require('../models/AuditLog');
 const logger = require('../config/logger');
 
+const toIdString = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    if (typeof value.toHexString === 'function') {
+      return value.toHexString();
+    }
+    if (value._id && value._id !== value) {
+      return toIdString(value._id);
+    }
+    if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) {
+      const text = value.toString();
+      return text === '[object Object]' ? '' : text;
+    }
+  }
+  return '';
+};
+
 class SprintService {
   /**
    * Auto-close sprints that have passed their end date
@@ -115,9 +133,14 @@ class SprintService {
         new: true,
       }).populate('project');
 
+      const projectId = toIdString(updatedSprint?.project) || toIdString(sprint?.project);
+      if (!projectId) {
+        logger.warn(`Sprint ${sprint._id} closed but has missing project reference`);
+      }
+
       // Emit WebSocket event
-      if (io && updatedSprint.project) {
-        io.to(`project:${updatedSprint.project._id}`).emit('sprint:closed', {
+      if (io && projectId) {
+        io.to(`project:${projectId}`).emit('sprint:closed', {
           sprintId: updatedSprint._id,
           status: 'completed',
           closureReason: reason,
@@ -128,19 +151,21 @@ class SprintService {
       }
 
       // Create audit log
-      await AuditLog.create({
-        project: sprint.project,
-        action: 'sprint_closed',
-        entity: 'sprint',
-        entityId: sprint._id,
-        details: {
-          reason,
-          wasAutoClosed: reason !== 'manual',
-          storiesClosed: closedStories,
-          storiesMoved: movedCount,
-          processingTime: Date.now() - startTime,
-        },
-      });
+      if (projectId) {
+        await AuditLog.create({
+          project: projectId,
+          action: 'sprint_closed',
+          entity: 'sprint',
+          entityId: sprint._id,
+          details: {
+            reason,
+            wasAutoClosed: reason !== 'manual',
+            storiesClosed: closedStories,
+            storiesMoved: movedCount,
+            processingTime: Date.now() - startTime,
+          },
+        });
+      }
 
       logger.info(
         `Sprint ${sprint._id} closed (${reason}): ` +

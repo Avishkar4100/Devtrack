@@ -6,8 +6,9 @@ const AuditLog = require('../models/AuditLog');
 const AIConfig = require('../models/AIConfig');
 const Organization = require('../models/Organization');
 const logger = require('../config/logger');
+const aiService = require('../services/aiService');
 
-const SUPPORTED_AI_PROVIDERS = ['openrouter', 'deepseek_local'];
+const SUPPORTED_AI_PROVIDERS = ['openrouter', 'deepseek_local', 'manual_bridge'];
 
 const getOpenrouterKeyNames = () => Object.keys(process.env)
   .filter((k) => /^OPENROUTER_API_KEY(_\d+)?$/.test(k))
@@ -37,6 +38,10 @@ const normalizeAIConfig = (cfg, userId, index = 0) => {
   }
   if (!cfg.maxTokens || Number(cfg.maxTokens) < 4096) {
     cfg.maxTokens = 4096;
+    changed = true;
+  }
+  if (!cfg.manualBridgeTimeoutSeconds || Number(cfg.manualBridgeTimeoutSeconds) < 30) {
+    cfg.manualBridgeTimeoutSeconds = 1800;
     changed = true;
   }
   if (changed && userId) {
@@ -95,6 +100,7 @@ const buildAIConfigPayload = (body = {}) => {
     'deepseekModel',
     'temperature',
     'maxTokens',
+    'manualBridgeTimeoutSeconds',
     'isActive',
   ];
   const payload = {};
@@ -104,10 +110,21 @@ const buildAIConfigPayload = (body = {}) => {
 
   if (payload.name !== undefined) payload.name = String(payload.name).trim();
   if (payload.provider !== undefined && !SUPPORTED_AI_PROVIDERS.includes(payload.provider)) {
-    throw new Error('Invalid provider. Allowed values: openrouter, deepseek_local');
+    throw new Error('Invalid provider. Allowed values: openrouter, deepseek_local, manual_bridge');
   }
   return payload;
 };
+
+const toAIServicePayload = (cfg) => ({
+  provider: cfg.provider,
+  openrouterKeyName: cfg.openrouterKeyName,
+  openrouterModel: cfg.openrouterModel,
+  deepseekUrl: cfg.deepseekUrl,
+  deepseekModel: cfg.deepseekModel,
+  temperature: cfg.temperature,
+  maxTokens: cfg.maxTokens,
+  manualBridgeTimeoutSeconds: cfg.manualBridgeTimeoutSeconds,
+});
 
 // @desc    Admin platform overview stats
 // @route   GET /api/admin/overview
@@ -192,6 +209,7 @@ const getAIConfig = async (req, res) => {
         openrouterKeyNames: getOpenrouterKeyNames(),
         defaultOpenrouterModel: process.env.LLM_MODEL || 'google/gemma-3-27b-it:free',
         deepseekDefaultUrl: process.env.DEEPSEEK_LOCAL_URL || '',
+        manualBridgeDefaultTimeoutSeconds: Number(process.env.MANUAL_BRIDGE_TIMEOUT_SECONDS || 1800),
       },
     },
   });
@@ -243,6 +261,7 @@ const createAIConfig = async (req, res) => {
   payload.openrouterKeyName = payload.openrouterKeyName || 'OPENROUTER_API_KEY';
   payload.openrouterModel = payload.openrouterModel || process.env.LLM_MODEL || 'google/gemma-3-27b-it:free';
   payload.deepseekModel = payload.deepseekModel || 'deepseek-chat';
+  payload.manualBridgeTimeoutSeconds = Number(payload.manualBridgeTimeoutSeconds || process.env.MANUAL_BRIDGE_TIMEOUT_SECONDS || 1800);
 
   const shouldActivate = payload.isActive === true;
   const created = await AIConfig.create(payload);
@@ -327,6 +346,78 @@ const deleteAIConfig = async (req, res) => {
   res.status(200).json({ success: true, message: 'AI configuration deleted' });
 };
 
+// @desc    Test AI config/provider health with a custom message
+// @route   POST /api/admin/ai-config/test
+// @access  Private (Admin)
+const testAIConfig = async (req, res) => {
+  const { configId, message } = req.body || {};
+
+  const cfg = configId
+    ? await AIConfig.findById(configId)
+    : await AIConfig.findOne({ isActive: true });
+
+  if (!cfg) {
+    return res.status(404).json({ success: false, message: 'AI configuration not found' });
+  }
+
+  const aiConfig = toAIServicePayload(cfg);
+  const health = await aiService.checkHealth();
+
+  if (!health.online) {
+    return res.status(503).json({
+      success: false,
+      message: 'ai-service is offline. Start ai-service and retry test.',
+      data: {
+        provider: cfg.provider,
+        configName: cfg.name,
+      },
+    });
+  }
+
+  if (cfg.provider === 'manual_bridge') {
+    return res.status(200).json({
+      success: true,
+      message: 'ai-service is reachable. Manual bridge provider is active (human-in-the-loop, no instant auto-response).',
+      data: {
+        provider: cfg.provider,
+        configName: cfg.name,
+        model: null,
+        aiServiceHealth: health.data || null,
+      },
+    });
+  }
+
+  const prompt = String(message || '').trim() || 'Respond with a one-line health acknowledgement and active provider name.';
+  const startedAt = Date.now();
+
+  try {
+    const response = await aiService.testLLM({ prompt, aiConfig });
+    return res.status(200).json({
+      success: true,
+      message: 'AI provider test successful',
+      data: {
+        provider: cfg.provider,
+        configName: cfg.name,
+        model: cfg.provider === 'openrouter' ? cfg.openrouterModel : cfg.deepseekModel,
+        latencyMs: Date.now() - startedAt,
+        output: response?.summary || '',
+        aiServiceHealth: health.data || null,
+      },
+    });
+  } catch (error) {
+    logger.warn(`Admin AI config test failed config=${cfg._id}: ${error.message}`);
+    return res.status(Number(error?.statusCode || 502)).json({
+      success: false,
+      message: error?.message || 'AI provider test failed',
+      data: {
+        provider: cfg.provider,
+        configName: cfg.name,
+        model: cfg.provider === 'openrouter' ? cfg.openrouterModel : cfg.deepseekModel,
+      },
+    });
+  }
+};
+
 // @desc    List users
 // @route   GET /api/admin/users
 // @access  Private (Admin)
@@ -344,6 +435,9 @@ const createUser = async (req, res) => {
     return res.status(400).json({ success: false, message: 'name, email and password are required' });
   }
 
+  const allowedRoles = ['manager', 'scrum_master', 'admin'];
+  const normalizedRole = allowedRoles.includes(role) ? role : 'manager';
+
   const exists = await User.findOne({ email });
   if (exists) return res.status(400).json({ success: false, message: 'Email already exists' });
 
@@ -351,7 +445,7 @@ const createUser = async (req, res) => {
     name,
     email,
     password,
-    role: role || 'developer',
+    role: normalizedRole,
     isEmailVerified: true,
   });
 
@@ -511,6 +605,7 @@ module.exports = {
   updateAIConfigById,
   activateAIConfig,
   deleteAIConfig,
+  testAIConfig,
   listUsers,
   createUser,
   updateUser,

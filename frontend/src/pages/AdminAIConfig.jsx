@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 const PROVIDER_LABELS = {
   openrouter: 'OpenRouter',
   deepseek_local: 'DeepSeek Local',
+  manual_bridge: 'Manual Bridge',
 }
 
 const defaultForm = {
@@ -35,6 +36,8 @@ export default function AdminAIConfigPage() {
   const [aiForm, setAiForm] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
   const [isCreating, setIsCreating] = useState(false)
+  const [testMessage, setTestMessage] = useState('Respond with: AI config test successful')
+  const [testResult, setTestResult] = useState(null)
 
   const { data: aiCfgData } = useQuery({
     queryKey: ['admin-ai-config'],
@@ -88,6 +91,19 @@ export default function AdminAIConfigPage() {
     onError: (e) => toast.error(e.response?.data?.message || 'Failed to delete AI config'),
   })
 
+  const testAI = useMutation({
+    mutationFn: (payload) => api.post('/admin/ai-config/test', payload),
+    onSuccess: (res) => {
+      const data = res?.data?.data || {}
+      setTestResult(data)
+      toast.success(res?.data?.message || 'AI test successful')
+    },
+    onError: (e) => {
+      setTestResult(e?.response?.data?.data || null)
+      toast.error(e?.response?.data?.message || 'AI provider test failed')
+    },
+  })
+
   const opts = aiCfgData?.options
   const configs = aiCfgData?.configs || []
 
@@ -120,6 +136,18 @@ export default function AdminAIConfigPage() {
     }
 
     saveAI.mutate({ id: selectedId, body: aiForm })
+  }
+
+  const handleTest = () => {
+    if (!selectedId && !isCreating) {
+      toast.error('Select a configuration to test')
+      return
+    }
+
+    testAI.mutate({
+      configId: selectedId,
+      message: testMessage,
+    })
   }
 
   return (
@@ -208,6 +236,29 @@ export default function AdminAIConfigPage() {
               </button>
             )}
           </div>
+
+          {!isCreating && (
+            <div className="space-y-2 border-t border-slate-700/60 pt-3">
+              <p className="text-sm text-slate-200 font-semibold">Test Message</p>
+              <textarea
+                className="input min-h-[84px]"
+                value={testMessage}
+                onChange={(e) => setTestMessage(e.target.value)}
+                placeholder="Type a short message to test active model/provider"
+              />
+              <button className="btn-secondary" onClick={handleTest} disabled={testAI.isPending || !selectedId}>
+                {testAI.isPending ? 'Testing...' : 'Test LLM Service'}
+              </button>
+              {testResult && (
+                <div className="rounded-lg border border-slate-700/70 bg-slate-900/60 p-3 text-xs text-slate-300 space-y-1">
+                  <p><span className="font-semibold text-slate-100">Provider:</span> {testResult.provider || 'N/A'}</p>
+                  <p><span className="font-semibold text-slate-100">Model:</span> {testResult.model || 'N/A'}</p>
+                  {testResult.latencyMs !== undefined && <p><span className="font-semibold text-slate-100">Latency:</span> {testResult.latencyMs} ms</p>}
+                  {testResult.output && <p><span className="font-semibold text-slate-100">Output:</span> {testResult.output}</p>}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

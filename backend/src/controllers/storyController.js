@@ -11,9 +11,12 @@ const Commit = require('../models/Commit');
 const AuditLog = require('../models/AuditLog');
 const User = require('../models/User');
 const aiService = require('../services/aiService');
+const DocumentService = require('../services/documentService');
+const { buildProjectStateSnapshot } = require('../services/projectStateManager');
 const SocketService = require('../services/socketService');
 const { sendEmail, storyCreatedEmail, storyAssignedEmail } = require('../services/email');
 const logger = require('../config/logger');
+const { getClientErrorMessage } = require('../utils/errorUtils');
 
 const readSnippetFromDocument = (filePath, maxChars = 4000) => {
   try {
@@ -120,29 +123,14 @@ const buildVectorlessContextGraph = async (projectId) => {
   };
 };
 
-const buildSrsOnlyContext = async (projectId) => {
-  const docs = await Document.find({ project: projectId, isActive: true, status: 'processed' })
-    .sort({ createdAt: -1 })
-    .limit(2)
-    .lean();
-
-  const docContexts = docs.map((doc) => ({
-    id: doc._id.toString(),
-    name: doc.name,
-    fileType: doc.fileType,
-    snippet: readSnippetFromDocument(doc.filePath, 12000),
-  }));
-
-  return {
-    source: 'srs_only',
-    documents: docContexts,
-  };
-};
-
 // @desc    Get epics and stories for a project
 // @route   GET /api/stories/project/:projectId
 // @access  Private
 const getStoriesByProject = async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(String(req.params.projectId || ''))) {
+    return res.status(400).json({ success: false, message: 'Invalid project id' });
+  }
+
   const { epicId, status, type } = req.query;
   const filter = { project: req.params.projectId };
   if (epicId) filter.epic = epicId;
@@ -159,10 +147,31 @@ const getStoriesByProject = async (req, res) => {
   res.status(200).json({ success: true, count: stories.length, data: stories });
 };
 
+// @desc    Get precise project state snapshot for discovery/suggestion flow
+// @route   GET /api/stories/project-state/:projectId
+// @access  Private (Manager/Scrum Master)
+const getProjectState = async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(String(req.params.projectId || ''))) {
+    return res.status(400).json({ success: false, message: 'Invalid project id' });
+  }
+
+  const project = await Project.findById(req.params.projectId).lean();
+  if (!project) {
+    return res.status(404).json({ success: false, message: 'Project not found' });
+  }
+
+  const state = await buildProjectStateSnapshot(project._id.toString());
+  res.status(200).json({ success: true, data: state });
+};
+
 // @desc    Get epics for a project
 // @route   GET /api/stories/epics/:projectId
 // @access  Private
 const getEpics = async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(String(req.params.projectId || ''))) {
+    return res.status(400).json({ success: false, message: 'Invalid project id' });
+  }
+
   const epics = await Epic.find({ project: req.params.projectId }).sort({ order: 1 });
   res.status(200).json({ success: true, count: epics.length, data: epics });
 };
@@ -179,6 +188,19 @@ const generateStories = async (req, res) => {
 
   const project = await Project.findById(req.params.projectId);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+
+  const aiHealth = await aiService.checkHealth();
+  const activeAiConfig = await aiService.getActiveAIConfigPayload();
+  if (!aiHealth.online) {
+    return res.status(503).json({
+      success: false,
+      message: 'ai-service is offline. Start ai-service and retry Suggest.',
+      data: {
+        provider: activeAiConfig?.provider || null,
+        model: activeAiConfig?.openrouterModel || activeAiConfig?.deepseekModel || null,
+      },
+    });
+  }
 
   const processedDoc = await Document.findOne({ project: project._id, status: 'processed', isActive: true })
     .sort({ updatedAt: -1 })
@@ -201,6 +223,25 @@ const generateStories = async (req, res) => {
   const contextGraph = await buildVectorlessContextGraph(project._id);
   const graphContext = `\n\nVectorless project graph context:\n${JSON.stringify(contextGraph)}`;
 
+  const users = await User.find({
+    _id: {
+      $in: [project.owner, ...(project.members || []).map((m) => m.user).filter(Boolean)],
+    },
+  }).select('name').lean();
+  const userNameMap = new Map(users.map((u) => [String(u._id), u.name || 'Unknown']));
+  const teamMembers = [
+    {
+      id: String(project.owner),
+      name: userNameMap.get(String(project.owner)) || 'Project Owner',
+      role: 'Owner',
+    },
+    ...(project.members || []).map((m) => ({
+      id: String(m.user),
+      name: userNameMap.get(String(m.user)) || 'Team Member',
+      role: m.role || 'manager',
+    })),
+  ];
+
   const planningWarnings = [];
   let contextQuality = 'high';
   if (!processedDoc) {
@@ -218,6 +259,7 @@ const generateStories = async (req, res) => {
     additionalContext: enhancedContext,
     budget: project.budget,
     deadline: project.deadline,
+    teamMembers,
   });
 
   await AuditLog.create({
@@ -244,42 +286,11 @@ const generateStories = async (req, res) => {
   });
 };
 
-const buildFallbackSuggestions = ({ moduleName, phase, contextGraph }) => {
-  const moduleLabel = moduleName || 'Core Module';
-  const actorLabel = contextGraph?.actors?.[0] || 'project users';
-  const flowLabel = contextGraph?.functional?.[0] || `${moduleLabel} primary workflow`;
-
-  const epics = [
-    `Define ${moduleLabel} MVP boundaries and acceptance milestones for ${actorLabel} across the first two sprints`,
-    `Map ${moduleLabel} delivery flow from intake to completion and assign ownership checkpoints for handoff visibility`,
-  ];
-
-  const stories = [
-    `Break down ${flowLabel} into implementation-ready user stories with role-scoped acceptance criteria and test notes`,
-    `Prioritize ${moduleLabel} backlog by release value and dependency order before assigning stories into sprint buckets`,
-    `Draft integration stories for Jira synchronization fields, workflow statuses, and verification checkpoints in ${moduleLabel}`,
-    `Prepare review-ready stories that define done criteria for UI behavior, API responses, and data consistency guarantees`,
-  ];
-
-  const tasks = [
-    `Create a dependency matrix for ${moduleLabel} stories and mark blockers that can impact sprint start confidence`,
-    `Finalize role permissions for ${actorLabel} and attach validation criteria to each backlog item before approval`,
-    `Document risk assumptions for ${moduleLabel} scope and convert each risk into a measurable mitigation task`,
-    `Review backlog sequencing with engineering and product to confirm estimates, ownership, and Jira field mapping`,
-  ];
-
-  if (phase === 'mid' || phase === 'late') {
-    tasks[0] = `Audit in-flight ${moduleLabel} stories and convert stalled work into explicit unblocker tasks with owners`;
-  }
-
-  return { epics, stories, tasks };
-};
-
 // @desc    Suggest next planning prompts using vectorless context graph
 // @route   POST /api/stories/suggest/:projectId
 // @access  Private (Manager/Scrum Master)
 const suggestStories = async (req, res) => {
-  const { moduleName, userInput } = req.body;
+  const { moduleName, userInput, projectState: providedProjectState } = req.body;
   if (!moduleName) {
     return res.status(400).json({ success: false, message: 'Module name is required' });
   }
@@ -324,6 +335,50 @@ const suggestStories = async (req, res) => {
 
   logger.info(`Suggest request project=${project._id} module=${moduleName} phase=${phase} modules=${structuredContext.modules.length} fr=${structuredContext.functional.length} nfr=${structuredContext.nonFunctional.length} actors=${structuredContext.actors.length} userInputChars=${(userInput || '').length}`);
 
+  let requirementMap = latestProcessedDoc?.requirementMap || null;
+  if (!requirementMap || !Array.isArray(requirementMap.items) || !requirementMap.items.length) {
+    const generatedMap = await DocumentService.generateRequirementMap(project._id.toString(), { source: 'auto_on_suggest' });
+    requirementMap = generatedMap.requirementMap;
+  }
+
+  const projectState = providedProjectState && typeof providedProjectState === 'object' && !Array.isArray(providedProjectState)
+    ? providedProjectState
+    : await buildProjectStateSnapshot(project._id);
+  const completedJiraIds = Array.isArray(projectState.completedJiraIds) ? projectState.completedJiraIds : [];
+
+  let discoveredRequirementIds = [];
+  try {
+    const discovery = await aiService.discoverGaps({
+      projectId: project._id.toString(),
+      moduleName,
+      userInput: userInput || '',
+      requirementMap: requirementMap || { items: [] },
+      projectState,
+      completedJiraIds,
+    });
+    discoveredRequirementIds = Array.isArray(discovery?.requirement_ids) ? discovery.requirement_ids : [];
+  } catch (err) {
+    logger.warn(`Suggest discovery failed project=${project._id}: ${err.message}`);
+  }
+
+  if (!discoveredRequirementIds.length && Array.isArray(requirementMap?.items)) {
+    discoveredRequirementIds = requirementMap.items.slice(0, 8).map((x) => x.id).filter(Boolean);
+  }
+
+  let fetchedChunks = [];
+  if (discoveredRequirementIds.length) {
+    try {
+      const fetchResult = await aiService.getChunksByIds({
+        projectId: project._id.toString(),
+        requirementIds: discoveredRequirementIds,
+        topKPerId: 2,
+      });
+      fetchedChunks = Array.isArray(fetchResult?.chunks) ? fetchResult.chunks : [];
+    } catch (err) {
+      logger.warn(`Suggest targeted fetch failed project=${project._id}: ${err.message}`);
+    }
+  }
+
   let result;
   try {
     result = await aiService.suggestStories({
@@ -331,7 +386,11 @@ const suggestStories = async (req, res) => {
       projectName: project.name,
       moduleName,
       userInput: userInput || '',
-      contextGraph: structuredContext,
+      contextGraph: {
+        ...structuredContext,
+        fetchedChunks,
+        projectState,
+      },
     });
   } catch (error) {
     if (error.code === 'AI_SERVICE_UNAVAILABLE') {
@@ -339,37 +398,20 @@ const suggestStories = async (req, res) => {
       return res.status(503).json({
         success: false,
         message: 'AI suggestion service is unavailable. Start ai-service and verify model credentials, then try again.',
+        data: {
+          provider: activeAiConfig?.provider || null,
+          model: activeAiConfig?.openrouterModel || activeAiConfig?.deepseekModel || null,
+        },
       });
     }
 
-    logger.warn(`Suggest degraded project=${project._id} reason=ai_suggest_failed detail=${error.message}`);
-    const fallbackStructured = buildFallbackSuggestions({
-      moduleName,
-      phase,
-      contextGraph: structuredContext,
-    });
-    const fallbackFlat = [
-      ...fallbackStructured.epics.map((s) => `EPIC: ${s}`),
-      ...fallbackStructured.stories.map((s) => `STORY: ${s}`),
-      ...fallbackStructured.tasks.map((s) => `TASK: ${s}`),
-    ];
-
-    return res.status(200).json({
-      success: true,
+    logger.warn(`Suggest failed project=${project._id} reason=ai_suggest_failed detail=${error.message}`);
+    return res.status(502).json({
+      success: false,
+      message: `AI suggestion request failed for provider ${activeAiConfig?.provider || 'unknown'}: ${error.message}`,
       data: {
-        suggestions: fallbackFlat,
-        structuredSuggestions: fallbackStructured,
-        planningMeta: {
-          contextQuality: latestProcessedDoc ? 'medium' : 'low',
-          usedProcessedSrs: Boolean(latestProcessedDoc),
-          processedDocumentId: latestProcessedDoc?._id || null,
-          warnings: [
-            'AI provider request failed. Showing fallback planning suggestions generated from project context.',
-            ...(latestProcessedDoc
-              ? []
-              : ['No processed SRS found. Suggestions are generated from project graph fallback context.']),
-          ],
-        },
+        provider: activeAiConfig?.provider || null,
+        model: activeAiConfig?.openrouterModel || activeAiConfig?.deepseekModel || null,
         contextSummary: {
           source: 'requirements_structured',
           phase,
@@ -382,41 +424,33 @@ const suggestStories = async (req, res) => {
     });
   }
 
-  const rawActions = Array.isArray(result?.suggestions) ? result.suggestions : [];
-  const badWords = ['optimize', 'refactor', 'improve', 'enhance', 'validation', 'error handling', 'define', 'plan'];
-  const filteredActions = rawActions.filter((s) => {
-    const title = String(s?.title || '').toLowerCase();
-    if (!title) return false;
-    if (badWords.some((w) => title.includes(w))) return false;
-    if (phase === 'start' && s?.type === 'improvement') return false;
-    return true;
-  }).slice(0, 7);
-
-  if (filteredActions.length < 3) {
-    logger.warn(`Suggest failed project=${project._id} reason=empty_ai_response`);
-    return res.status(502).json({
-      success: false,
-      message: 'AI returned insufficient domain-aligned actionable suggestions after quality filters. Check ai-service logs and requirements extraction.',
-      data: {
-        contextSummary: {
-          source: 'requirements_structured',
-          phase,
-          moduleCount: structuredContext.modules.length,
-          functionalCount: structuredContext.functional.length,
-        },
-      },
-    });
-  }
-
   const structuredSuggestions = { epics: [], stories: [], tasks: [] };
-  filteredActions.forEach((action) => {
+  const rawActions = Array.isArray(result?.suggestions) ? result.suggestions : [];
+  const normalizedActions = rawActions.slice(0, 7).map((action, idx) => ({
+    id: String(action?.id || `sug-${idx + 1}`),
+    title: String(action?.title || '').trim(),
+    description: String(action?.description || '').trim(),
+    impact: String(action?.impact || 'medium').trim(),
+    estimated_effort: String(action?.estimated_effort || 'medium').trim(),
+    module: String(action?.module || moduleName).trim(),
+    type: String(action?.type || 'story').trim(),
+  })).filter((action) => Boolean(action.title));
+
+  normalizedActions.forEach((action) => {
     const line = `${action.title}${action.reason ? ` - ${action.reason}` : ''}`;
-    if (action.type === 'integration') structuredSuggestions.epics.push(line);
-    else if (action.type === 'improvement') structuredSuggestions.tasks.push(line);
+    if (action.type === 'integration' || action.type === 'epic') structuredSuggestions.epics.push(line);
+    else if (action.type === 'improvement' || action.type === 'task') structuredSuggestions.tasks.push(line);
     else structuredSuggestions.stories.push(line);
   });
 
-  logger.info(`Suggest AI response project=${project._id} actions=${filteredActions.length} epics=${structuredSuggestions.epics.length} stories=${structuredSuggestions.stories.length} tasks=${structuredSuggestions.tasks.length}`);
+  if (!normalizedActions.length) {
+    return res.status(502).json({
+      success: false,
+      message: 'AI returned no actionable suggestions for the current discovery request. Please retry with a narrower prompt.',
+    });
+  }
+
+  logger.info(`Suggest AI response project=${project._id} actions=${normalizedActions.length} epics=${structuredSuggestions.epics.length} stories=${structuredSuggestions.stories.length} tasks=${structuredSuggestions.tasks.length}`);
 
   const flatSuggestions = [
     ...structuredSuggestions.epics.map((s) => `EPIC: ${s}`),
@@ -433,6 +467,9 @@ const suggestStories = async (req, res) => {
         contextQuality: latestProcessedDoc ? 'high' : 'low',
         usedProcessedSrs: Boolean(latestProcessedDoc),
         processedDocumentId: latestProcessedDoc?._id || null,
+        requirementMapItems: Array.isArray(requirementMap?.items) ? requirementMap.items.length : 0,
+        discoveredRequirementIds,
+        fetchedChunks: fetchedChunks.length,
         warnings: latestProcessedDoc
           ? []
           : ['No processed SRS found. Suggestions are generated from project graph fallback context.'],
@@ -709,14 +746,20 @@ const createStory = async (req, res) => {
 
     // Emit WebSocket event
     const io = req.app.get('io');
-    if (io) {
-      SocketService.storyCreated(io, story.project.toString(), story);
+    const projectId = story.project?.toString?.() || '';
+    if (io && projectId) {
+      SocketService.storyCreated(io, projectId, story);
     }
 
     res.status(201).json({ success: true, data: story });
   } catch (err) {
     logger.error('Story creation error:', err);
-    res.status(500).json({ success: false, message: 'Failed to create story', error: err.message });
+    const inferredStatus = (err.name === 'ValidationError' || err.name === 'CastError') ? 400 : 500;
+    const statusCode = Number(err.statusCode || inferredStatus);
+    res.status(statusCode).json({
+      success: false,
+      message: getClientErrorMessage(err, 'Failed to create story'),
+    });
   }
 };
 
@@ -735,7 +778,18 @@ const updateStory = async (req, res) => {
 
     if (!story) return res.status(404).json({ success: false, message: 'Story not found' });
 
-    await updateProjectCounts(story.project._id);
+    const projectId = story.project?._id?.toString?.() || '';
+    if (!projectId) {
+      logger.warn(`Story ${story._id} has an invalid or missing project reference during update`);
+      return res.status(409).json({
+        success: false,
+        message: 'Story is linked to an invalid project. Please refresh project data and try again.',
+      });
+    }
+
+    const projectName = story.project?.name || 'Project';
+
+    await updateProjectCounts(projectId);
 
     // Send assignment notification email
     if (wasAssigneeChanged && story.assignee?.email) {
@@ -744,7 +798,7 @@ const updateStory = async (req, res) => {
         const htmlContent = storyAssignedEmail(
           story.title,
           story.assignee.name,
-          story.project.name,
+          projectName,
           reporter?.name || 'Team',
           {
             epicTitle: story.epic?.title,
@@ -767,14 +821,14 @@ const updateStory = async (req, res) => {
     // Emit socket event
     const io = req.app.get('io');
     if (io) {
-      SocketService.storyUpdated(io, story.project._id.toString(), story);
+      SocketService.storyUpdated(io, projectId, story);
       if (wasAssigneeChanged) {
-        SocketService.storyAssigned(io, story.project._id.toString(), story);
+        SocketService.storyAssigned(io, projectId, story);
       }
     }
 
     await AuditLog.create({
-      project: story.project._id,
+      project: projectId,
       user: req.user.id,
       action: 'story_edited',
       entity: 'story',
@@ -786,7 +840,12 @@ const updateStory = async (req, res) => {
     res.status(200).json({ success: true, data: story });
   } catch (err) {
     logger.error('Story update error:', err);
-    res.status(500).json({ success: false, message: 'Failed to update story', error: err.message });
+    const inferredStatus = (err.name === 'ValidationError' || err.name === 'CastError') ? 400 : 500;
+    const statusCode = Number(err.statusCode || inferredStatus);
+    res.status(statusCode).json({
+      success: false,
+      message: getClientErrorMessage(err, 'Failed to update story'),
+    });
   }
 };
 
@@ -876,6 +935,9 @@ const bulkAssignStories = async (req, res) => {
     // Fetch updated stories for email
     const updatedStories = await Story.find({ _id: { $in: storyIds } }).select('title storyPoints priority epic');
     const project = await Project.findById(projectId).select('name');
+    if (!project) {
+      return res.status(404).json({ success: false, message: 'Project not found' });
+    }
     const reporter = await User.findById(req.user.id).select('name');
 
     // Send bulk assignment email
@@ -917,10 +979,11 @@ const bulkAssignStories = async (req, res) => {
     });
   } catch (err) {
     logger.error('Bulk assignment error:', err);
-    res.status(500).json({
+    const inferredStatus = (err.name === 'ValidationError' || err.name === 'CastError') ? 400 : 500;
+    const statusCode = Number(err.statusCode || inferredStatus);
+    res.status(statusCode).json({
       success: false,
-      message: 'Failed to bulk assign stories',
-      error: err.message,
+      message: getClientErrorMessage(err, 'Failed to bulk assign stories'),
     });
   }
 };
@@ -928,6 +991,7 @@ const bulkAssignStories = async (req, res) => {
 module.exports = {
   getStoriesByProject,
   getEpics,
+  getProjectState,
   generateStories,
   suggestStories,
   saveGeneratedStories,

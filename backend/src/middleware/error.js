@@ -1,5 +1,6 @@
 
 const logger = require('../config/logger');
+const { getPublicErrorMessage } = require('../utils/errorUtils');
 
 const notFound = (req, res, next) => {
   const error = new Error(`Not Found - ${req.originalUrl}`);
@@ -9,7 +10,8 @@ const notFound = (req, res, next) => {
 
 const errorHandler = (err, req, res, next) => {
   let statusCode = err.statusCode || (res.statusCode === 200 ? 500 : res.statusCode);
-  let message = err.message;
+  let message = getPublicErrorMessage(err, statusCode, 'Internal server error. Please try again.');
+  let validationErrors = null;
 
   if (err.name === 'CastError') {
     message = `Resource not found. Invalid ID: ${err.value}`;
@@ -23,7 +25,8 @@ const errorHandler = (err, req, res, next) => {
   }
 
   if (err.name === 'ValidationError') {
-    message = Object.values(err.errors).map((val) => val.message).join(', ');
+    validationErrors = Object.values(err.errors).map((val) => val.message);
+    message = validationErrors.join(', ');
     statusCode = 400;
   }
 
@@ -38,14 +41,25 @@ const errorHandler = (err, req, res, next) => {
   }
 
   if (statusCode >= 500) {
-    logger.error(`[${statusCode}] ${err.stack || err.message}`);
+    logger.error(`[${statusCode}] requestId=${req.requestId || '-'} ${err.stack || err.message}`);
   }
 
-  res.status(statusCode).json({
+  const payload = {
     success: false,
     message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
-  });
+    requestId: req.requestId,
+  };
+
+  if (validationErrors && validationErrors.length > 0) {
+    payload.errors = validationErrors;
+  }
+
+  if (process.env.NODE_ENV === 'development') {
+    payload.stack = err.stack;
+    payload.code = err.code;
+  }
+
+  res.status(statusCode).json(payload);
 };
 
 module.exports = { notFound, errorHandler };

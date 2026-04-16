@@ -6,56 +6,64 @@
   <title>DevTrack Static UI Demo</title>
   <style>
     :root {
-      --bg-page: #06060f;
-      --bg-sidebar: #0a0a18;
-      --bg-card: rgba(255, 255, 255, 0.04);
-      --bg-header: rgba(6, 6, 15, 0.9);
-      --bg-input: rgba(255, 255, 255, 0.05);
-      --bg-hover: rgba(255, 255, 255, 0.06);
-      --text-primary: #f3f4f6;
-      --text-secondary: #94a3b8;
-      --text-muted: #64748b;
-      --border: rgba(255, 255, 255, 0.07);
-      --border-card: rgba(255, 255, 255, 0.1);
-      --brand: #6366f1;
-      --brand-2: #8b5cf6;
-      --ok: #10b981;
-      --warn: #f59e0b;
-      --danger: #ef4444;
-      --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.35);
-    }
-
-    :root.light {
-      --bg-page: #f1f5f9;
+      --bg-page: #f8f9fa;
       --bg-sidebar: #ffffff;
       --bg-card: #ffffff;
       --bg-header: rgba(255, 255, 255, 0.95);
       --bg-input: #ffffff;
-      --bg-hover: rgba(0, 0, 0, 0.04);
-      --text-primary: #0f172a;
-      --text-secondary: #334155;
-      --text-muted: #64748b;
-      --border: rgba(0, 0, 0, 0.08);
-      --border-card: rgba(0, 0, 0, 0.1);
-      --shadow-card: 0 8px 24px rgba(2, 6, 23, 0.08);
+      --bg-hover: rgba(26, 115, 232, 0.06);
+      --text-primary: #202124;
+      --text-secondary: #3c4043;
+      --text-muted: #5f6368;
+      --border: #dadce0;
+      --border-card: #e0e3e7;
+      --brand: #1a73e8;
+      --brand-2: #185abc;
+      --ok: #188038;
+      --warn: #a15c00;
+      --danger: #b3261e;
+      --shadow-card: 0 1px 2px rgba(60, 64, 67, 0.2), 0 3px 10px rgba(60, 64, 67, 0.12);
+    }
+
+    :root.light {
+      --bg-page: #f8f9fa;
+      --bg-sidebar: #ffffff;
+      --bg-card: #ffffff;
+      --bg-header: rgba(255, 255, 255, 0.95);
+      --bg-input: #ffffff;
+      --bg-hover: rgba(26, 115, 232, 0.06);
+      --text-primary: #202124;
+      --text-secondary: #3c4043;
+      --text-muted: #5f6368;
+      --border: #dadce0;
+      --border-card: #e0e3e7;
+      --brand: #1a73e8;
+      --brand-2: #185abc;
+      --ok: #188038;
+      --warn: #a15c00;
+      --danger: #b3261e;
+      --shadow-card: 0 1px 2px rgba(60, 64, 67, 0.2), 0 3px 10px rgba(60, 64, 67, 0.12);
     }
 
     * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; }
+    html, body { margin: 0; min-height: 100%; }
+    html { color-scheme: light; }
     body {
-      font-family: "Inter", "Segoe UI", sans-serif;
+      font-family: "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
       background: var(--bg-page);
       color: var(--text-primary);
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: hidden;
     }
 
     .app {
       display: grid;
       grid-template-columns: clamp(208px, 17vw, 244px) minmax(0, 1fr);
-      height: 100%;
+      height: 100vh;
       width: 100vw;
       max-width: 100vw;
       overflow: hidden;
+      align-items: start;
     }
 
     .sidebar {
@@ -66,6 +74,10 @@
       flex-direction: column;
       flex-shrink: 0;
       min-width: 0;
+      height: 100vh;
+      position: sticky;
+      top: 0;
+      overflow: hidden;
     }
 
     .logo {
@@ -91,7 +103,7 @@
     }
 
     .title { font-weight: 800; letter-spacing: -0.02em; }
-    .title span { background: linear-gradient(90deg, #818cf8, #c4b5fd); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .title span { background: linear-gradient(90deg, #174ea6, #1a73e8); -webkit-background-clip: text; background-clip: text; color: transparent; }
 
     .nav { padding: 10px; overflow-y: auto; }
     .nav-btn {
@@ -112,9 +124,9 @@
     }
     .nav-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
     .nav-btn.active {
-      color: #c7d2fe;
-      background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.14));
-      box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.35);
+      color: #174ea6;
+      background: linear-gradient(135deg, rgba(26, 115, 232, 0.12), rgba(26, 115, 232, 0.08));
+      box-shadow: inset 0 0 0 1px rgba(26, 115, 232, 0.34);
     }
 
     .context-card {
@@ -140,6 +152,52 @@
       border-radius: 10px;
       padding: 9px 10px;
       outline: none;
+      min-height: 38px;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+    }
+
+    .input:hover {
+      border-color: rgba(26, 115, 232, 0.34);
+      background: #ffffff;
+    }
+
+    select.input {
+      appearance: auto;
+      -webkit-appearance: menulist;
+      -moz-appearance: menulist;
+      color-scheme: light;
+      padding: 8px 12px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      border: 1px solid #d2d7de;
+      border-radius: 10px;
+      background-image: none;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+    }
+
+    select.input:focus {
+      border-color: #1a73e8;
+      box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.18);
+      background-image: none;
+    }
+
+    select.input option {
+      color-scheme: light;
+      background: #ffffff;
+      color: #202124;
+      font-weight: 500;
+    }
+
+    select.input option:checked {
+      background: #e8f0fe;
+      color: #174ea6;
+    }
+
+    select.input:disabled {
+      cursor: not-allowed;
+      background-color: #f1f3f4;
+      opacity: 0.72;
     }
 
     .input + .input { margin-top: 8px; }
@@ -177,6 +235,9 @@
       width: 100%;
       display: flex;
       flex-direction: column;
+      height: 100vh;
+      overflow-y: auto;
+      overflow-x: hidden;
     }
 
     .topbar {
@@ -276,7 +337,7 @@
 
     .content {
       flex: 1;
-      overflow: auto;
+      overflow: visible;
       padding: 18px;
       width: 100%;
       max-width: none;
@@ -343,9 +404,9 @@
       font-weight: 600;
       text-transform: capitalize;
     }
-    .risk.high { background: rgba(239, 68, 68, 0.18); color: #fda4af; }
-    .risk.medium { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
-    .risk.low { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
+    .risk.high { background: rgba(217, 48, 37, 0.12); color: #b3261e; }
+    .risk.medium { background: rgba(251, 188, 4, 0.16); color: #8d5a00; }
+    .risk.low { background: rgba(24, 128, 56, 0.14); color: #188038; }
 
     .bar {
       height: 7px;
@@ -424,9 +485,9 @@
       letter-spacing: 0.04em;
       display: inline-block;
     }
-    .status-uploaded { background: rgba(59,130,246,0.18); color: #93c5fd; }
-    .status-processing { background: rgba(245,158,11,0.2); color: #fde68a; }
-    .status-processed { background: rgba(16,185,129,0.2); color: #6ee7b7; }
+    .status-uploaded { background: rgba(26, 115, 232, 0.12); color: #174ea6; }
+    .status-processing { background: rgba(251, 188, 4, 0.14); color: #8d5a00; }
+    .status-processed { background: rgba(24, 128, 56, 0.14); color: #188038; }
 
     .tree-node {
       border: 1px solid var(--border-card);
@@ -484,10 +545,12 @@
     }
 
     .workspace-tab.active {
-      background: linear-gradient(135deg, rgba(99, 102, 241, 0.24), rgba(139, 92, 246, 0.18));
-      border-color: rgba(99, 102, 241, 0.55);
-      color: #c7d2fe;
+      background: linear-gradient(135deg, rgba(26, 115, 232, 0.12), rgba(26, 115, 232, 0.08));
+      border-color: rgba(26, 115, 232, 0.34);
+      color: #174ea6;
     }
+
+    #themeToggle { display: none; }
 
     .workspace-mini-grid {
       display: grid;
@@ -552,6 +615,219 @@
     .toast.success { border-color: rgba(16, 185, 129, 0.4); }
     .toast.error { border-color: rgba(239, 68, 68, 0.45); }
 
+    .stack-grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .chart-shell {
+      border: 1px solid var(--border-card);
+      border-radius: 12px;
+      background: var(--bg-card);
+      padding: 10px;
+    }
+
+    .svg-chart {
+      width: 100%;
+      height: 180px;
+      display: block;
+    }
+
+    .legend-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 5px;
+    }
+
+    .sync-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .sync-kpi {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      padding: 9px;
+      background: var(--bg-hover);
+    }
+
+    .sync-kpi-label { font-size: 11px; color: var(--text-muted); }
+    .sync-kpi-value { font-size: 19px; margin-top: 2px; font-weight: 760; }
+
+    .tool-list {
+      list-style: none;
+      margin: 8px 0 0;
+      padding: 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .tool-item {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      padding: 8px;
+      background: var(--bg-card);
+    }
+
+    .tool-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .health-tag {
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .health-tag.healthy { background: rgba(24, 128, 56, 0.14); color: #188038; }
+    .health-tag.watch { background: rgba(251, 188, 4, 0.16); color: #8d5a00; }
+    .health-tag.risk { background: rgba(217, 48, 37, 0.12); color: #b3261e; }
+
+    .flow-row { display: grid; gap: 8px; margin-top: 8px; }
+    .flow-item {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      padding: 8px;
+      background: var(--bg-card);
+    }
+
+    .flow-bar {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--bg-hover);
+      overflow: hidden;
+      margin-top: 6px;
+    }
+
+    .flow-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--brand), var(--brand-2));
+    }
+
+    .team-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .team-card {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      padding: 9px;
+      background: var(--bg-card);
+    }
+
+    .team-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .score-pill {
+      border: 1px solid rgba(26, 115, 232, 0.34);
+      background: rgba(26, 115, 232, 0.12);
+      color: #174ea6;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .summary-table {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .summary-table .row {
+      display: grid;
+      grid-template-columns: 1.15fr 0.8fr 0.8fr 1fr;
+      gap: 8px;
+      padding: 8px 10px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      align-items: center;
+    }
+
+    .summary-table .row.head {
+      border-top: 0;
+      background: var(--bg-hover);
+      color: var(--text-secondary);
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .muted-box {
+      border: 1px dashed var(--border-card);
+      border-radius: 10px;
+      padding: 8px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      background: var(--bg-hover);
+    }
+
+    .audit-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .audit-item {
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      padding: 8px;
+      background: var(--bg-card);
+      font-size: 12px;
+    }
+
+    .audit-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .audit-tag {
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .audit-tag.pass { background: rgba(24, 128, 56, 0.13); color: #188038; }
+    .audit-tag.warn { background: rgba(251, 188, 4, 0.18); color: #8d5a00; }
+    .audit-tag.fail { background: rgba(217, 48, 37, 0.12); color: #b3261e; }
+
     @media (max-width: 1200px) {
       .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid-2 { grid-template-columns: 1fr; }
@@ -573,6 +849,24 @@
     @media (max-width: 1200px) {
       .app { grid-template-columns: 210px minmax(0, 1fr); }
       .details-grid { grid-template-columns: 1fr; }
+      .sync-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .team-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 900px) {
+      body { overflow-y: auto; }
+      .app {
+        height: auto;
+        min-height: 100vh;
+      }
+      .sidebar,
+      .main {
+        height: auto;
+        position: static;
+      }
+      .main {
+        overflow: visible;
+      }
     }
   </style>
 </head>
@@ -750,36 +1044,44 @@
         <div class="view" id="view-workspace">
           <h1 class="page-title">Project Workspace</h1>
           <div class="card" style="margin-bottom:12px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-              <div>
-                <h3 style="margin:0;">FinCore Revamp - Execution Board</h3>
-                <div class="hint">Module: Auth + Billing + Analytics | Sprint: 24.3</div>
+            <h3 style="margin:0;">Automation Control Tower</h3>
+            <div class="hint" style="margin-top:6px;">Track AI issue creation, Jira sync quality, and commit-validation confidence in one workflow.</div>
+            <div class="sync-kpi-grid" id="controlTowerKpis"></div>
+            <div class="stack-grid-2">
+              <div class="chart-shell">
+                <h3 style="margin:0 0 6px 0; font-size: 13px;">Validation Confidence (6 cycles)</h3>
+                <svg id="validationTrendChart" class="svg-chart" viewBox="0 0 380 180" role="img" aria-label="Validation trend"></svg>
               </div>
-              <button class="btn btn-primary" id="workspaceGenerateBtn">Generate Work Breakdown</button>
+              <div class="chart-shell">
+                <h3 style="margin:0 0 6px 0; font-size: 13px;">Issue Lifecycle Funnel</h3>
+                <div class="flow-row" id="issueFunnelFlow"></div>
+              </div>
             </div>
           </div>
+
           <div class="grid-2" style="grid-template-columns: 1fr 1fr;">
             <div class="card">
-              <h3 style="margin-top:0;">Active Epics</h3>
-              <ul id="workspaceEpics" class="muted"></ul>
+              <h3 style="margin-top:0;">Sync and Tool Health</h3>
+              <div class="hint" id="workspaceBoardHint">Board flow auto-updates based on commit validation and Jira-GitHub sync.</div>
+              <ul class="tool-list" id="toolHealthList"></ul>
             </div>
             <div class="card">
               <h3 style="margin-top:0;">Latest Engineering Signals</h3>
-              <ul class="muted">
-                <li>5 commits touched payment orchestration this week</li>
-                <li>2 high-priority stories entered in-review</li>
-                <li>Bug velocity dropped 18% compared to previous sprint</li>
-              </ul>
+              <ul class="bullet-list" id="engineeringSignalsList"></ul>
+              <div class="muted-box" id="standupImpactBox" style="margin-top: 8px;"></div>
             </div>
           </div>
 
           <div class="card" style="margin-top:12px;">
             <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
               <div>
-                <h3 style="margin:0;">Workspace Details</h3>
+                <h3 style="margin:0;" id="workspaceBoardTitle">Workspace Details</h3>
                 <div class="hint" id="workspaceTabMeta">Every Day • Developers and QA</div>
               </div>
-              <div class="hint" id="workspaceContextMeta">Project: FIN - FinCore Revamp | Jira: FIN</div>
+              <div class="btn-row">
+                <button class="btn btn-primary" id="workspaceGenerateBtn">Generate Work Breakdown</button>
+                <div class="hint" id="workspaceContextMeta">Project: FIN - FinCore Revamp | Jira: FIN</div>
+              </div>
             </div>
 
             <div class="workspace-tabs" id="workspaceTabs">
@@ -800,6 +1102,39 @@
           <div class="grid-4" id="insightMetricGrid"></div>
 
           <div class="planner-grid" style="margin-top:12px; grid-template-columns: 1.05fr 1fr;">
+            <div class="card">
+              <h3 style="margin:0;">Delivery and Flow Intelligence</h3>
+              <div class="hint" style="margin:6px 0 10px;">Compare issue intake vs completion and catch flow slippage early.</div>
+              <div class="chart-shell">
+                <h3 style="margin:0 0 6px 0; font-size: 13px;">Throughput vs Intake (6 cycles)</h3>
+                <svg id="throughputChart" class="svg-chart" viewBox="0 0 380 180" role="img" aria-label="Throughput vs intake"></svg>
+                <div class="legend-row">
+                  <span><span class="legend-dot" style="background:#1a73e8"></span> Issues created</span>
+                  <span><span class="legend-dot" style="background:#188038"></span> Issues completed</span>
+                </div>
+              </div>
+              <div class="stack-grid-2">
+                <div class="chart-shell">
+                  <h3 style="margin:0 0 6px 0; font-size: 13px;">Current Risk Radar</h3>
+                  <div class="list" id="riskRadar"></div>
+                </div>
+                <div class="chart-shell">
+                  <h3 style="margin:0 0 6px 0; font-size: 13px;">Auto Daily Summary</h3>
+                  <div class="pill-row" id="dailySummary"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3 style="margin:0;">Team and Leadership View</h3>
+              <div class="hint" style="margin:6px 0 10px;">Role-level indicators to reduce standup dependency and expose blockers quickly.</div>
+              <div class="team-grid" id="teamInsightsGrid"></div>
+              <div class="summary-table" id="executiveSummaryTable"></div>
+              <div class="muted-box" id="executiveNote" style="margin-top: 8px;"></div>
+            </div>
+          </div>
+
+          <div class="planner-grid" style="margin-top:12px; grid-template-columns: 1fr 1fr;">
             <div class="card">
               <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
                 <h3 style="margin:0;">Daily Delivery Report</h3>
@@ -834,6 +1169,14 @@
               <input class="input" value="Jira URL: https://acme.atlassian.net" readonly />
               <input class="input" value="Default Project Key: FIN" readonly />
             </div>
+            <h3 style="margin-top:12px;">Acceptance Readiness</h3>
+            <div class="summary-table" id="acceptanceReadinessRows"></div>
+          </div>
+          <div class="card" style="margin-top:12px;">
+            <h3 style="margin-top:0;">Synchronization Audit</h3>
+            <div class="hint">Cross-checks project context, Jira mapping, and derived KPI consistency.</div>
+            <div class="audit-list" id="syncAuditRows"></div>
+            <div class="muted-box" id="syncAuditSummary" style="margin-top:8px;"></div>
           </div>
         </div>
       </section>
@@ -856,38 +1199,270 @@
         { key: "AIP", name: "AI Planner" },
         { key: "OPS", name: "Platform Ops" }
       ],
+      projectToJira: {
+        p1: "FIN",
+        p2: "AIP",
+        p3: "OPS",
+        p4: "OPS"
+      },
       notifications: [
         { id: "n1", type: "success", title: "SRS Processed", message: "banking-core-srs-v3.md parsed and indexed.", seen: false, createdAt: "2026-03-25T09:12:00Z" },
         { id: "n2", type: "info", title: "Suggestions Ready", message: "Phase-aware suggestions generated for module FIN/Auth.", seen: false, createdAt: "2026-03-25T09:14:00Z" },
         { id: "n3", type: "success", title: "Backlog Saved", message: "17 items saved and linked for Jira push.", seen: true, createdAt: "2026-03-24T16:02:00Z" }
       ],
-      summary: "4 projects tracked. AI Planner Stabilization is in active hardening with improved extraction, phase-aware suggest, and backlog editor rollout.",
-      insights: {
-        overall: [
-          { label: "Story Throughput", value: "38", note: "+12% WoW" },
-          { label: "Average Cycle Time", value: "4.6d", note: "-0.8d vs last sprint" },
-          { label: "Blocked Work Items", value: "7", note: "3 need infra dependency" },
-          { label: "AI Suggest Acceptance", value: "82%", note: "Based on last 5 planning sessions" }
-        ],
-        dailyReport: [
-          { day: "Mon", completed: 9, created: 11, carryOver: 4, deploys: 2, incidents: 1 },
-          { day: "Tue", completed: 12, created: 10, carryOver: 3, deploys: 3, incidents: 0 },
-          { day: "Wed", completed: 8, created: 9, carryOver: 5, deploys: 2, incidents: 2 },
-          { day: "Thu", completed: 14, created: 12, carryOver: 2, deploys: 3, incidents: 0 },
-          { day: "Fri", completed: 11, created: 8, carryOver: 3, deploys: 1, incidents: 1 }
-        ],
-        moduleWise: [
-          { module: "Auth", progress: 74, velocity: 16, defectLeakage: "low", risk: "medium", aiCoverage: "high" },
-          { module: "Billing", progress: 61, velocity: 12, defectLeakage: "medium", risk: "high", aiCoverage: "medium" },
-          { module: "Analytics", progress: 47, velocity: 9, defectLeakage: "medium", risk: "medium", aiCoverage: "medium" },
-          { module: "Jira Integration", progress: 83, velocity: 14, defectLeakage: "low", risk: "low", aiCoverage: "high" }
-        ],
-        issueWise: [
-          { id: "FIN-241", severity: "critical", title: "Webhook duplicate processing in payment callback", owner: "Tejas", status: "in_progress", eta: "Today EOD" },
-          { id: "AIP-177", severity: "high", title: "Suggest call fails on missing provider user mapping", owner: "Akshay", status: "in_review", eta: "Tomorrow" },
-          { id: "JBR-092", severity: "medium", title: "Parent linkage mismatch when pushing nested tasks", owner: "Riya", status: "to_do", eta: "2 days" },
-          { id: "OBS-054", severity: "low", title: "Dashboard summary lag by one polling cycle", owner: "Nikhil", status: "in_progress", eta: "This sprint" }
-        ]
+      summaryByProject: {
+        p1: "FinCore execution is stable. Commit-validation confidence improved while payment defects and carry-over are trending down.",
+        p2: "AI Planner hardening is active. Suggest acceptance is climbing, but provider mapping edge-cases still cause occasional review delays.",
+        p3: "Jira Bridge reliability is improving after parent-link validation rollout. Remaining risk is mostly around retry storms under peak sync.",
+        p4: "Observability upgrade is in setup phase with low throughput and high uncertainty until telemetry baselines are established."
+      },
+      insightsByProject: {
+        p1: {
+          overall: [
+            { label: "Story Throughput", value: "38", note: "+12% WoW" },
+            { label: "Average Cycle Time", value: "4.6d", note: "-0.8d vs last sprint" },
+            { label: "Blocked Work Items", value: "7", note: "3 infra dependencies" },
+            { label: "AI Suggest Acceptance", value: "82%", note: "Last 5 planning cycles" }
+          ],
+          dailyReport: [
+            { day: "Mon", completed: 9, created: 11, carryOver: 4, deploys: 2, incidents: 1 },
+            { day: "Tue", completed: 12, created: 10, carryOver: 3, deploys: 3, incidents: 0 },
+            { day: "Wed", completed: 8, created: 9, carryOver: 5, deploys: 2, incidents: 2 },
+            { day: "Thu", completed: 14, created: 12, carryOver: 2, deploys: 3, incidents: 0 },
+            { day: "Fri", completed: 11, created: 8, carryOver: 3, deploys: 1, incidents: 1 }
+          ],
+          moduleWise: [
+            { module: "Auth", progress: 74, velocity: 16, defectLeakage: "low", risk: "medium", aiCoverage: "high" },
+            { module: "Billing", progress: 61, velocity: 12, defectLeakage: "medium", risk: "high", aiCoverage: "medium" },
+            { module: "Analytics", progress: 47, velocity: 9, defectLeakage: "medium", risk: "medium", aiCoverage: "medium" }
+          ],
+          issueWise: [
+            { id: "FIN-241", severity: "critical", title: "Webhook duplicate processing in payment callback", owner: "Tejas", status: "in_progress", eta: "Today EOD" },
+            { id: "FIN-249", severity: "high", title: "Token rotation metrics incomplete for mobile sessions", owner: "Akshay", status: "in_review", eta: "Tomorrow" }
+          ],
+          risks: ["Billing retries produce duplicate callbacks in 1.4% flows", "Infra queue latency spikes during 10am-12pm windows"],
+          dailySummary: ["91% commit-story mapping", "Cycle time dropped 0.8d", "2 stories awaiting dependency signoff"],
+          teamInsights: [
+            { name: "Akshay", role: "Owner", score: 88, note: "Strong backlog quality and scope control" },
+            { name: "Tejas", role: "Backend", score: 83, note: "High merge throughput with low rollback" },
+            { name: "Riya", role: "Frontend", score: 79, note: "UI fixes stable, one carry-over item" },
+            { name: "Nikhil", role: "QA", score: 84, note: "Critical coverage improved in payment flows" }
+          ]
+        },
+        p2: {
+          overall: [
+            { label: "Story Throughput", value: "26", note: "+8% WoW" },
+            { label: "Average Cycle Time", value: "5.1d", note: "-0.4d vs last sprint" },
+            { label: "Blocked Work Items", value: "9", note: "Provider and mapping gaps" },
+            { label: "AI Suggest Acceptance", value: "76%", note: "Prompt quality improving" }
+          ],
+          dailyReport: [
+            { day: "Mon", completed: 6, created: 9, carryOver: 6, deploys: 1, incidents: 1 },
+            { day: "Tue", completed: 7, created: 8, carryOver: 5, deploys: 2, incidents: 1 },
+            { day: "Wed", completed: 5, created: 7, carryOver: 6, deploys: 1, incidents: 0 },
+            { day: "Thu", completed: 8, created: 8, carryOver: 4, deploys: 2, incidents: 1 },
+            { day: "Fri", completed: 7, created: 6, carryOver: 4, deploys: 1, incidents: 0 }
+          ],
+          moduleWise: [
+            { module: "Suggestion Engine", progress: 58, velocity: 11, defectLeakage: "medium", risk: "high", aiCoverage: "high" },
+            { module: "Prompt Safety", progress: 52, velocity: 9, defectLeakage: "low", risk: "medium", aiCoverage: "high" }
+          ],
+          issueWise: [
+            { id: "AIP-177", severity: "high", title: "Suggest call fails on missing provider user mapping", owner: "Riya", status: "in_review", eta: "Tomorrow" },
+            { id: "AIP-181", severity: "medium", title: "Chat transcript hydration breaks after refresh", owner: "Nikhil", status: "to_do", eta: "2 days" }
+          ],
+          risks: ["Provider account mapping still incomplete for 2 teams", "Fallback prompt set not aligned for long requirement docs"],
+          dailySummary: ["Acceptance up from 71% to 76%", "1 blocker awaiting IAM mapping", "Review latency down 14%"],
+          teamInsights: [
+            { name: "Akshay", role: "Owner", score: 81, note: "Planning direction stable" },
+            { name: "Tejas", role: "Backend", score: 78, note: "API fixes steady" },
+            { name: "Riya", role: "Frontend", score: 80, note: "Prompt UX improvements shipped" },
+            { name: "Nikhil", role: "QA", score: 76, note: "Regression pack coverage expanding" }
+          ]
+        },
+        p3: {
+          overall: [
+            { label: "Story Throughput", value: "21", note: "+6% WoW" },
+            { label: "Average Cycle Time", value: "5.8d", note: "-0.2d vs last sprint" },
+            { label: "Blocked Work Items", value: "11", note: "Retry and mapping dependencies" },
+            { label: "AI Suggest Acceptance", value: "69%", note: "Bridge hardening phase" }
+          ],
+          dailyReport: [
+            { day: "Mon", completed: 4, created: 7, carryOver: 8, deploys: 1, incidents: 2 },
+            { day: "Tue", completed: 5, created: 6, carryOver: 8, deploys: 1, incidents: 1 },
+            { day: "Wed", completed: 4, created: 5, carryOver: 9, deploys: 1, incidents: 2 },
+            { day: "Thu", completed: 6, created: 6, carryOver: 7, deploys: 2, incidents: 1 },
+            { day: "Fri", completed: 5, created: 5, carryOver: 7, deploys: 1, incidents: 1 }
+          ],
+          moduleWise: [
+            { module: "Jira Mapping", progress: 49, velocity: 8, defectLeakage: "medium", risk: "high", aiCoverage: "medium" },
+            { module: "Retry Engine", progress: 43, velocity: 7, defectLeakage: "medium", risk: "high", aiCoverage: "medium" }
+          ],
+          issueWise: [
+            { id: "JBR-092", severity: "high", title: "Parent linkage mismatch when pushing nested tasks", owner: "Tejas", status: "in_progress", eta: "2 days" },
+            { id: "JBR-099", severity: "medium", title: "Sync queue retries exceed backoff budget", owner: "Akshay", status: "to_do", eta: "This sprint" }
+          ],
+          risks: ["Retry storms observed during parallel project sync", "Parent-task mapping fails in 0.9% payloads"],
+          dailySummary: ["Mapping errors down from 1.3% to 0.9%", "Throughput stable but backlog remains high", "Need soak test completion"],
+          teamInsights: [
+            { name: "Akshay", role: "Owner", score: 75, note: "Scope control under pressure" },
+            { name: "Tejas", role: "Backend", score: 77, note: "Hotfixes landed quickly" },
+            { name: "Riya", role: "Frontend", score: 73, note: "Bridge UI status cues improved" },
+            { name: "Nikhil", role: "QA", score: 71, note: "More soak-test automation needed" }
+          ]
+        },
+        p4: {
+          overall: [
+            { label: "Story Throughput", value: "9", note: "Kickoff phase" },
+            { label: "Average Cycle Time", value: "7.2d", note: "Early-stage variability" },
+            { label: "Blocked Work Items", value: "5", note: "Architecture dependencies" },
+            { label: "AI Suggest Acceptance", value: "63%", note: "Data model still evolving" }
+          ],
+          dailyReport: [
+            { day: "Mon", completed: 1, created: 3, carryOver: 4, deploys: 0, incidents: 0 },
+            { day: "Tue", completed: 2, created: 2, carryOver: 4, deploys: 0, incidents: 1 },
+            { day: "Wed", completed: 1, created: 2, carryOver: 5, deploys: 0, incidents: 0 },
+            { day: "Thu", completed: 2, created: 2, carryOver: 4, deploys: 1, incidents: 0 },
+            { day: "Fri", completed: 2, created: 1, carryOver: 3, deploys: 0, incidents: 0 }
+          ],
+          moduleWise: [
+            { module: "Telemetry", progress: 26, velocity: 4, defectLeakage: "low", risk: "medium", aiCoverage: "low" },
+            { module: "Dashboards", progress: 18, velocity: 3, defectLeakage: "low", risk: "high", aiCoverage: "low" }
+          ],
+          issueWise: [
+            { id: "OBS-054", severity: "medium", title: "Dashboard summary lag by one polling cycle", owner: "Nikhil", status: "in_progress", eta: "This sprint" }
+          ],
+          risks: ["Tracing baseline is incomplete for two services", "Dependency on infra log-retention approval"],
+          dailySummary: ["Baseline tracing setup at 26%", "1 infra approval pending", "No production incidents"],
+          teamInsights: [
+            { name: "Akshay", role: "Owner", score: 72, note: "Discovery tracked clearly" },
+            { name: "Tejas", role: "Backend", score: 70, note: "Collector setup in progress" },
+            { name: "Riya", role: "Frontend", score: 68, note: "Dashboard shell ready" },
+            { name: "Nikhil", role: "QA", score: 69, note: "Alert test cases drafted" }
+          ]
+        }
+      },
+      automationByProject: {
+        p1: {
+          boardTitle: "FinCore Revamp - Validation Driven Board",
+          boardHint: "Issue state auto-sync from commit evidence and Jira transitions.",
+          kpis: [
+            { label: "AI Issues Created", value: 46 },
+            { label: "Commit Mapped", value: "91%" },
+            { label: "Jira Sync Success", value: "98.2%" },
+            { label: "Standup Time Saved", value: "2.6h/week" }
+          ],
+          validationTrend: [72, 75, 79, 83, 87, 91],
+          throughput: { created: [11, 10, 9, 12, 8, 9], completed: [9, 12, 8, 14, 11, 10] },
+          funnel: [
+            { stage: "Generated", value: 46 },
+            { stage: "Reviewed", value: 38 },
+            { stage: "Approved", value: 31 },
+            { stage: "Merged", value: 27 },
+            { stage: "Released", value: 22 }
+          ],
+          toolHealth: [
+            { name: "Jira Sync Worker", status: "healthy", detail: "98.2% success in last 24h" },
+            { name: "GitHub Commit Validator", status: "healthy", detail: "91% mapping confidence" },
+            { name: "Webhook Ingestion", status: "watch", detail: "2 delayed events retried" }
+          ],
+          engineeringSignals: [
+            "23 commits linked to 5 delivery stories this sprint",
+            "2 stale branches auto-flagged before standup",
+            "Validation confidence improved from 72% to 91%"
+          ],
+          standupImpact: "Auto status synthesis reduced manual standup collection effort by ~37% for this project."
+        },
+        p2: {
+          boardTitle: "AI Planner Stabilization - Reliability Board",
+          boardHint: "Prompt/agent issues move by validation evidence and review outcomes.",
+          kpis: [
+            { label: "AI Issues Created", value: 34 },
+            { label: "Commit Mapped", value: "84%" },
+            { label: "Jira Sync Success", value: "96.4%" },
+            { label: "Standup Time Saved", value: "2.1h/week" }
+          ],
+          validationTrend: [65, 67, 71, 74, 78, 84],
+          throughput: { created: [9, 8, 7, 8, 6, 7], completed: [6, 7, 5, 8, 7, 6] },
+          funnel: [
+            { stage: "Generated", value: 34 },
+            { stage: "Reviewed", value: 29 },
+            { stage: "Approved", value: 24 },
+            { stage: "Merged", value: 20 },
+            { stage: "Released", value: 17 }
+          ],
+          toolHealth: [
+            { name: "Suggestion Service", status: "watch", detail: "Fallback path triggered 6 times" },
+            { name: "Jira Push Adapter", status: "healthy", detail: "No failed transitions today" },
+            { name: "Context Hydrator", status: "risk", detail: "State restore flaky on hard refresh" }
+          ],
+          engineeringSignals: [
+            "Suggest acceptance improved 5 points in two weeks",
+            "Provider mapping blocker impacts 2 active tasks",
+            "Review queue aging improved by 14%"
+          ],
+          standupImpact: "AI-generated progress briefs removed most manual blocker collection for planner squad."
+        },
+        p3: {
+          boardTitle: "Jira Bridge Hardening - Sync Integrity Board",
+          boardHint: "Backlog hierarchy and sync retries monitored continuously.",
+          kpis: [
+            { label: "AI Issues Created", value: 28 },
+            { label: "Commit Mapped", value: "79%" },
+            { label: "Jira Sync Success", value: "93.8%" },
+            { label: "Standup Time Saved", value: "1.7h/week" }
+          ],
+          validationTrend: [58, 62, 66, 70, 74, 79],
+          throughput: { created: [7, 6, 5, 6, 5, 5], completed: [4, 5, 4, 6, 5, 5] },
+          funnel: [
+            { stage: "Generated", value: 28 },
+            { stage: "Reviewed", value: 22 },
+            { stage: "Approved", value: 18 },
+            { stage: "Merged", value: 14 },
+            { stage: "Released", value: 11 }
+          ],
+          toolHealth: [
+            { name: "Hierarchy Validator", status: "watch", detail: "0.9% payload mismatch" },
+            { name: "Retry Controller", status: "risk", detail: "Backoff limit crossed twice" },
+            { name: "Bridge API", status: "healthy", detail: "Latency stable under 230ms" }
+          ],
+          engineeringSignals: [
+            "Parent-child mapping errors reduced but not eliminated",
+            "Retry storms observed during peak integration hours",
+            "Soak test coverage increased to 64%"
+          ],
+          standupImpact: "Status rollups are partially automated; teams still need daily verbal updates for retry incidents."
+        },
+        p4: {
+          boardTitle: "Observability Upgrade - Early Delivery Board",
+          boardHint: "Telemetry rollout tracked with conservative automation confidence.",
+          kpis: [
+            { label: "AI Issues Created", value: 14 },
+            { label: "Commit Mapped", value: "61%" },
+            { label: "Jira Sync Success", value: "95.1%" },
+            { label: "Standup Time Saved", value: "0.9h/week" }
+          ],
+          validationTrend: [42, 45, 48, 52, 57, 61],
+          throughput: { created: [3, 2, 2, 2, 1, 2], completed: [1, 2, 1, 2, 2, 2] },
+          funnel: [
+            { stage: "Generated", value: 14 },
+            { stage: "Reviewed", value: 11 },
+            { stage: "Approved", value: 9 },
+            { stage: "Merged", value: 6 },
+            { stage: "Released", value: 4 }
+          ],
+          toolHealth: [
+            { name: "Telemetry Collector", status: "watch", detail: "Baseline still tuning" },
+            { name: "Dashboards", status: "risk", detail: "Alert routing incomplete" },
+            { name: "Jira Adapter", status: "healthy", detail: "Flow stable at low volume" }
+          ],
+          engineeringSignals: [
+            "Tracing baseline coverage at 26%",
+            "Alert routing dependency pending infra approval",
+            "No major incidents this week"
+          ],
+          standupImpact: "Automation provides early summaries but maturity is not yet enough to reduce standups significantly."
+        }
       },
       suggestionBuckets: {
         epics: [
@@ -1003,7 +1578,8 @@
         </div>
       `).join("")
 
-      el("todaySummary").textContent = data.summary
+      const summary = data.summaryByProject?.[state.selectedProjectId] || "Project summary unavailable."
+      el("todaySummary").textContent = summary
     }
 
     function renderNotifications() {
@@ -1071,7 +1647,8 @@
 
     function renderWorkspaceEpics() {
       const rows = state.backlog.epics.map(e => `<li><strong>${e.title}</strong> - ${e.description}</li>`).join("")
-      el("workspaceEpics").innerHTML = rows
+      const host = el("workspaceEpics")
+      if (host) host.innerHTML = rows
     }
 
     const WORKSPACE_TAB_META = {
@@ -1085,6 +1662,72 @@
 
     function selectedProject() {
       return data.projects.find(p => p.id === state.selectedProjectId) || data.projects[0]
+    }
+
+    function defaultJiraForProject(projectId) {
+      return data.projectToJira?.[projectId] || "FIN"
+    }
+
+    function derivedThroughput(automation) {
+      const created = (automation?.throughput?.created || []).reduce((s, v) => s + v, 0)
+      const completed = (automation?.throughput?.completed || []).reduce((s, v) => s + v, 0)
+      return { created, completed }
+    }
+
+    function parsePercent(value) {
+      if (typeof value === "number") return value
+      const parsed = Number(String(value || "").replace(/[^\d.]/g, ""))
+      return Number.isFinite(parsed) ? parsed : 0
+    }
+
+    function formatOneDecimal(num) {
+      return `${Math.round(num * 10) / 10}`
+    }
+
+    function recomputeDerivedProjectMetrics(projectId) {
+      const insights = data.insightsByProject?.[projectId]
+      const automation = data.automationByProject?.[projectId]
+      if (!insights || !automation) return
+
+      const daily = insights.dailyReport || []
+      const incidents = daily.reduce((s, row) => s + (row.incidents || 0), 0)
+      const carry = daily.reduce((s, row) => s + (row.carryOver || 0), 0)
+      const avgCarry = daily.length ? Math.round((carry / daily.length) * 10) / 10 : 0
+      const throughput = derivedThroughput(automation)
+      const cycles = Math.max((automation.throughput?.completed || []).length, 1)
+      const cycleTime = Math.max(2.8, 6.8 - parsePercent(automation.kpis?.[1]?.value) / 40 + incidents * 0.08)
+      const aiAccept = Math.max(58, Math.min(95, Math.round(parsePercent(automation.kpis?.[1]?.value) * 0.78 + (100 - incidents * 5) * 0.22)))
+
+      insights.overall = [
+        { label: "Story Throughput", value: String(throughput.completed), note: `${throughput.created} created in same window` },
+        { label: "Average Cycle Time", value: `${formatOneDecimal(cycleTime)}d`, note: `${cycles} tracked cycles` },
+        { label: "Blocked Work Items", value: String(Math.max(0, Math.round(avgCarry))), note: `Avg carry-over ${avgCarry}` },
+        { label: "AI Suggest Acceptance", value: `${aiAccept}%`, note: "Derived from validation and incident load" }
+      ]
+    }
+
+    function normalizeDataConsistency() {
+      Object.keys(data.insightsByProject || {}).forEach(projectId => {
+        recomputeDerivedProjectMetrics(projectId)
+      })
+    }
+
+    function syncContextFromProject(projectId, showToast = false) {
+      const nextJira = defaultJiraForProject(projectId)
+      const changed = state.selectedJiraKey !== nextJira
+      state.selectedProjectId = projectId
+      state.selectedJiraKey = nextJira
+      if (showToast && changed) {
+        toast("success", "Context Synced", `Project and Jira aligned to ${nextJira}`)
+      }
+    }
+
+    function selectedInsights() {
+      return data.insightsByProject?.[state.selectedProjectId] || data.insightsByProject?.p1 || { overall: [], dailyReport: [], moduleWise: [], issueWise: [], risks: [], dailySummary: [], teamInsights: [] }
+    }
+
+    function activeAutomation() {
+      return data.automationByProject?.[state.selectedProjectId] || data.automationByProject?.p1
     }
 
     function workspaceMockData() {
@@ -1130,10 +1773,107 @@
       }
     }
 
+    function polylinePoints(values, width, height, padding) {
+      if (!values.length) return ""
+      const max = Math.max(...values, 1)
+      const min = Math.min(...values, 0)
+      const span = Math.max(1, max - min)
+      return values.map((v, i) => {
+        const x = padding + (i * (width - padding * 2)) / Math.max(values.length - 1, 1)
+        const y = height - padding - ((v - min) * (height - padding * 2)) / span
+        return `${x},${y}`
+      }).join(" ")
+    }
+
+    function renderThroughputChart(automation) {
+      const svg = el("throughputChart")
+      if (!svg || !automation) return
+      const width = 380
+      const height = 180
+      const padding = 24
+      const created = automation.throughput?.created || []
+      const completed = automation.throughput?.completed || []
+      const all = [...created, ...completed]
+      if (!all.length) {
+        svg.innerHTML = ""
+        return
+      }
+      const max = Math.max(...all, 1)
+      const lines = [0, 0.25, 0.5, 0.75, 1].map(r => {
+        const y = height - padding - (height - padding * 2) * r
+        const val = Math.round(max * r)
+        return `<line x1="${padding}" y1="${y}" x2="${width - padding}" y2="${y}" stroke="rgba(120,130,150,0.25)" /><text x="6" y="${y + 4}" font-size="10" fill="var(--text-muted)">${val}</text>`
+      }).join("")
+      svg.innerHTML = `
+        <rect x="0" y="0" width="${width}" height="${height}" fill="transparent" />
+        ${lines}
+        <polyline points="${polylinePoints(created, width, height, padding)}" fill="none" stroke="#1a73e8" stroke-width="3" />
+        <polyline points="${polylinePoints(completed, width, height, padding)}" fill="none" stroke="#188038" stroke-width="3" />
+      `
+    }
+
+    function renderValidationTrendChart(automation) {
+      const svg = el("validationTrendChart")
+      if (!svg || !automation) return
+      const width = 380
+      const height = 180
+      const padding = 24
+      const vals = automation.validationTrend || []
+      if (!vals.length) {
+        svg.innerHTML = ""
+        return
+      }
+      const points = polylinePoints(vals, width, height, padding)
+      const last = vals[vals.length - 1]
+      svg.innerHTML = `
+        <rect x="0" y="0" width="${width}" height="${height}" fill="transparent" />
+        <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="rgba(120,130,150,0.35)" />
+        <polyline points="${points}" fill="none" stroke="#1a73e8" stroke-width="3" />
+        <text x="${width - 64}" y="${padding}" font-size="11" fill="var(--text-secondary)">Now: ${last}%</text>
+      `
+    }
+
+    function renderIssueFunnel(automation) {
+      const host = el("issueFunnelFlow")
+      if (!host || !automation) return
+      const funnel = automation.funnel || []
+      const max = Math.max(...funnel.map(x => x.value), 1)
+      host.innerHTML = funnel.map(step => `
+        <div class="flow-item">
+          <div style="display:flex; align-items:center; justify-content:space-between; font-size:12px;">
+            <strong>${step.stage}</strong>
+            <span>${step.value}</span>
+          </div>
+          <div class="flow-bar"><div class="flow-fill" style="width:${(step.value / max) * 100}%"></div></div>
+        </div>
+      `).join("")
+    }
+
     function renderWorkspaceDetails() {
       const meta = workspaceMockData()
+      const automation = activeAutomation()
       el("workspaceTabMeta").textContent = WORKSPACE_TAB_META[state.workspaceTab] || WORKSPACE_TAB_META["active-sprints"]
       el("workspaceContextMeta").textContent = `Project: ${meta.project.key} - ${meta.project.name} | Jira: ${state.selectedJiraKey}`
+      if (automation) {
+        el("workspaceBoardTitle").textContent = automation.boardTitle
+        el("workspaceBoardHint").textContent = automation.boardHint
+        el("controlTowerKpis").innerHTML = automation.kpis.map(k => `
+          <div class="sync-kpi"><div class="sync-kpi-label">${k.label}</div><div class="sync-kpi-value">${k.value}</div></div>
+        `).join("")
+        el("toolHealthList").innerHTML = automation.toolHealth.map(t => `
+          <li class="tool-item">
+            <div class="tool-head">
+              <strong>${t.name}</strong>
+              <span class="health-tag ${t.status}">${t.status}</span>
+            </div>
+            <div class="hint" style="margin-top:5px;">${t.detail}</div>
+          </li>
+        `).join("")
+        el("engineeringSignalsList").innerHTML = automation.engineeringSignals.map(s => `<li>${s}</li>`).join("")
+        el("standupImpactBox").textContent = automation.standupImpact
+        renderValidationTrendChart(automation)
+        renderIssueFunnel(automation)
+      }
 
       const storyCount = state.backlog.stories.length
       const taskCount = state.backlog.tasks.length + state.backlog.subtasks.length
@@ -1226,7 +1966,8 @@
     }
 
     function renderInsights() {
-      const insights = data.insights || {}
+      const insights = selectedInsights()
+      const automation = activeAutomation()
       const overall = insights.overall || []
       const dailyReport = insights.dailyReport || []
       const moduleWise = insights.moduleWise || []
@@ -1297,6 +2038,115 @@
           </div>
         </div>
       `).join("")
+
+      el("riskRadar").innerHTML = (insights.risks || []).map(r => `<div class="item">${r}</div>`).join("")
+      el("dailySummary").innerHTML = (insights.dailySummary || []).map(r => `<span class="chip">${r}</span>`).join("")
+
+      el("teamInsightsGrid").innerHTML = (insights.teamInsights || []).map(member => `
+        <div class="team-card">
+          <div class="team-head">
+            <strong>${member.name}</strong>
+            <span class="score-pill">${member.score}</span>
+          </div>
+          <div class="hint" style="margin-top:4px;">${member.role}</div>
+          <div style="margin-top:6px; font-size:12px; color:var(--text-secondary);">${member.note}</div>
+        </div>
+      `).join("")
+
+      const table = el("executiveSummaryTable")
+      table.innerHTML = `
+        <div class="row head"><div>Indicator</div><div>Value</div><div>Trend</div><div>Meaning</div></div>
+        <div class="row"><div>Automation Coverage</div><div>${automation?.kpis?.[0]?.value || "-"}</div><div>Up</div><div>Higher AI issue conversion in active stream</div></div>
+        <div class="row"><div>Validation Trust</div><div>${automation?.kpis?.[1]?.value || "-"}</div><div>Up</div><div>More commits linked to accepted stories</div></div>
+        <div class="row"><div>Sync Reliability</div><div>${automation?.kpis?.[2]?.value || "-"}</div><div>Stable</div><div>Lower risk of Jira status drift</div></div>
+        <div class="row"><div>Standup Overhead</div><div>${automation?.kpis?.[3]?.value || "-"}</div><div>Down</div><div>Fewer manual status collection meetings</div></div>
+      `
+
+      el("executiveNote").textContent = `Executive note: ${data.summaryByProject?.[state.selectedProjectId] || "Stable execution snapshot."}`
+      renderThroughputChart(automation)
+    }
+
+    function renderAcceptanceReadiness() {
+      const automation = activeAutomation()
+      const rows = [
+        { name: "Context-aware issue creation", score: automation?.kpis?.[0]?.value || "-", status: "Ready", note: "AI-generated issue flow is active with project context." },
+        { name: "Jira-GitHub status sync", score: automation?.kpis?.[2]?.value || "-", status: "Ready", note: "Bidirectional sync reliability remains high." },
+        { name: "Commit validation confidence", score: automation?.kpis?.[1]?.value || "-", status: "Watch", note: "Mapping quality improves but still needs periodic review." },
+        { name: "Standup reduction capability", score: automation?.kpis?.[3]?.value || "-", status: "Ready", note: (automation?.standupImpact || "") }
+      ]
+      el("acceptanceReadinessRows").innerHTML = `
+        <div class="row head"><div>Capability</div><div>Score</div><div>Status</div><div>Comment</div></div>
+        ${rows.map(r => `<div class="row"><div>${r.name}</div><div>${r.score}</div><div>${r.status}</div><div>${r.note}</div></div>`).join("")}
+      `
+    }
+
+    function runConsistencyAudit() {
+      const project = selectedProject()
+      const insights = selectedInsights()
+      const automation = activeAutomation()
+      const checks = []
+
+      const mappedJira = defaultJiraForProject(project.id)
+      checks.push({
+        name: "Project to Jira mapping",
+        state: state.selectedJiraKey === mappedJira ? "pass" : "warn",
+        detail: `Expected ${mappedJira}, active ${state.selectedJiraKey}`
+      })
+
+      const throughput = derivedThroughput(automation)
+      const throughputMetric = Number((insights.overall || []).find(x => x.label === "Story Throughput")?.value || 0)
+      checks.push({
+        name: "Throughput metric sync",
+        state: throughputMetric === throughput.completed ? "pass" : "warn",
+        detail: `Metric ${throughputMetric}, derived ${throughput.completed}`
+      })
+
+      const funnel = automation?.funnel || []
+      const funnelMonotonic = funnel.every((row, idx) => idx === 0 || row.value <= funnel[idx - 1].value)
+      checks.push({
+        name: "Lifecycle funnel integrity",
+        state: funnelMonotonic ? "pass" : "fail",
+        detail: funnelMonotonic ? "Stage counts decrease correctly." : "At least one funnel stage increases unexpectedly."
+      })
+
+      const trend = automation?.validationTrend || []
+      const confidence = parsePercent(automation?.kpis?.[1]?.value)
+      checks.push({
+        name: "Validation trend alignment",
+        state: trend.length && trend[trend.length - 1] === confidence ? "pass" : "warn",
+        detail: `Trend last ${trend[trend.length - 1] ?? "-"}, KPI ${confidence}`
+      })
+
+      const incidents = (insights.dailyReport || []).reduce((s, row) => s + (row.incidents || 0), 0)
+      checks.push({
+        name: "Risk narrative consistency",
+        state: incidents > 0 && (insights.risks || []).length ? "pass" : "warn",
+        detail: `Incidents ${incidents}, risk entries ${(insights.risks || []).length}`
+      })
+
+      return checks
+    }
+
+    function renderConsistencyAudit() {
+      const checks = runConsistencyAudit()
+      const host = el("syncAuditRows")
+      const summary = el("syncAuditSummary")
+      if (!host || !summary) return
+
+      host.innerHTML = checks.map(check => `
+        <div class="audit-item">
+          <div class="audit-head">
+            <strong>${check.name}</strong>
+            <span class="audit-tag ${check.state}">${check.state}</span>
+          </div>
+          <div class="hint">${check.detail}</div>
+        </div>
+      `).join("")
+
+      const fail = checks.filter(c => c.state === "fail").length
+      const warn = checks.filter(c => c.state === "warn").length
+      const pass = checks.filter(c => c.state === "pass").length
+      summary.textContent = `Audit summary: ${pass} pass, ${warn} warn, ${fail} fail. Metrics are now recomputed from shared throughput/validation sources to reduce drift.`
     }
 
     function treeButtonText(item) {
@@ -1429,9 +2279,14 @@
     }
 
     window.selectProject = function(projectId) {
-      state.selectedProjectId = projectId
+      syncContextFromProject(projectId, true)
+      normalizeDataConsistency()
       renderProjectContext()
+      renderOverview()
       renderWorkspaceDetails()
+      renderInsights()
+      renderAcceptanceReadiness()
+      renderConsistencyAudit()
       toast("success", "Project Switched", "Workspace context updated")
     }
 
@@ -1543,14 +2398,23 @@
       })
 
       el("projectSelect").addEventListener("change", e => {
-        state.selectedProjectId = e.target.value
+        syncContextFromProject(e.target.value, true)
+        normalizeDataConsistency()
         renderProjectContext()
+        renderOverview()
         renderWorkspaceDetails()
+        renderInsights()
+        renderAcceptanceReadiness()
+        renderConsistencyAudit()
       })
 
       el("jiraSelect").addEventListener("change", e => {
         state.selectedJiraKey = e.target.value
+        normalizeDataConsistency()
         renderWorkspaceDetails()
+        renderInsights()
+        renderAcceptanceReadiness()
+        renderConsistencyAudit()
         toast("success", "Jira Context", `Selected ${state.selectedJiraKey}`)
       })
 
@@ -1675,6 +2539,8 @@
     }
 
     function init() {
+      syncContextFromProject(state.selectedProjectId)
+      normalizeDataConsistency()
       renderProjectContext()
       renderOverview()
       renderSuggestionBox()
@@ -1684,6 +2550,8 @@
       renderWorkspaceEpics()
       renderWorkspaceDetails()
       renderInsights()
+      renderAcceptanceReadiness()
+      renderConsistencyAudit()
       renderBacklogTree()
       renderDetailsForm()
       renderNotifications()

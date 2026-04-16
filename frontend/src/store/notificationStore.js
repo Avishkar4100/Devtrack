@@ -57,11 +57,22 @@ export const useNotificationStore = create(
         notifications: state.notifications.map((item) => ({ ...item, seen: true })),
       })),
 
+      // Backward-compatible aliases for older callers.
+      clearMarks: () => set((state) => ({
+        notifications: state.notifications.map((item) => ({ ...item, seen: false })),
+      })),
+
+      markAllRead: () => set((state) => ({
+        notifications: state.notifications.map((item) => ({ ...item, seen: true })),
+      })),
+
       removeNotification: (id) => set((state) => ({
         notifications: state.notifications.filter((item) => item.id !== id),
       })),
 
       clearNotifications: () => set({ notifications: [] }),
+
+      clearAll: () => set({ notifications: [] }),
     }),
     {
       name: 'devtrack-notifications',

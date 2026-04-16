@@ -5,12 +5,246 @@
 
 const axios = require('axios');
 const logger = require('../config/logger');
+const { getActiveAIConfigPayload } = require('./aiConfigService');
+const Requirement = require('../models/Requirement');
+const Document = require('../models/Document');
+const { resolveAiServiceBaseUrl } = require('../utils/aiServiceUrl');
 
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+const AI_SERVICE_URL = resolveAiServiceBaseUrl(process.env.AI_SERVICE_URL);
 
 class DocumentService {
+  static async _extractRequirementsViaAI({ projectId, documentId, filePath, fileType }) {
+    const aiConfig = await getActiveAIConfigPayload();
+
+    const response = await axios.post(
+      `${AI_SERVICE_URL}/stories/extract-requirements`,
+      {
+        project_id: projectId,
+        document_id: documentId,
+        file_path: filePath,
+        file_type: fileType,
+        ai_config: aiConfig,
+      },
+      {
+        timeout: 0,
+      }
+    );
+
+    if (!response?.data?.success) {
+      throw new Error('Requirement extraction failed on AI service while generating requirement map');
+    }
+
+    const functional = response.data.functional_requirements || [];
+    const nonFunctional = response.data.non_functional_requirements || [];
+    const modules = response.data.modules || [];
+    const actors = response.data.actors || [];
+
+    await Requirement.findOneAndUpdate(
+      { project: projectId },
+      {
+        project: projectId,
+        document: documentId,
+        functional,
+        nonFunctional,
+        modules,
+        actors,
+        source: 'srs_extract',
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    return { functional, nonFunctional, modules, actors };
+  }
+
+  static _extractReqIdAndTitle(line = '', fallbackPrefix = 'FR') {
+    const text = String(line || '').trim();
+    const idMatch = text.match(/\b((?:FR|NFR)(?:-[A-Z0-9]+)*-\d{1,4})\b/i);
+    const id = idMatch ? idMatch[1].toUpperCase() : null;
+    let title = text;
+    if (id) {
+      title = text.replace(idMatch[0], '').replace(/^[:\-\s]+/, '').trim();
+    }
+    if (!title) title = text || `${fallbackPrefix} requirement`;
+    return { id, title };
+  }
+
+  static _buildMapItemsFromRequirement(requirementDoc) {
+    const modules = Array.isArray(requirementDoc?.modules) ? requirementDoc.modules : [];
+    const primaryModule = modules[0] || 'General';
+    const items = [];
+
+    const functional = Array.isArray(requirementDoc?.functional) ? requirementDoc.functional : [];
+    functional.forEach((line, idx) => {
+      const { id, title } = DocumentService._extractReqIdAndTitle(line, 'FR');
+      items.push({
+        id: id || `FR-GEN-${String(idx + 1).padStart(3, '0')}`,
+        title,
+        module: primaryModule,
+        status: 'draft',
+      });
+    });
+
+    const nonFunctional = Array.isArray(requirementDoc?.nonFunctional) ? requirementDoc.nonFunctional : [];
+    nonFunctional.forEach((line, idx) => {
+      const { id, title } = DocumentService._extractReqIdAndTitle(line, 'NFR');
+      items.push({
+        id: id || `NFR-GEN-${String(idx + 1).padStart(3, '0')}`,
+        title,
+        module: primaryModule,
+        status: 'draft',
+      });
+    });
+
+    const seen = new Set();
+    return items.filter((item) => {
+      const key = `${item.id}|${item.title}`.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  static parseRequirementMapMarkdown(markdownText = '') {
+    const lines = String(markdownText || '').split(/\r?\n/);
+    const items = [];
+
+    for (const line of lines) {
+      const row = line.trim();
+      if (!row || row.startsWith('#')) continue;
+
+      // Supported formats:
+      // - FR-AUTH-001 | User Login | Auth | draft
+      // - FR-AUTH-001: User Login
+      const pipeParts = row.replace(/^[-*]\s*/, '').split('|').map((p) => p.trim());
+      if (pipeParts.length >= 2 && /^(FR|NFR)-/i.test(pipeParts[0])) {
+        items.push({
+          id: pipeParts[0].toUpperCase(),
+          title: pipeParts[1] || 'Untitled requirement',
+          module: pipeParts[2] || 'General',
+          status: pipeParts[3] || 'draft',
+        });
+        continue;
+      }
+
+      const m = row.match(/^(?:[-*]\s*)?((?:FR|NFR)(?:-[A-Z0-9]+)*-\d{1,4})\s*[:\-]\s*(.+)$/i);
+      if (m) {
+        items.push({
+          id: m[1].toUpperCase(),
+          title: m[2].trim(),
+          module: 'General',
+          status: 'draft',
+        });
+      }
+    }
+
+    return items;
+  }
+
+  static parseRequirementMapJson(jsonText = '') {
+    let parsed;
+    try {
+      parsed = JSON.parse(String(jsonText || '').trim());
+    } catch (error) {
+      throw new Error('Invalid JSON file for requirement map');
+    }
+
+    const rows = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.items)
+        ? parsed.items
+        : [];
+
+    const normalized = rows
+      .filter((row) => row && typeof row === 'object')
+      .map((row, idx) => {
+        const id = String(row.id || '').trim().toUpperCase();
+        const title = String(row.title || '').trim();
+        const module = String(row.module || 'General').trim() || 'General';
+        const status = String(row.status || 'draft').trim() || 'draft';
+
+        return {
+          id: id || `FR-GEN-${String(idx + 1).padStart(3, '0')}`,
+          title,
+          module,
+          status,
+        };
+      })
+      .filter((row) => row.title);
+
+    if (!normalized.length) {
+      throw new Error('JSON map must contain non-empty items with at least title fields');
+    }
+
+    const seen = new Set();
+    return normalized.filter((item) => {
+      const key = `${item.id}|${item.title}`.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  static async generateRequirementMap(projectId, { source = 'generated', forceExtract = false } = {}) {
+    const latestDoc = await Document.findOne({ project: projectId, isActive: true }).sort({ updatedAt: -1 });
+    if (!latestDoc) {
+      throw new Error('No active document found for this project');
+    }
+
+    let requirement = await Requirement.findOne({ project: projectId }).lean();
+
+    if (!requirement && latestDoc.requirementMap?.items?.length) {
+      const items = Array.isArray(latestDoc.requirementMap.items) ? latestDoc.requirementMap.items : [];
+      requirement = {
+        project: projectId,
+        functional: items
+          .filter((item) => String(item?.id || '').toUpperCase().startsWith('FR'))
+          .map((item) => `${item.id}: ${item.title}`),
+        nonFunctional: items
+          .filter((item) => String(item?.id || '').toUpperCase().startsWith('NFR'))
+          .map((item) => `${item.id}: ${item.title}`),
+        modules: [...new Set(items.map((item) => item.module).filter(Boolean))],
+        actors: [],
+      };
+    }
+
+    // If no extracted requirements exist yet, force an AI extraction now.
+    const hasAnyRequirements =
+      requirement &&
+      ((Array.isArray(requirement.functional) && requirement.functional.length > 0) ||
+        (Array.isArray(requirement.nonFunctional) && requirement.nonFunctional.length > 0));
+
+    if (forceExtract || !hasAnyRequirements) {
+      await DocumentService._extractRequirementsViaAI({
+        projectId,
+        documentId: latestDoc._id.toString(),
+        filePath: latestDoc.filePath,
+        fileType: latestDoc.fileType,
+      });
+      requirement = await Requirement.findOne({ project: projectId }).lean();
+    }
+
+    const items = DocumentService._buildMapItemsFromRequirement(requirement);
+    const requirementMap = {
+      items,
+      source,
+      generatedAt: new Date(),
+      version: 1,
+    };
+
+    if (latestDoc) {
+      latestDoc.requirementMap = requirementMap;
+      await latestDoc.save();
+    }
+
+    return {
+      projectId,
+      documentId: latestDoc?._id || null,
+      requirementMap,
+    };
+  }
+
   /**
-   * Ingest document: parse, chunk, embed, extract requirements
+   * Ingest document: parse, chunk, and embed only.
    */
   static async ingestDocument(documentId, filePath, fileType, namespace, projectId, io) {
     try {
@@ -18,6 +252,14 @@ class DocumentService {
       
       // Step 1: Parse and ingest into vector DB
       logger.info(`[Document ${documentId}] Starting ingestion...`);
+
+      if (io) {
+        io.to(`project:${projectId}`).emit('document:status', {
+          documentId,
+          status: 'embedding',
+        });
+      }
+      await Document.findByIdAndUpdate(documentId, { status: 'embedding' });
       
       const ingestResponse = await axios.post(`${AI_SERVICE_URL}/documents/ingest`, {
         document_id: documentId,
@@ -26,7 +268,7 @@ class DocumentService {
         namespace,
         project_id: projectId,
       }, {
-        timeout: 600000, // 10 minutes for large documents
+        timeout: 0,
       });
 
       if (!ingestResponse.data.success) {
@@ -43,41 +285,6 @@ class DocumentService {
       logger.info(
         `[Document ${documentId}] Ingestion complete: ${chunks} chunks, ${embeddings} embeddings, ` +
         `${parseMetadata?.wordCount || 0} words, ${parseMetadata?.textLength || 0} chars`
-      );
-
-      // Step 2: Extract requirements
-      logger.info(`[Document ${documentId}] Starting requirement extraction...`);
-      
-      const extractResponse = await axios.post(
-        `${AI_SERVICE_URL}/stories/extract-requirements`,
-        {
-          project_id: projectId,
-          document_id: documentId,
-          file_path: filePath,
-          file_type: fileType,
-          // ai_config can be optionally passed
-        },
-        {
-          timeout: 600000,
-        }
-      );
-
-      if (!extractResponse.data.success) {
-        throw new Error('Requirement extraction failed on AI service');
-      }
-
-      const {
-        functional_requirements,
-        non_functional_requirements,
-        modules,
-        actors,
-        parseMetadata: extractParseMetadata,
-      } = extractResponse.data;
-
-      logger.info(
-        `[Document ${documentId}] Extraction complete: ${functional_requirements?.length || 0} functional, ` +
-        `${non_functional_requirements?.length || 0} non-functional, ` +
-        `${modules?.length || 0} modules, ${actors?.length || 0} actors`
       );
 
       const totalTime = Date.now() - startTime;
@@ -97,30 +304,32 @@ class DocumentService {
           warnings: parseMetadata?.warnings || [],
         },
         extractedRequirements: {
-          functional: functional_requirements || [],
-          nonFunctional: non_functional_requirements || [],
-          modules: modules || [],
-          actors: actors || [],
+          functional: [],
+          nonFunctional: [],
+          modules: [],
+          actors: [],
           quality: {
-            functionalCount: functional_requirements?.length || 0,
-            nonFunctionalCount: non_functional_requirements?.length || 0,
-            moduleCount: modules?.length || 0,
-            actorCount: actors?.length || 0,
+            functionalCount: 0,
+            nonFunctionalCount: 0,
+            moduleCount: 0,
+            actorCount: 0,
           },
         },
         totalTime,
       };
 
     } catch (error) {
+      const upstreamDetail = error?.response?.data?.detail || error?.response?.data?.message || '';
+      const combinedMessage = upstreamDetail || error.message;
       logger.error(
-        `[Document ${documentId}] Ingestion failed: ${error.message}`,
+        `[Document ${documentId}] Ingestion failed: ${combinedMessage}`,
         { stack: error.stack }
       );
 
       throw {
         success: false,
-        error: error.message,
-        stage: this._getErrorStage(error.message),
+        error: combinedMessage,
+        stage: this._getErrorStage(combinedMessage),
       };
     }
   }
@@ -132,9 +341,9 @@ class DocumentService {
     if (!errorMessage) return 'unknown';
     
     const msg = errorMessage.toLowerCase();
+    if (msg.includes('status code 502') || msg.includes('embedding service error')) return 'embedding';
     if (msg.includes('parse') || msg.includes('extract text')) return 'parsing';
-    if (msg.includes('chunk') || msg.includes('embedding')) return 'chunking';
-    if (msg.includes('requirement') || msg.includes('extraction')) return 'extraction';
+    if (msg.includes('chunk') || msg.includes('embedding')) return 'embedding';
     if (msg.includes('ingest')) return 'ingestion';
     
     return 'unknown';

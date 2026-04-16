@@ -11,6 +11,13 @@ router = APIRouter()
 embedding_service = EmbeddingService()
 
 
+def _safe_error_text(err: Exception, fallback: str) -> str:
+    text = str(err or '').strip()
+    if not text:
+        return fallback
+    return text[:260] if len(text) > 260 else text
+
+
 class IngestRequest(BaseModel):
     document_id: str
     file_path: str
@@ -73,7 +80,7 @@ async def ingest_document(req: IngestRequest) -> IngestResponse:
         logger.error(f"Embedding failed for {req.document_id}: {e}")
         raise HTTPException(
             status_code=502,
-            detail=f"Document ingestion failed: {str(e)}"
+            detail=f"Document ingestion failed: {_safe_error_text(e, 'Embedding service error')}"
         )
 
     elapsed = int((time.time() - start) * 1000)

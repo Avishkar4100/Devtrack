@@ -1,7 +1,11 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
 import { useAuthStore } from '@/store/authStore'
+import { useNotificationStore } from '@/store/notificationStore'
 import { appLogger } from '@/lib/logger'
+import { extractApiErrorMessage, normalizeErrorMessageForDedupe } from '@/lib/errorUtils'
+
+const shownApiWarnings = new Set()
 
 const api = axios.create({
   baseURL: '/api',
@@ -38,9 +42,21 @@ api.interceptors.response.use(
     return response
   },
   (error) => {
-    const message = error.response?.data?.message || error.message || 'Something went wrong'
+    const message = extractApiErrorMessage(error, 'Something went wrong')
+    const dedupeMessage = normalizeErrorMessageForDedupe(message)
     const status = error.response?.status
     const normalizedMessage = String(message || '').toLowerCase()
+    const method = (error.config?.method || 'GET').toUpperCase()
+    const url = error.config?.url || 'unknown-endpoint'
+    const addNotification = useNotificationStore.getState().addNotification
+
+    if (error.response?.data && typeof error.response.data === 'object') {
+      error.response.data.message = message
+    }
+
+    error.userMessage = message
+    error.message = message
+    error.__handledByApi = true
 
     const isAuthSessionFailure =
       status === 401 && (
@@ -64,8 +80,48 @@ api.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    if (status !== 404) {
-      toast.error(message)
+    const isJiraCredsMissing = dedupeMessage.toLowerCase().includes('jira credentials not configured')
+    const isGithubTokenMissing = dedupeMessage.toLowerCase().includes('github token not configured')
+
+    if (isJiraCredsMissing) {
+      const onceKey = 'jira-credentials-not-configured'
+      if (!shownApiWarnings.has(onceKey)) {
+        shownApiWarnings.add(onceKey)
+        addNotification({
+          sourceId: `api-${Date.now()}`,
+          type: 'warning',
+          message: dedupeMessage,
+          dedupeKey: onceKey,
+        })
+      }
+      return Promise.reject(error)
+    }
+
+    if (isGithubTokenMissing) {
+      const onceKey = 'github-token-not-configured'
+      if (!shownApiWarnings.has(onceKey)) {
+        shownApiWarnings.add(onceKey)
+        addNotification({
+          sourceId: `api-${Date.now()}`,
+          type: 'warning',
+          message: dedupeMessage,
+          dedupeKey: onceKey,
+        })
+      }
+      return Promise.reject(error)
+    }
+
+    const shouldToast = status !== 404
+    if (shouldToast) {
+      toast.error(dedupeMessage || message, { id: `api|${method}|${url}|${dedupeMessage}` })
+    } else {
+      // Keep 404s visible in notification center even when toasts are suppressed.
+      addNotification({
+        sourceId: `api-${Date.now()}`,
+        type: 'error',
+        message,
+        dedupeKey: `api|${method}|${url}|${status || 'NA'}|${dedupeMessage}`,
+      })
     }
 
     return Promise.reject(error)

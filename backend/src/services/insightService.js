@@ -2,6 +2,8 @@ const axios = require('axios');
 const Story = require('../models/Story');
 const Commit = require('../models/Commit');
 const Epic = require('../models/Epic');
+const { getActiveAIConfigPayload } = require('./aiConfigService');
+const { resolveAiServiceBaseUrl } = require('../utils/aiServiceUrl');
 
 const toPercent = (completed, total) => {
   if (!total) return 0;
@@ -151,42 +153,15 @@ const buildModuleWise = (stories = [], epics = []) => {
   });
 };
 
-const callLLM = async (prompt) => {
-  const apiKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return null;
-  }
-
+const callLLM = async (prompt, aiConfig = null) => {
   try {
-    const response = await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        model: process.env.INSIGHT_MODEL || process.env.LLM_MODEL || 'google/gemini-2.0-flash-exp:free',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an engineering manager assistant. Keep summaries factual, concise, and neutral.',
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.2,
-        max_tokens: 180,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': process.env.FRONTEND_URL || 'http://localhost:5173',
-          'X-Title': 'DevTrack Insights',
-        },
-        timeout: 30000,
-      }
-    );
+    const aiUrl = resolveAiServiceBaseUrl(process.env.AI_SERVICE_URL);
+    const response = await axios.post(`${aiUrl}/stories/standup-summary`, {
+      prompt,
+      ai_config: aiConfig,
+    }, { timeout: 45000 });
 
-    return response.data?.choices?.[0]?.message?.content?.trim() || null;
+    return response.data?.summary || null;
   } catch (error) {
     return null;
   }
@@ -235,7 +210,8 @@ Generate a short standup-style summary:
 - project health
 `;
 
-  const aiSummary = await callLLM(prompt);
+  const aiConfig = await getActiveAIConfigPayload();
+  const aiSummary = await callLLM(prompt, aiConfig);
   const fallbackSummary = `Progress is ${progressPercentage}%. ${activeDevs.length || 0} developers were active recently. Pending items: ${pending}. Project risk is ${risk}.`;
 
   const dailyReport = buildDailyReport(stories, commits);

@@ -3,26 +3,48 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
+import toast from 'react-hot-toast'
 import App from './App.jsx'
 import './index.css'
 import ThemeSync from './components/ThemeSync.jsx'
 import NotificationSync from './components/NotificationSync.jsx'
 import AppErrorBoundary from './components/AppErrorBoundary.jsx'
 import { appLogger } from './lib/logger'
+import { useNotificationStore } from './store/notificationStore'
+
+const notifyGlobalError = (message, source = 'browser') => {
+  const text = typeof message === 'string' && message.trim()
+    ? message.trim()
+    : 'Unexpected runtime error occurred'
+  useNotificationStore.getState().addNotification({
+    sourceId: `${source}-${Date.now()}`,
+    type: 'error',
+    message: text,
+    dedupeKey: `${source}|${text}`,
+  })
+  toast.error(text)
+}
 
 window.addEventListener('error', (event) => {
+  const message = event?.error?.message || event?.message || 'Unexpected runtime error occurred'
   appLogger.error('Unhandled browser error', {
-    message: event.message,
+    message,
     source: event.filename,
     line: event.lineno,
     column: event.colno,
   })
+  notifyGlobalError(message, 'window-error')
 })
 
 window.addEventListener('unhandledrejection', (event) => {
+  if (event?.reason?.__handledByApi) {
+    return
+  }
+  const reason = event.reason?.message || event.reason || 'Unhandled async error'
   appLogger.error('Unhandled promise rejection', {
-    reason: event.reason?.message || event.reason,
+    reason,
   })
+  notifyGlobalError(String(reason), 'window-rejection')
 })
 
 const queryClient = new QueryClient({

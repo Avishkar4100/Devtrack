@@ -19,8 +19,12 @@ export default function NotificationSync() {
       if (toast.type === 'loading') return
 
       const message = extractMessageText(toast.message)
-      const key = `${toast.id}|${toast.type}|${message}`
+      const key = `${toast.type || 'blank'}|${message}`
       if (processedRef.current.has(key)) return
+
+      if (processedRef.current.size > 500) {
+        processedRef.current.clear()
+      }
 
       processedRef.current.add(key)
       addNotification({

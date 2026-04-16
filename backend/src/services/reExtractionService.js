@@ -4,13 +4,32 @@
  * with strategy selection and version tracking
  */
 
-const axios = require('axios');
 const Document = require('../models/Document');
 const Requirement = require('../models/Requirement');
 const AuditLog = require('../models/AuditLog');
 const logger = require('../config/logger');
+const { getActiveAIConfigPayload } = require('./aiConfigService');
+const { resolveAiServiceBaseUrl } = require('../utils/aiServiceUrl');
 
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+const AI_SERVICE_URL = resolveAiServiceBaseUrl(process.env.AI_SERVICE_URL);
+
+const toIdString = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    if (typeof value.toHexString === 'function') {
+      return value.toHexString();
+    }
+    if (value._id && value._id !== value) {
+      return toIdString(value._id);
+    }
+    if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) {
+      const text = value.toString();
+      return text === '[object Object]' ? '' : text;
+    }
+  }
+  return '';
+};
 
 class ReExtractionService {
   /**
@@ -47,14 +66,18 @@ class ReExtractionService {
         throw new Error('Document failed to parse. Run re-ingestion instead.');
       }
 
+      const resolvedProjectId = projectId || toIdString(document.project);
+      if (!resolvedProjectId) {
+        throw new Error('Document is linked to an invalid project record.');
+      }
+
       logger.info(
         `Starting re-extraction for document ${documentId} using strategy: ${strategy}`
       );
 
       // Emit starting event
-      if (io && (projectId || document.project)) {
-        const projId = projectId || document.project._id;
-        io.to(`project:${projId}`).emit('document:re-extraction-start', {
+      if (io) {
+        io.to(`project:${resolvedProjectId}`).emit('document:re-extraction-start', {
           documentId,
           strategy,
         });
@@ -65,7 +88,7 @@ class ReExtractionService {
         document.filePath,
         document.fileType,
         strategy,
-        projectId || document.project._id.toString()
+        resolvedProjectId
       );
 
       // Validate extracted content
@@ -106,7 +129,7 @@ class ReExtractionService {
         { document: documentId },
         {
           document: documentId,
-          project: document.project._id,
+          project: resolvedProjectId,
           functional: extractionResult.functional_requirements || [],
           nonFunctional: extractionResult.non_functional_requirements || [],
           modules: extractionResult.modules || [],
@@ -121,9 +144,8 @@ class ReExtractionService {
       const processingTime = Date.now() - startTime;
 
       // Emit success event
-      if (io && (projectId || document.project)) {
-        const projId = projectId || document.project._id;
-        io.to(`project:${projId}`).emit('document:re-extraction-complete', {
+      if (io) {
+        io.to(`project:${resolvedProjectId}`).emit('document:re-extraction-complete', {
           documentId,
           strategy,
           version: extractionVersion,
@@ -138,7 +160,7 @@ class ReExtractionService {
 
       // Create audit log
       await AuditLog.create({
-        project: document.project._id,
+        project: resolvedProjectId,
         action: 'document_re-extracted',
         entity: 'document',
         entityId: documentId,
@@ -181,8 +203,9 @@ class ReExtractionService {
       });
 
       // Emit error event
-      if (io && projectId) {
-        io.to(`project:${projectId}`).emit('document:re-extraction-failed', {
+      const fallbackProjectId = toIdString(projectId);
+      if (io && fallbackProjectId) {
+        io.to(`project:${fallbackProjectId}`).emit('document:re-extraction-failed', {
           documentId,
           error: error.message,
         });
@@ -197,10 +220,12 @@ class ReExtractionService {
    */
   static async _callExtractionAPI(filePath, fileType, strategy, projectId) {
     try {
+      const aiConfig = await getActiveAIConfigPayload();
       const payload = {
         project_id: projectId,
         file_path: filePath,
         file_type: fileType,
+        ai_config: aiConfig,
       };
 
       // Add strategy-specific instructions
@@ -213,7 +238,7 @@ class ReExtractionService {
       const response = await axios.post(
         `${AI_SERVICE_URL}/stories/extract-requirements`,
         payload,
-        { timeout: 600000 }
+        { timeout: 0 }
       );
 
       if (!response.data.success) {

@@ -10,7 +10,7 @@ const AIConfigSchema = new mongoose.Schema(
     },
     provider: {
       type: String,
-      enum: ['openrouter', 'deepseek_local'],
+      enum: ['openrouter', 'deepseek_local', 'manual_bridge'],
       default: 'openrouter',
     },
     openrouterKeyName: {
@@ -40,6 +40,12 @@ const AIConfigSchema = new mongoose.Schema(
       default: 4096,
       min: 128,
       max: 32768,
+    },
+    manualBridgeTimeoutSeconds: {
+      type: Number,
+      default: 1800,
+      min: 30,
+      max: 7200,
     },
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,

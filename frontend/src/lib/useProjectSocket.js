@@ -62,23 +62,34 @@ export function useProjectSocket(projectId, callbacks = {}) {
 
     // Notifications
     socket.on('notification', (notification) => {
-      handleSocketEvent('notification', callbacks.onNotification)(notification)
+      const normalized = notification?.data && !notification?.message
+        ? { ...notification.data, event: notification.event || 'notification', timestamp: notification.timestamp }
+        : (notification || {})
+
+      const notificationType = normalized.type || 'info'
+      const notificationMessage = normalized.message || normalized.error || normalized.detail || 'Notification received'
+
+      handleSocketEvent('notification', callbacks.onNotification)({
+        ...normalized,
+        type: notificationType,
+        message: notificationMessage,
+      })
       
       // Show toast based on notification type
       const toastConfig = {
-        success: () => toast.success(notification.message),
-        error: () => toast.error(notification.message),
+        success: () => toast.success(notificationMessage),
+        error: () => toast.error(notificationMessage),
         warning: () => toast((t) => (
           <div style={{ display: 'flex', gap: '8px' }}>
             <span>⚠️</span>
-            <span>{notification.message}</span>
+            <span>{notificationMessage}</span>
           </div>
         )),
-        info: () => toast(notification.message),
+        info: () => toast(notificationMessage),
       }
       
-      if (toastConfig[notification.type]) {
-        toastConfig[notification.type]()
+      if (toastConfig[notificationType]) {
+        toastConfig[notificationType]()
       }
     })
 

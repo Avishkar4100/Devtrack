@@ -19,16 +19,7 @@ const EMPTY_AI_PLANNER = {
 
 const EMPTY_PROJECT_WORKSPACE = {
   activeTab: 'overview',
-  moduleName: 'Core Module',
-  storyPrompt: '',
-  generatedJsonText: '',
-  plannerDraftView: 'json',
   generatedBacklogDraft: { epics: [], stories: [], tasks: [], subtasks: [] },
-  plannerInput: '',
-  plannerChat: [
-    { role: 'assistant', text: 'Upload SRS, ask for suggestions, review generated backlog, then push to Jira.' },
-  ],
-  jiraProjectKey: '',
 }
 
 const getProjectKey = (projectId) => projectId || '__fallback__'

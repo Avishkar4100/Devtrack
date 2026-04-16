@@ -15,7 +15,7 @@ export default function ProjectsPage() {
   const qc = useQueryClient()
   const { setProjects, setCurrentProject } = useProjectStore()
   const { user } = useAuthStore()
-  const isScrumMaster = user?.role === 'scrum_master'
+  const canManageProjects = user?.role !== 'admin'
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ name: '', description: '', key: '', color: '#6366f1', budget: '', deadline: '', technology: '', status: 'active' })
@@ -84,7 +84,7 @@ export default function ProjectsPage() {
             {projects.length === 1 ? 'project' : 'projects'}
           </p>
         </div>
-        {isScrumMaster && (
+        {canManageProjects && (
           <motion.button onClick={() => setShowCreate(true)} className="btn-primary"
             whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}>
             <PlusIcon className="w-4 h-4" />
@@ -129,7 +129,7 @@ export default function ProjectsPage() {
           <p className="font-semibold mb-1" style={{ color: '#e2e8f0' }}>No projects found</p>
           <p className="text-sm mb-6" style={{ color: '#475569' }}>No projects available yet</p>
           <div className="flex gap-2 justify-center">
-            {isScrumMaster && (
+            {canManageProjects && (
               <motion.button onClick={() => setShowCreate(true)} className="btn-primary"
                 whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}>
                 <PlusIcon className="w-4 h-4" /> Create Project
@@ -147,7 +147,7 @@ export default function ProjectsPage() {
           variants={{ show: { transition: { staggerChildren: 0.07 } } }}>
           {filtered.map((project) => (
             <ProjectCard key={project._id} project={project}
-              canDelete={isScrumMaster}
+              canDelete={canManageProjects && String(project?.owner?._id || project?.owner || '') === String(user?.id || user?._id || '')}
               onDelete={() => deleteMutation.mutate(project._id)}
               onSelect={() => setCurrentProject(project)} />
           ))}
@@ -156,7 +156,7 @@ export default function ProjectsPage() {
 
       {/* Create modal */}
       <AnimatePresence>
-        {showCreate && isScrumMaster && (
+        {showCreate && canManageProjects && (
           <Modal title="Create New Project" onClose={() => { setShowCreate(false); resetForm() }}>
             <form onSubmit={(e) => { e.preventDefault(); createMutation.mutate(form) }} className="space-y-4">
               <div>

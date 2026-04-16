@@ -3,6 +3,14 @@ const Story = require('../models/Story');
 const Project = require('../models/Project');
 const SprintService = require('../services/sprintService');
 const logger = require('../config/logger');
+const { getClientErrorMessage } = require('../utils/errorUtils');
+
+const getHttpStatus = (error, fallback = 500) => {
+  if (error?.name === 'ValidationError' || error?.name === 'CastError') return 400;
+  const parsed = Number(error?.statusCode || error?.response?.status || fallback);
+  if (!Number.isFinite(parsed) || parsed < 400 || parsed > 599) return fallback;
+  return parsed;
+};
 
 const getSprints = async (req, res) => {
   try {
@@ -20,7 +28,10 @@ const getSprints = async (req, res) => {
     res.status(200).json({ success: true, data: enrichedSprints });
   } catch (error) {
     logger.error(`Get sprints error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error fetching sprints' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to fetch sprints for this project'),
+    });
   }
 };
 
@@ -38,7 +49,10 @@ const createSprint = async (req, res) => {
     res.status(201).json({ success: true, data: sprint });
   } catch (error) {
     logger.error(`Create sprint error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error creating sprint' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to create sprint'),
+    });
   }
 };
 
@@ -60,7 +74,10 @@ const updateSprint = async (req, res) => {
     res.status(200).json({ success: true, data: sprint });
   } catch (error) {
     logger.error(`Update sprint error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error updating sprint' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to update sprint'),
+    });
   }
 };
 
@@ -76,7 +93,10 @@ const deleteSprint = async (req, res) => {
     res.status(200).json({ success: true, message: 'Sprint deleted' });
   } catch (error) {
     logger.error(`Delete sprint error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error deleting sprint' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to delete sprint'),
+    });
   }
 };
 
@@ -108,7 +128,10 @@ const closeSprint = async (req, res) => {
     });
   } catch (error) {
     logger.error(`Close sprint error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error closing sprint' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to close sprint'),
+    });
   }
 };
 
@@ -121,7 +144,10 @@ const getSprintSummary = async (req, res) => {
     res.status(200).json({ success: true, data: summary });
   } catch (error) {
     logger.error(`Get sprint summary error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error fetching sprint summary' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to fetch sprint summary'),
+    });
   }
 };
 
@@ -145,7 +171,10 @@ const getUpcomingClosures = async (req, res) => {
     });
   } catch (error) {
     logger.error(`Get upcoming closures error: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Error fetching upcoming closures' });
+    res.status(getHttpStatus(error)).json({
+      success: false,
+      message: getClientErrorMessage(error, 'Unable to fetch upcoming sprint closures'),
+    });
   }
 };
 

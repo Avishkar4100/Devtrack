@@ -19,8 +19,6 @@ import AdminLayout from '@/components/AdminLayout'
 import AdminLoginPage from '@/pages/AdminLogin'
 import AdminOverviewPage from '@/pages/AdminOverview'
 import AdminAIConfigPage from '@/pages/AdminAIConfig'
-import AdminOrganizationsPage from '@/pages/AdminOrganizations'
-import AdminProjectsPage from '@/pages/AdminProjects'
 
 const getHomeByRole = (user) => (user?.role === 'admin' ? '/admin/overview' : '/overview')
 
@@ -73,7 +71,6 @@ export default function App() {
         <Route path="overview" element={<OverviewPage />} />
         <Route path="ai-planner" element={<AIPlannerPage />} />
         <Route path="workspace" element={<WorkspacePage />} />
-        <Route path="progress" element={<Navigate to="/insights" replace />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:id" element={<ProjectWorkspacePage />} />
         <Route path="projects/:id/backlog-editor" element={<BacklogEditorPage />} />
@@ -86,8 +83,6 @@ export default function App() {
         <Route index element={<Navigate to="/admin/overview" replace />} />
         <Route path="overview" element={<AdminOverviewPage />} />
         <Route path="ai-config" element={<AdminAIConfigPage />} />
-        <Route path="organizations" element={<AdminOrganizationsPage />} />
-        <Route path="projects" element={<AdminProjectsPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

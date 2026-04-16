@@ -1,5 +1,7 @@
 import React from 'react'
+import toast from 'react-hot-toast'
 import { appLogger } from '@/lib/logger'
+import { useNotificationStore } from '@/store/notificationStore'
 
 export default class AppErrorBoundary extends React.Component {
   constructor(props) {
@@ -12,11 +14,21 @@ export default class AppErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, errorInfo) {
+    const message = error?.message || 'UI crashed while rendering'
     appLogger.error('React render error', {
-      message: error?.message,
+      message,
       stack: error?.stack,
       componentStack: errorInfo?.componentStack,
     })
+
+    useNotificationStore.getState().addNotification({
+      sourceId: `render-${Date.now()}`,
+      type: 'error',
+      message,
+      dedupeKey: `render|${message}`,
+    })
+
+    toast.error(message)
   }
 
   handleReload = () => {

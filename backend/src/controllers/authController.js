@@ -3,6 +3,7 @@ const axios = require('axios');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const { sendEmail, resetPasswordEmail, otpEmail } = require('../services/email');
+const { ensureUserWorkspace } = require('../services/workspaceBootstrapService');
 const logger = require('../config/logger');
 
 const maskEmail = (email) => {
@@ -559,6 +560,7 @@ const googleCallback = async (req, res) => {
 };
 
 const sendTokenResponse = async (user, statusCode, res) => {
+  await ensureUserWorkspace(user);
   const token = user.getSignedJwtToken();
   const hydratedUser = await User.findById(user._id).select('+jiraApiToken +githubToken');
 

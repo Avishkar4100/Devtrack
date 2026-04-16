@@ -3,6 +3,28 @@ const User = require('../models/User');
 const Epic = require('../models/Epic');
 const Story = require('../models/Story');
 const AuditLog = require('../models/AuditLog');
+const logger = require('../config/logger');
+const mongoose = require('mongoose');
+
+const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(String(value || ''));
+
+const toIdString = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    if (typeof value.toHexString === 'function') {
+      return value.toHexString();
+    }
+    if (value._id && value._id !== value) {
+      return toIdString(value._id);
+    }
+    if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) {
+      const text = value.toString();
+      return text === '[object Object]' ? '' : text;
+    }
+  }
+  return '';
+};
 
 // @desc    Get all projects for current user
 // @route   GET /api/projects
@@ -24,20 +46,27 @@ const getProjects = async (req, res) => {
 // @route   GET /api/projects/:id
 // @access  Private
 const getProject = async (req, res) => {
-  const project = await Project.findById(req.params.id)
+  if (!isValidObjectId(req.params.id)) {
+    return res.status(400).json({ success: false, message: 'Invalid project id' });
+  }
+
+  const baseCriteria = { _id: req.params.id };
+  const accessCriteria = req.user.role === 'admin'
+    ? baseCriteria
+    : {
+      ...baseCriteria,
+      $or: [{ owner: req.user._id }, { 'members.user': req.user._id }],
+    };
+
+  const project = await Project.findOne(accessCriteria)
     .populate('owner', 'name email avatar role')
     .populate('members.user', 'name email avatar role');
 
   if (!project) {
-    return res.status(404).json({ success: false, message: 'Project not found' });
-  }
-
-  const isMember =
-    req.user.role === 'admin' ||
-    project.owner._id.toString() === req.user.id ||
-    project.members.some((m) => m.user._id.toString() === req.user.id);
-
-  if (!isMember) {
+    const exists = await Project.exists({ _id: req.params.id });
+    if (!exists) {
+      return res.status(404).json({ success: false, message: 'Project not found' });
+    }
     return res.status(403).json({ success: false, message: 'Not authorized to view this project' });
   }
 
@@ -48,9 +77,8 @@ const getProject = async (req, res) => {
 // @route   POST /api/projects
 // @access  Private
 const createProject = async (req, res) => {
-  const canCreateInDev = process.env.NODE_ENV === 'development' && req.user.role === 'manager';
-  if (req.user.role !== 'scrum_master' && !canCreateInDev) {
-    return res.status(403).json({ success: false, message: 'Only Scrum Master can create projects' });
+  if (req.user.role === 'admin') {
+    return res.status(403).json({ success: false, message: 'Admin accounts cannot create user workspace projects here' });
   }
 
   const { name, description, key, budget, deadline, technology, color, tags } = req.body;
@@ -97,10 +125,15 @@ const createProject = async (req, res) => {
 // @route   PUT /api/projects/:id
 // @access  Private
 const updateProject = async (req, res) => {
+  if (!isValidObjectId(req.params.id)) {
+    return res.status(400).json({ success: false, message: 'Invalid project id' });
+  }
+
   let project = await Project.findById(req.params.id);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
-  if (req.user.role !== 'scrum_master' || project.owner.toString() !== req.user.id) {
+  const ownerId = toIdString(project.owner);
+  if (ownerId !== req.user.id) {
     return res.status(403).json({ success: false, message: 'Not authorized to update this project' });
   }
 
@@ -127,10 +160,15 @@ const updateProject = async (req, res) => {
 // @route   DELETE /api/projects/:id
 // @access  Private
 const deleteProject = async (req, res) => {
+  if (!isValidObjectId(req.params.id)) {
+    return res.status(400).json({ success: false, message: 'Invalid project id' });
+  }
+
   const project = await Project.findById(req.params.id);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
-  if (req.user.role !== 'scrum_master' || project.owner.toString() !== req.user.id) {
+  const ownerId = toIdString(project.owner);
+  if (ownerId !== req.user.id) {
     return res.status(403).json({ success: false, message: 'Not authorized to delete this project' });
   }
 
@@ -147,7 +185,8 @@ const inviteMember = async (req, res) => {
   const project = await Project.findById(req.params.id);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
-  if (req.user.role !== 'scrum_master' || project.owner.toString() !== req.user.id) {
+  const ownerId = toIdString(project.owner);
+  if (req.user.role !== 'scrum_master' || ownerId !== req.user.id) {
     return res.status(403).json({ success: false, message: 'Not authorized' });
   }
 
@@ -157,8 +196,8 @@ const inviteMember = async (req, res) => {
   }
 
   const alreadyMember =
-    project.owner.toString() === userToInvite._id.toString() ||
-    project.members.some((m) => m.user.toString() === userToInvite._id.toString());
+    ownerId === userToInvite._id.toString() ||
+    project.members.some((m) => toIdString(m?.user) === userToInvite._id.toString());
 
   if (alreadyMember) {
     return res.status(400).json({ success: false, message: 'User is already a member of this project' });
@@ -189,12 +228,13 @@ const removeMember = async (req, res) => {
   const project = await Project.findById(req.params.id);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
-  if (project.owner.toString() !== req.user.id) {
+  const ownerId = toIdString(project.owner);
+  if (ownerId !== req.user.id) {
     return res.status(403).json({ success: false, message: 'Only the project owner can remove members' });
   }
 
   project.members = project.members.filter(
-    (m) => m.user.toString() !== req.params.userId
+    (m) => toIdString(m?.user) !== req.params.userId
   );
   await project.save();
 

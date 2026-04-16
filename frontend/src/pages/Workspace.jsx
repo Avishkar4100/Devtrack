@@ -19,6 +19,14 @@ const formatDate = (value) => {
   return Number.isNaN(d.getTime()) ? 'N/A' : d.toLocaleDateString()
 }
 
+const sprintStateBadgeClass = (state = '') => {
+  const v = String(state).toLowerCase()
+  if (v === 'active') return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+  if (v === 'closed') return 'bg-slate-500/20 text-slate-300 border-slate-500/40'
+  if (v === 'future') return 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+  return 'bg-slate-600/20 text-slate-300 border-slate-600/40'
+}
+
 const getCommitAuthor = (commit) => {
   if (typeof commit?.author === 'string' && commit.author.trim()) return commit.author
   if (commit?.author?.login) return commit.author.login
@@ -26,10 +34,107 @@ const getCommitAuthor = (commit) => {
   return 'Unknown'
 }
 
+const stripHtml = (value = '') => String(value || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
+
+const adfNodeToText = (node) => {
+  if (!node) return ''
+  if (typeof node === 'string') return node
+  if (Array.isArray(node)) return node.map(adfNodeToText).join('')
+
+  const children = Array.isArray(node.content) ? node.content.map(adfNodeToText).join('') : ''
+  if (node.type === 'text') return node.text || ''
+  if (node.type === 'hardBreak') return '\n'
+  if (node.type === 'paragraph') return `${children}\n`
+  if (node.type === 'bulletList' || node.type === 'orderedList') return `${children}\n`
+  if (node.type === 'listItem') return `• ${children}`
+  return children
+}
+
+const getIssueDescriptionText = (issue) => {
+  const rendered = issue?.renderedFields?.description
+  if (rendered && typeof rendered === 'string') {
+    const cleaned = rendered
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<li>/gi, '• ')
+      .replace(/<\/li>/gi, '\n')
+      .replace(/<[^>]*>/g, '')
+      .trim()
+    if (cleaned) return cleaned
+  }
+
+  const adf = issue?.fields?.description
+  const fromAdf = adfNodeToText(adf).trim()
+  if (fromAdf) return fromAdf
+
+  return 'No description'
+}
+
+const getCustomFieldValue = (issue, possibleNames = [], fallbackKeys = []) => {
+  const namesMap = issue?.names || {}
+  const fields = issue?.fields || {}
+  const wanted = possibleNames.map((n) => n.toLowerCase())
+
+  for (const key of fallbackKeys) {
+    if (fields[key] !== undefined && fields[key] !== null && fields[key] !== '') {
+      return fields[key]
+    }
+  }
+
+  for (const [key, value] of Object.entries(fields)) {
+    if (!key.startsWith('customfield_')) continue
+    const label = String(namesMap[key] || '').toLowerCase()
+    if (!label) continue
+    if (wanted.some((n) => label.includes(n))) {
+      if (value !== undefined && value !== null && value !== '') return value
+    }
+  }
+
+  return null
+}
+
+const getDisplayName = (user) => {
+  if (!user) return 'None'
+  return user.displayName || user.name || user.emailAddress || (user.accountId ? `User ${String(user.accountId).slice(-6)}` : 'None')
+}
+
+const formatDateTime = (value) => {
+  if (!value) return 'None'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return 'None'
+  return d.toLocaleString()
+}
+
+const getDueDateMeta = (dueDate) => {
+  if (!dueDate) return { label: 'None', overdue: false }
+  const d = new Date(dueDate)
+  if (Number.isNaN(d.getTime())) return { label: 'None', overdue: false }
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const due = new Date(d)
+  due.setHours(0, 0, 0, 0)
+  const overdue = due < today
+
+  return {
+    label: d.toLocaleDateString(),
+    overdue,
+  }
+}
+
 export default function WorkspacePage() {
   const qc = useQueryClient()
   const { selectedProjectId, selectedJiraProjectKey, projects } = useProjectStore()
   const [activeTab, setActiveTab] = useState('active-sprints')
+  const [selectedBacklogIssueKey, setSelectedBacklogIssueKey] = useState('')
+  const [activityView, setActivityView] = useState('all')
+  const [isIssueEditMode, setIsIssueEditMode] = useState(false)
+  const [issueDraft, setIssueDraft] = useState({ summary: '', description: '', priority: '', issueType: '', dueDate: '', labels: '' })
+  const [newSubtaskSummary, setNewSubtaskSummary] = useState('')
+  const [newLinkedIssueKey, setNewLinkedIssueKey] = useState('')
+  const [newCommentBody, setNewCommentBody] = useState('')
+  const [editingCommentId, setEditingCommentId] = useState('')
+  const [editingCommentBody, setEditingCommentBody] = useState('')
 
   const { data: project } = useQuery({
     queryKey: ['workspace-project', selectedProjectId],
@@ -67,16 +172,90 @@ export default function WorkspacePage() {
     queryFn: async () => (await api.get(`/dashboard/${selectedProjectId}`)).data.data,
   })
 
-  const { data: jiraIssues = [] } = useQuery({
+  const {
+    data: jiraIssues = [],
+    isLoading: isJiraIssuesLoading,
+    isFetching: isJiraIssuesFetching,
+  } = useQuery({
     queryKey: ['workspace-jira-issues', selectedJiraProjectKey],
     enabled: !!selectedJiraProjectKey,
-    queryFn: async () => (await api.get('/jira/server/issues', { params: { projectKey: selectedJiraProjectKey, maxResults: 50 } })).data.data?.issues || [],
+    queryFn: async () =>
+      (await api.get('/jira/server/issues', {
+        params: {
+          projectKey: selectedJiraProjectKey,
+          fetchAll: true,
+          maxResults: 200,
+        },
+      })).data.data?.issues || [],
   })
+
+  const {
+    data: selectedIssueDetail,
+    isLoading: isIssueDetailLoading,
+    isFetching: isIssueDetailFetching,
+  } = useQuery({
+    queryKey: ['workspace-jira-issue-detail', selectedBacklogIssueKey],
+    enabled: activeTab === 'backlog' && !!selectedBacklogIssueKey,
+    queryFn: async () => {
+      const params = {
+        expand: 'names,renderedFields,changelog',
+        fields: [
+          'summary',
+          'description',
+          'status',
+          'issuetype',
+          'assignee',
+          'reporter',
+          'labels',
+          'parent',
+          'duedate',
+          'created',
+          'updated',
+          'priority',
+          'subtasks',
+          'issuelinks',
+          'project',
+          'comment',
+          'worklog',
+          'customfield_10016',
+          'customfield_10020',
+        ].join(','),
+      }
+      return (await api.get(`/jira/server/issues/${selectedBacklogIssueKey}`, { params })).data.data
+    },
+  })
+
+  const { data: issueTransitions = [] } = useQuery({
+    queryKey: ['workspace-jira-issue-transitions', selectedBacklogIssueKey],
+    enabled: activeTab === 'backlog' && !!selectedBacklogIssueKey,
+    queryFn: async () => (await api.get(`/jira/server/issues/${selectedBacklogIssueKey}/transitions`)).data.data || [],
+  })
+
+  useEffect(() => {
+    setSelectedBacklogIssueKey('')
+  }, [selectedJiraProjectKey])
+
+  useEffect(() => {
+    if (!Array.isArray(jiraIssues) || jiraIssues.length === 0) {
+      setSelectedBacklogIssueKey('')
+      return
+    }
+
+    if (!selectedBacklogIssueKey || !jiraIssues.some((issue) => issue.key === selectedBacklogIssueKey)) {
+      setSelectedBacklogIssueKey(jiraIssues[0]?.key || '')
+    }
+  }, [jiraIssues, selectedBacklogIssueKey])
 
   const { data: jiraTeamMembers = [] } = useQuery({
     queryKey: ['workspace-jira-members', selectedJiraProjectKey],
     enabled: !!selectedJiraProjectKey,
     queryFn: async () => (await api.get(`/jira/server/projects/${selectedJiraProjectKey}/members`, { params: { includeApps: false } })).data.data?.members || [],
+  })
+
+  const { data: jiraSprintData } = useQuery({
+    queryKey: ['workspace-jira-active-sprint', selectedJiraProjectKey],
+    enabled: !!selectedJiraProjectKey,
+    queryFn: async () => (await api.get(`/jira/server/projects/${selectedJiraProjectKey}/active-sprint`)).data.data,
   })
 
   const syncFromJira = useMutation({
@@ -95,6 +274,108 @@ export default function WorkspacePage() {
       return (await api.post(`/jira/push/${selectedProjectId}`, { epicIds, storyIds })).data
     },
     onSuccess: () => toast.success('Pushed local backlog to Jira'),
+  })
+
+  const refreshSelectedIssue = () => {
+    qc.invalidateQueries({ queryKey: ['workspace-jira-issues', selectedJiraProjectKey] })
+    qc.invalidateQueries({ queryKey: ['workspace-jira-issue-detail', selectedBacklogIssueKey] })
+    qc.invalidateQueries({ queryKey: ['workspace-jira-issue-transitions', selectedBacklogIssueKey] })
+  }
+
+  const updateIssueMutation = useMutation({
+    mutationFn: async (payload) => (await api.put(`/jira/server/issues/${selectedBacklogIssueKey}`, payload)).data,
+    onSuccess: () => {
+      toast.success('Issue updated')
+      setIsIssueEditMode(false)
+      refreshSelectedIssue()
+    },
+  })
+
+  const deleteIssueMutation = useMutation({
+    mutationFn: async () => (await api.delete(`/jira/server/issues/${selectedBacklogIssueKey}`)).data,
+    onSuccess: () => {
+      toast.success('Issue deleted')
+      setSelectedBacklogIssueKey('')
+      refreshSelectedIssue()
+    },
+  })
+
+  const assignToMeMutation = useMutation({
+    mutationFn: async () => (await api.post(`/jira/server/issues/${selectedBacklogIssueKey}/assign-me`)).data,
+    onSuccess: () => {
+      toast.success('Assigned to you')
+      refreshSelectedIssue()
+    },
+  })
+
+  const transitionIssueMutation = useMutation({
+    mutationFn: async (transitionId) => (await api.post(`/jira/server/issues/${selectedBacklogIssueKey}/transitions`, { transitionId })).data,
+    onSuccess: () => {
+      toast.success('Status updated')
+      refreshSelectedIssue()
+    },
+  })
+
+  const addSubtaskMutation = useMutation({
+    mutationFn: async () => (await api.post(`/jira/server/issues/${selectedBacklogIssueKey}/subtasks`, { summary: newSubtaskSummary })).data,
+    onSuccess: () => {
+      toast.success('Subtask added')
+      setNewSubtaskSummary('')
+      refreshSelectedIssue()
+    },
+  })
+
+  const deleteSubtaskMutation = useMutation({
+    mutationFn: async (subtaskKey) => (await api.delete(`/jira/server/issues/${selectedBacklogIssueKey}/subtasks/${subtaskKey}`)).data,
+    onSuccess: () => {
+      toast.success('Subtask deleted')
+      refreshSelectedIssue()
+    },
+  })
+
+  const addIssueLinkMutation = useMutation({
+    mutationFn: async () => (await api.post(`/jira/server/issues/${selectedBacklogIssueKey}/links`, { linkedIssueKey: newLinkedIssueKey, linkTypeName: 'Relates' })).data,
+    onSuccess: () => {
+      toast.success('Link added')
+      setNewLinkedIssueKey('')
+      refreshSelectedIssue()
+    },
+  })
+
+  const deleteIssueLinkMutation = useMutation({
+    mutationFn: async (linkId) => (await api.delete(`/jira/server/issue-links/${linkId}`)).data,
+    onSuccess: () => {
+      toast.success('Link removed')
+      refreshSelectedIssue()
+    },
+  })
+
+  const addCommentMutation = useMutation({
+    mutationFn: async () => (await api.post(`/jira/server/issues/${selectedBacklogIssueKey}/comments`, { body: newCommentBody })).data,
+    onSuccess: () => {
+      toast.success('Comment added')
+      setNewCommentBody('')
+      setActivityView('comments')
+      refreshSelectedIssue()
+    },
+  })
+
+  const updateCommentMutation = useMutation({
+    mutationFn: async () => (await api.put(`/jira/server/issues/${selectedBacklogIssueKey}/comments/${editingCommentId}`, { body: editingCommentBody })).data,
+    onSuccess: () => {
+      toast.success('Comment updated')
+      setEditingCommentId('')
+      setEditingCommentBody('')
+      refreshSelectedIssue()
+    },
+  })
+
+  const deleteCommentMutation = useMutation({
+    mutationFn: async (commentId) => (await api.delete(`/jira/server/issues/${selectedBacklogIssueKey}/comments/${commentId}`)).data,
+    onSuccess: () => {
+      toast.success('Comment deleted')
+      refreshSelectedIssue()
+    },
   })
 
   const activeSprints = sprints.filter((s) => s.status === 'active')
@@ -160,6 +441,24 @@ export default function WorkspacePage() {
     }
   }, [jiraIssues])
 
+  const jiraActiveSprint = jiraSprintData?.activeSprint || null
+  const jiraActiveSprintIssues = jiraSprintData?.activeIssues || []
+
+  const jiraSprintTimeline = useMemo(() => {
+    const sprintsData = Array.isArray(jiraSprintData?.sprints) ? jiraSprintData.sprints : []
+    return [...sprintsData].sort((a, b) => {
+      const aDate = new Date(a?.startDate || a?.createdDate || 0).getTime()
+      const bDate = new Date(b?.startDate || b?.createdDate || 0).getTime()
+      return bDate - aDate
+    })
+  }, [jiraSprintData])
+
+  const jiraSprintsByState = useMemo(() => ({
+    active: jiraSprintTimeline.filter((s) => String(s?.state).toLowerCase() === 'active'),
+    future: jiraSprintTimeline.filter((s) => String(s?.state).toLowerCase() === 'future'),
+    closed: jiraSprintTimeline.filter((s) => String(s?.state).toLowerCase() === 'closed'),
+  }), [jiraSprintTimeline])
+
   const commitsByAuthor = useMemo(() => {
     const map = new Map()
     commits.forEach((c) => {
@@ -209,6 +508,7 @@ export default function WorkspacePage() {
       const key = member.email && member.email !== 'N/A'
         ? member.email
         : member.accountId || `jira-${member.name}`
+      const fallbackName = member.name || member.displayName || member.publicName || (member.accountId ? `User ${String(member.accountId).slice(-6)}` : 'Unknown Member')
 
       if (map.has(key)) {
         const existing = map.get(key)
@@ -220,7 +520,7 @@ export default function WorkspacePage() {
       } else {
         map.set(key, {
           id: member.accountId || key,
-          name: member.name || 'Unknown Member',
+          name: fallbackName,
           email: member.email || 'N/A',
           role: roleText,
           joinedAt: null,
@@ -232,6 +532,43 @@ export default function WorkspacePage() {
     return [...map.values()]
   }, [teamMembers, jiraTeamMembers])
 
+  const selectedIssue = selectedIssueDetail || null
+  const selectedIssueFields = selectedIssue?.fields || {}
+  const descriptionText = useMemo(() => getIssueDescriptionText(selectedIssue), [selectedIssue])
+
+  useEffect(() => {
+    if (!selectedIssue) {
+      setIsIssueEditMode(false)
+      return
+    }
+
+    setIssueDraft({
+      summary: selectedIssueFields?.summary || '',
+      description: descriptionText === 'No description' ? '' : descriptionText,
+      priority: selectedIssueFields?.priority?.name || '',
+      issueType: selectedIssueFields?.issuetype?.name || '',
+      dueDate: selectedIssueFields?.duedate || '',
+      labels: Array.isArray(selectedIssueFields?.labels) ? selectedIssueFields.labels.join(', ') : '',
+    })
+    setEditingCommentId('')
+    setEditingCommentBody('')
+  }, [selectedIssue, selectedIssueFields, descriptionText])
+
+  const issueSubtasks = Array.isArray(selectedIssueFields?.subtasks) ? selectedIssueFields.subtasks : []
+  const issueLinks = Array.isArray(selectedIssueFields?.issuelinks) ? selectedIssueFields.issuelinks : []
+
+  const labels = Array.isArray(selectedIssueFields?.labels) ? selectedIssueFields.labels : []
+  const storyPoints = getCustomFieldValue(selectedIssue, ['story point estimate', 'story points'])
+  const teamValue = getCustomFieldValue(selectedIssue, ['team'])
+  const startDateValue = getCustomFieldValue(selectedIssue, ['start date'])
+  const sprintValue = getCustomFieldValue(selectedIssue, ['sprint'])
+
+  const sprintName = Array.isArray(sprintValue)
+    ? sprintValue.map((s) => (typeof s === 'string' ? s : s?.name)).filter(Boolean).join(', ')
+    : (typeof sprintValue === 'object' ? sprintValue?.name : sprintValue)
+
+  const dueDateMeta = getDueDateMeta(selectedIssueFields?.duedate)
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-4">
       <div className="flex flex-wrap items-end gap-3 justify-between">
@@ -242,7 +579,7 @@ export default function WorkspacePage() {
         <div className="flex flex-wrap gap-2">
           {selectedProjectId && (
             <span className="text-xs px-2 py-1 rounded-md border border-slate-700 text-slate-300 bg-slate-900/60">
-              Project: {projects.find((p) => p._id === selectedProjectId)?.name || 'Local project'}
+              Project: {projects.find((p) => p._id === selectedProjectId)?.name || 'Workspace project'}
             </span>
           )}
           <span className="text-xs px-2 py-1 rounded-md border border-slate-700 text-slate-300 bg-slate-900/60">
@@ -271,117 +608,601 @@ export default function WorkspacePage() {
       </div>
 
       {!selectedProjectId && !selectedJiraProjectKey && (
-        <div className="card p-4 text-slate-400">Select a local or Jira project from the sidebar to load workspace data.</div>
+        <div className="card p-4 text-slate-400">Select a Jira project from the sidebar to load workspace data.</div>
       )}
 
       {(selectedProjectId || selectedJiraProjectKey) && activeTab === 'active-sprints' && (
         <div className="grid md:grid-cols-2 gap-3">
           <div className="card p-4">
-            <h3 className="text-base font-semibold mb-2">Active Sprints</h3>
-            {selectedProjectId ? (
+            <h3 className="text-base font-semibold mb-2">Active Sprint</h3>
+            {jiraActiveSprint ? (
               <ul className="space-y-2 text-sm text-slate-300">
-                {activeSprints.map((s) => (
-                  <li key={s._id} className="border border-slate-700 rounded-md p-2">
-                    <p className="font-medium">{s.name}</p>
-                    <p className="text-xs text-slate-400">{formatDate(s.startDate)} - {formatDate(s.endDate)} • Goal: {s.goal || 'N/A'}</p>
-                  </li>
-                ))}
-                {activeSprints.length === 0 && <li className="text-slate-400">No active sprint.</li>}
+                <li className="border border-slate-700 rounded-md p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium">{jiraActiveSprint.name || 'Active Sprint'}</p>
+                    <span className={`text-[11px] px-2 py-0.5 rounded-full border ${sprintStateBadgeClass(jiraActiveSprint.state)}`}>
+                      {jiraActiveSprint.state || 'active'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {formatDate(jiraActiveSprint.startDate)} - {formatDate(jiraActiveSprint.endDate)}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">Goal: {jiraActiveSprint.goal || 'N/A'}</p>
+                  {jiraSprintData?.board?.name && (
+                    <p className="text-[11px] text-slate-500 mt-2">Board: {jiraSprintData.board.name}</p>
+                  )}
+                </li>
               </ul>
             ) : (
-              <p className="text-sm text-slate-400">No local sprint selected. Showing Jira active work in the next panel.</p>
+              <p className="text-sm text-slate-400">No active Jira sprint found for this project.</p>
             )}
           </div>
           <div className="card p-4">
-            <h3 className="text-base font-semibold mb-2">Jira Active Work</h3>
+            <h3 className="text-base font-semibold mb-2">Sprint Scope</h3>
             <ul className="space-y-2 text-sm text-slate-300 mb-3">
-              <li className="flex items-center justify-between"><span>Total Issues</span><span>{jiraIssueStats.total}</span></li>
-              <li className="flex items-center justify-between"><span>In Progress</span><span>{jiraIssueStats.inProgress}</span></li>
-              <li className="flex items-center justify-between"><span>Done</span><span>{jiraIssueStats.done}</span></li>
-              <li className="flex items-center justify-between"><span>To Do</span><span>{jiraIssueStats.toDo}</span></li>
+              <li className="flex items-center justify-between"><span>Issues In Active Sprint</span><span>{jiraActiveSprintIssues.length}</span></li>
+              <li className="flex items-center justify-between"><span>In Progress (Project)</span><span>{jiraIssueStats.inProgress}</span></li>
+              <li className="flex items-center justify-between"><span>Done (Project)</span><span>{jiraIssueStats.done}</span></li>
+              <li className="flex items-center justify-between"><span>To Do (Project)</span><span>{jiraIssueStats.toDo}</span></li>
             </ul>
             <ul className="space-y-2 text-sm text-slate-300 max-h-44 overflow-auto">
-              {jiraIssueStats.activeIssues.slice(0, 5).map((issue) => (
+              {jiraActiveSprintIssues.slice(0, 8).map((issue) => (
                 <li key={issue.id || issue.key} className="border border-slate-700 rounded-md p-2">
                   <p className="font-medium">{issue.key} - {issue.fields?.summary}</p>
                   <p className="text-xs text-slate-400">{issue.fields?.status?.name || 'Unknown'} • {issue.fields?.assignee?.displayName || 'Unassigned'}</p>
                 </li>
               ))}
-              {jiraIssueStats.activeIssues.length === 0 && <li className="text-slate-400">No Jira issues currently in progress.</li>}
+              {jiraActiveSprintIssues.length === 0 && <li className="text-slate-400">No Jira issues in the active sprint.</li>}
             </ul>
           </div>
         </div>
       )}
 
-      {(selectedProjectId || selectedJiraProjectKey) && activeTab === 'backlog' && (
-        <div className="grid md:grid-cols-2 gap-3">
+      {selectedJiraProjectKey && activeTab === 'backlog' && (
+        <div className="grid lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] gap-3">
           <div className="card p-4">
-            <h3 className="text-base font-semibold mb-2">Local Backlog</h3>
-            {selectedProjectId ? (
-              <>
-                <p className="text-xs text-slate-400 mb-2">Epics: {epics.length} • Stories/Tasks: {stories.length}</p>
-                <ul className="space-y-2 text-sm text-slate-300 max-h-80 overflow-auto">
-                  {stories.map((s) => (
-                    <li key={s._id} className="border border-slate-700 rounded-md p-2">
-                      <p className="font-medium">{s.title}</p>
-                      <p className="text-xs text-slate-400">{s.type} • {s.status} • {s.priority}</p>
-                    </li>
-                  ))}
-                  {stories.length === 0 && <li className="text-slate-400">No backlog items.</li>}
-                </ul>
-              </>
+            <h3 className="text-base font-semibold mb-2">Backlog</h3>
+            <p className="text-xs text-slate-400 mb-3">
+              Jira project: {selectedJiraProjectKey} • Total issues: {jiraIssueStats.total}
+              {isJiraIssuesFetching ? ' • Refreshing…' : ''}
+            </p>
+
+            {isJiraIssuesLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 8 }).map((_, idx) => (
+                  <div key={idx} className="border border-slate-700 rounded-md p-3 animate-pulse">
+                    <div className="h-4 w-2/3 bg-slate-700 rounded" />
+                    <div className="h-3 w-1/2 bg-slate-800 rounded mt-2" />
+                  </div>
+                ))}
+              </div>
             ) : (
-              <p className="text-sm text-slate-400">Local project not selected. Select a local project to view synced local backlog.</p>
+              <ul className="space-y-2 text-sm text-slate-300 max-h-[44rem] overflow-auto pr-1">
+                {jiraIssues.map((issue) => {
+                  const isSelected = issue.key === selectedBacklogIssueKey
+                  return (
+                    <li key={issue.id || issue.key}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedBacklogIssueKey(issue.key)}
+                        className={`w-full text-left border rounded-md p-3 transition-all duration-200 ${
+                          isSelected
+                            ? 'border-indigo-500 bg-indigo-500/10 shadow-[0_0_0_1px_rgba(99,102,241,0.35)]'
+                            : 'border-slate-700 bg-slate-900/40 hover:border-slate-500'
+                        }`}
+                      >
+                        <p className="font-medium text-slate-100">{issue.key}</p>
+                        <p className="text-sm text-slate-200 mt-0.5 line-clamp-2">{issue.fields?.summary || 'Untitled issue'}</p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {issue.fields?.issuetype?.name || 'Issue'} • {issue.fields?.status?.name || 'Unknown'} • {getDisplayName(issue.fields?.assignee)}
+                        </p>
+                      </button>
+                    </li>
+                  )
+                })}
+                {jiraIssues.length === 0 && <li className="text-slate-400">No Jira issues loaded for this project key.</li>}
+              </ul>
             )}
           </div>
-          <div className="card p-4">
-            <h3 className="text-base font-semibold mb-2">Jira Backlog</h3>
-            <p className="text-xs text-slate-400 mb-2">Project key: {selectedJiraProjectKey || 'Not selected'}</p>
-            <ul className="space-y-2 text-sm text-slate-300 max-h-80 overflow-auto">
-              {jiraIssues.map((issue) => (
-                <li key={issue.id || issue.key} className="border border-slate-700 rounded-md p-2">
-                  <p className="font-medium">{issue.key} - {issue.fields?.summary}</p>
-                  <p className="text-xs text-slate-400">{issue.fields?.issuetype?.name || 'Issue'} • {issue.fields?.status?.name || 'Unknown'}</p>
-                </li>
-              ))}
-              {jiraIssues.length === 0 && <li className="text-slate-400">No Jira issues loaded for this project key.</li>}
-            </ul>
+
+          <div className={`card p-4 transition-all duration-300 ease-out ${selectedBacklogIssueKey ? 'opacity-100 translate-x-0' : 'opacity-90 translate-x-1'}`}>
+            {!selectedBacklogIssueKey && (
+              <div className="h-full flex items-center justify-center text-sm text-slate-400">
+                Select an issue from backlog to view details.
+              </div>
+            )}
+
+            {selectedBacklogIssueKey && (isIssueDetailLoading || !selectedIssue) && (
+              <div className="space-y-4 animate-pulse">
+                <div className="h-6 w-40 bg-slate-700 rounded" />
+                <div className="h-8 w-3/4 bg-slate-800 rounded" />
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="h-20 bg-slate-800 rounded" />
+                  <div className="h-20 bg-slate-800 rounded" />
+                </div>
+                <div className="h-28 bg-slate-800 rounded" />
+                <div className="h-28 bg-slate-800 rounded" />
+                <div className="h-28 bg-slate-800 rounded" />
+              </div>
+            )}
+
+            {selectedIssue && !isIssueDetailLoading && (
+              <div className="space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-slate-400">{selectedIssueFields?.project?.key || selectedJiraProjectKey}</p>
+                    <p className="text-lg font-semibold text-slate-100">{selectedIssue.key}</p>
+                    {isIssueEditMode ? (
+                      <input
+                        type="text"
+                        className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-slate-100"
+                        value={issueDraft.summary}
+                        onChange={(e) => setIssueDraft((prev) => ({ ...prev, summary: e.target.value }))}
+                      />
+                    ) : (
+                      <h4 className="text-xl font-semibold text-slate-100 mt-1">{selectedIssueFields?.summary || 'Untitled issue'}</h4>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <span className="text-xs px-2 py-1 rounded-full border border-slate-600 bg-slate-800 text-slate-200">
+                      {selectedIssueFields?.status?.name || 'Unknown'}
+                    </span>
+                    <div className="flex gap-2">
+                      {!isIssueEditMode ? (
+                        <button type="button" className="btn-secondary text-xs" onClick={() => setIsIssueEditMode(true)}>Edit</button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-secondary text-xs"
+                            onClick={() => {
+                              const labels = issueDraft.labels
+                                .split(',')
+                                .map((v) => v.trim())
+                                .filter(Boolean)
+                              updateIssueMutation.mutate({
+                                summary: issueDraft.summary,
+                                description: issueDraft.description,
+                                priority: issueDraft.priority || undefined,
+                                issueType: issueDraft.issueType || undefined,
+                                dueDate: issueDraft.dueDate || null,
+                                labels,
+                              })
+                            }}
+                            disabled={updateIssueMutation.isPending}
+                          >
+                            Save
+                          </button>
+                          <button type="button" className="btn-secondary text-xs" onClick={() => setIsIssueEditMode(false)}>Cancel</button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs border-rose-500/40 text-rose-200 hover:bg-rose-500/10"
+                        onClick={() => deleteIssueMutation.mutate()}
+                        disabled={deleteIssueMutation.isPending}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                  <div className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Issue Type</p>
+                    {isIssueEditMode ? (
+                      <input
+                        type="text"
+                        className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                        value={issueDraft.issueType}
+                        onChange={(e) => setIssueDraft((prev) => ({ ...prev, issueType: e.target.value }))}
+                      />
+                    ) : (
+                      <p className="text-slate-100 mt-1">{selectedIssueFields?.issuetype?.name || 'Issue'}</p>
+                    )}
+                  </div>
+                  <div className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Story Point Estimate</p>
+                    <p className="text-slate-100 mt-1">{storyPoints ?? 'None'}</p>
+                  </div>
+                </div>
+
+                <section className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                  <h5 className="text-sm font-semibold text-slate-100 mb-2">Status</h5>
+                  <div className="flex flex-wrap gap-2">
+                    {(issueTransitions || []).map((transition) => (
+                      <button
+                        key={transition.id}
+                        type="button"
+                        className="btn-secondary text-xs"
+                        onClick={() => transitionIssueMutation.mutate(transition.id)}
+                        disabled={transitionIssueMutation.isPending}
+                      >
+                        {transition.name}
+                      </button>
+                    ))}
+                    {(issueTransitions || []).length === 0 && <p className="text-xs text-slate-400">No status transitions available.</p>}
+                  </div>
+                </section>
+
+                <section className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                  <h5 className="text-sm font-semibold text-slate-100 mb-2">Description</h5>
+                  {isIssueEditMode ? (
+                    <textarea
+                      className="w-full min-h-28 rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                      value={issueDraft.description}
+                      onChange={(e) => setIssueDraft((prev) => ({ ...prev, description: e.target.value }))}
+                    />
+                  ) : (
+                    <p className="text-sm text-slate-300 whitespace-pre-wrap">{descriptionText}</p>
+                  )}
+                </section>
+
+                <section className="grid md:grid-cols-2 gap-3">
+                  <div className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                    <h5 className="text-sm font-semibold text-slate-100 mb-2">Subtasks</h5>
+                    {issueSubtasks.length > 0 ? (
+                      <ul className="space-y-2 text-sm text-slate-300">
+                        {issueSubtasks.map((st) => (
+                          <li key={st.id || st.key} className="border border-slate-700 rounded p-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-medium">{st.key}</p>
+                              <button
+                                type="button"
+                                className="text-[11px] text-rose-300 hover:text-rose-200"
+                                onClick={() => deleteSubtaskMutation.mutate(st.key)}
+                                disabled={deleteSubtaskMutation.isPending}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                            <p className="text-xs text-slate-400">{st.fields?.summary || 'No summary'}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-slate-400">No subtasks</p>
+                    )}
+                    <div className="mt-2 flex gap-2">
+                      <input
+                        type="text"
+                        className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
+                        placeholder="Add subtask"
+                        value={newSubtaskSummary}
+                        onChange={(e) => setNewSubtaskSummary(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs"
+                        onClick={() => addSubtaskMutation.mutate()}
+                        disabled={addSubtaskMutation.isPending || !newSubtaskSummary.trim()}
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                    <h5 className="text-sm font-semibold text-slate-100 mb-2">Linked Work Items</h5>
+                    {issueLinks.length > 0 ? (
+                      <ul className="space-y-2 text-sm text-slate-300">
+                        {issueLinks.slice(0, 8).map((link) => {
+                          const linked = link.outwardIssue || link.inwardIssue
+                          return (
+                            <li key={link.id || `${linked?.key || 'link'}-${link.type?.name || ''}`} className="border border-slate-700 rounded p-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="font-medium">{linked?.key || 'Linked issue'}</p>
+                                {link.id && (
+                                  <button
+                                    type="button"
+                                    className="text-[11px] text-rose-300 hover:text-rose-200"
+                                    onClick={() => deleteIssueLinkMutation.mutate(link.id)}
+                                    disabled={deleteIssueLinkMutation.isPending}
+                                  >
+                                    Remove
+                                  </button>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-400">{linked?.fields?.summary || link.type?.name || 'Related item'}</p>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-slate-400">No linked work items</p>
+                    )}
+                    <div className="mt-2 flex gap-2">
+                      <input
+                        type="text"
+                        className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
+                        placeholder="Add linked issue key (e.g. HOS-3)"
+                        value={newLinkedIssueKey}
+                        onChange={(e) => setNewLinkedIssueKey(e.target.value.toUpperCase())}
+                      />
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs"
+                        onClick={() => addIssueLinkMutation.mutate()}
+                        disabled={addIssueLinkMutation.isPending || !newLinkedIssueKey.trim()}
+                      >
+                        Link
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                  <h5 className="text-sm font-semibold text-slate-100 mb-3">Details</h5>
+                  <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs text-slate-400">Assignee</p>
+                      <p className="text-slate-100">{getDisplayName(selectedIssueFields?.assignee)}</p>
+                      <button
+                        type="button"
+                        className="text-xs text-indigo-300 hover:text-indigo-200 mt-1"
+                        onClick={() => assignToMeMutation.mutate()}
+                        disabled={assignToMeMutation.isPending}
+                      >
+                        Assign to me
+                      </button>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Labels</p>
+                      {isIssueEditMode ? (
+                        <input
+                          type="text"
+                          className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                          value={issueDraft.labels}
+                          onChange={(e) => setIssueDraft((prev) => ({ ...prev, labels: e.target.value }))}
+                          placeholder="label1, label2"
+                        />
+                      ) : (
+                        <p className="text-slate-100">{labels.length ? labels.join(', ') : 'None'}</p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Parent</p>
+                      <p className="text-slate-100">{selectedIssueFields?.parent?.key ? `${selectedIssueFields.parent.key} ${selectedIssueFields.parent.fields?.summary || ''}`.trim() : 'None'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Due Date</p>
+                      {isIssueEditMode ? (
+                        <input
+                          type="date"
+                          className="mt-1 w-full rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                          value={issueDraft.dueDate || ''}
+                          onChange={(e) => setIssueDraft((prev) => ({ ...prev, dueDate: e.target.value }))}
+                        />
+                      ) : (
+                        <p className={`${dueDateMeta.overdue ? 'text-rose-300' : 'text-slate-100'}`}>
+                          {dueDateMeta.overdue ? `Overdue since ${dueDateMeta.label}` : dueDateMeta.label}
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Team</p>
+                      <p className="text-slate-100">{typeof teamValue === 'object' ? (teamValue?.name || stripHtml(JSON.stringify(teamValue))) : (teamValue || 'None')}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Start Date</p>
+                      <p className="text-slate-100">{startDateValue ? formatDate(startDateValue) : 'None'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Sprint</p>
+                      <p className="text-slate-100">{sprintName || 'None'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400">Reporter</p>
+                      <p className="text-slate-100">{getDisplayName(selectedIssueFields?.reporter)}</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                  <h5 className="text-sm font-semibold text-slate-100 mb-2">Development</h5>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" className="btn-secondary text-xs">Open with VS Code</button>
+                    <button type="button" className="btn-secondary text-xs">Create branch</button>
+                    <button type="button" className="btn-secondary text-xs">Create commit</button>
+                  </div>
+                </section>
+
+                <section className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                  <h5 className="text-sm font-semibold text-slate-100 mb-1">Automation</h5>
+                  <p className="text-xs text-slate-400">Refresh to see recent runs.</p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <button type="button" className="btn-secondary text-xs">Refresh</button>
+                    <button type="button" className="btn-secondary text-xs">Create new automation rule</button>
+                  </div>
+                </section>
+
+                <section className="text-xs text-slate-400">
+                  <p>Created {formatDateTime(selectedIssueFields?.created)}</p>
+                  <p>Updated {formatDateTime(selectedIssueFields?.updated)}</p>
+                </section>
+
+                <section className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                  <div className="flex items-center justify-between mb-2">
+                    <h5 className="text-sm font-semibold text-slate-100">Activity</h5>
+                    {isIssueDetailFetching && <span className="text-[11px] text-slate-500">Refreshing…</span>}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {[
+                      { id: 'all', label: 'All' },
+                      { id: 'comments', label: `Comments (${selectedIssueFields?.comment?.total || 0})` },
+                      { id: 'history', label: `History (${selectedIssue?.changelog?.total || 0})` },
+                      { id: 'worklog', label: `Work log (${selectedIssueFields?.worklog?.total || 0})` },
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActivityView(tab.id)}
+                        className={`px-2 py-1 text-xs rounded border ${activityView === tab.id ? 'border-indigo-500 text-indigo-300 bg-indigo-500/10' : 'border-slate-700 text-slate-300'}`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {activityView === 'comments' && (
+                    <ul className="space-y-2 text-sm text-slate-300">
+                      <li className="border border-slate-700 rounded p-2 bg-slate-900/40">
+                        <textarea
+                          className="w-full min-h-20 rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100"
+                          placeholder="Add comment"
+                          value={newCommentBody}
+                          onChange={(e) => setNewCommentBody(e.target.value)}
+                        />
+                        <div className="mt-2 flex justify-end">
+                          <button
+                            type="button"
+                            className="btn-secondary text-xs"
+                            onClick={() => addCommentMutation.mutate()}
+                            disabled={addCommentMutation.isPending || !newCommentBody.trim()}
+                          >
+                            Add comment
+                          </button>
+                        </div>
+                      </li>
+                      {(selectedIssueFields?.comment?.comments || []).slice(0, 12).map((c) => (
+                        <li key={c.id} className="border border-slate-700 rounded p-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs text-slate-400">{getDisplayName(c.author)} • {formatDateTime(c.updated || c.created)}</p>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                className="text-[11px] text-indigo-300 hover:text-indigo-200"
+                                onClick={() => {
+                                  setEditingCommentId(c.id)
+                                  setEditingCommentBody(adfNodeToText(c.body).trim())
+                                }}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="text-[11px] text-rose-300 hover:text-rose-200"
+                                onClick={() => deleteCommentMutation.mutate(c.id)}
+                                disabled={deleteCommentMutation.isPending}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                          {editingCommentId === c.id ? (
+                            <div className="mt-2">
+                              <textarea
+                                className="w-full min-h-20 rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100"
+                                value={editingCommentBody}
+                                onChange={(e) => setEditingCommentBody(e.target.value)}
+                              />
+                              <div className="mt-2 flex justify-end gap-2">
+                                <button type="button" className="btn-secondary text-xs" onClick={() => setEditingCommentId('')}>Cancel</button>
+                                <button
+                                  type="button"
+                                  className="btn-secondary text-xs"
+                                  onClick={() => updateCommentMutation.mutate()}
+                                  disabled={updateCommentMutation.isPending || !editingCommentBody.trim()}
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="mt-1 whitespace-pre-wrap">{adfNodeToText(c.body).trim() || 'Comment'}</p>
+                          )}
+                        </li>
+                      ))}
+                      {(!selectedIssueFields?.comment?.comments || selectedIssueFields.comment.comments.length === 0) && <li className="text-slate-400">No comments yet.</li>}
+                    </ul>
+                  )}
+
+                  {activityView === 'history' && (
+                    <ul className="space-y-2 text-sm text-slate-300">
+                      {(selectedIssue?.changelog?.histories || []).slice(0, 12).map((h) => (
+                        <li key={h.id} className="border border-slate-700 rounded p-2">
+                          <p className="text-xs text-slate-400">{getDisplayName(h.author)} • {formatDateTime(h.created)}</p>
+                          <p className="mt-1 text-xs text-slate-300">{(h.items || []).map((it) => `${it.field}: ${it.fromString || 'empty'} → ${it.toString || 'empty'}`).join(' | ') || 'Updated issue'}</p>
+                        </li>
+                      ))}
+                      {(!selectedIssue?.changelog?.histories || selectedIssue.changelog.histories.length === 0) && <li className="text-slate-400">No history yet.</li>}
+                    </ul>
+                  )}
+
+                  {activityView === 'worklog' && (
+                    <ul className="space-y-2 text-sm text-slate-300">
+                      {(selectedIssueFields?.worklog?.worklogs || []).slice(0, 8).map((w) => (
+                        <li key={w.id} className="border border-slate-700 rounded p-2">
+                          <p className="text-xs text-slate-400">{getDisplayName(w.author)} • {formatDateTime(w.started || w.created)}</p>
+                          <p className="mt-1">{w.timeSpent || 'Work logged'}</p>
+                        </li>
+                      ))}
+                      {(!selectedIssueFields?.worklog?.worklogs || selectedIssueFields.worklog.worklogs.length === 0) && <li className="text-slate-400">No work log entries yet.</li>}
+                    </ul>
+                  )}
+
+                  {activityView === 'all' && (
+                    <div className="space-y-2 text-sm text-slate-300">
+                      <p>Comments: {selectedIssueFields?.comment?.total || 0}</p>
+                      <p>History Events: {selectedIssue?.changelog?.total || 0}</p>
+                      <p>Work Logs: {selectedIssueFields?.worklog?.total || 0}</p>
+                    </div>
+                  )}
+                </section>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {(selectedProjectId || selectedJiraProjectKey) && activeTab === 'timeline' && (
-        <div className="grid md:grid-cols-2 gap-3">
-          <div className="card p-4">
-            <h3 className="text-base font-semibold mb-2">Local Timeline</h3>
-            <p className="text-xs text-slate-400 mb-2">Project deadline: {formatDate(project?.deadline)}</p>
-            {selectedProjectId ? (
-              <ul className="space-y-2 text-sm text-slate-300">
-                {sprintTimeline.map((s) => (
-                  <li key={s._id} className="border border-slate-700 rounded-md p-2">
-                    <p className="font-medium">{s.name} ({s.status})</p>
-                    <p className="text-xs text-slate-400">{formatDate(s.startDate)} - {formatDate(s.endDate)}</p>
-                  </li>
-                ))}
-                {sprintTimeline.length === 0 && <li className="text-slate-400">No sprint timeline available.</li>}
-              </ul>
-            ) : (
-              <p className="text-sm text-slate-400">No local timeline data. Select a local project to see sprint plan.</p>
-            )}
+        <div className="card p-4">
+          <h3 className="text-base font-semibold mb-2">Sprint Timeline</h3>
+          <p className="text-xs text-slate-400 mb-3">
+            Jira-style sprint roadmap for {selectedJiraProjectKey || 'selected project'}
+            {jiraSprintData?.board?.name ? ` • Board: ${jiraSprintData.board.name}` : ''}
+          </p>
+
+          <div className="space-y-4">
+            {[
+              { key: 'active', label: 'Active' },
+              { key: 'future', label: 'Future' },
+              { key: 'closed', label: 'Closed' },
+            ].map((lane) => {
+              const laneSprints = jiraSprintsByState[lane.key] || []
+              return (
+                <div key={lane.key}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-sm font-medium text-slate-200">{lane.label}</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-400">{laneSprints.length}</span>
+                  </div>
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {laneSprints.map((s) => (
+                      <div key={s.id || s.name} className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-medium text-sm text-slate-200 truncate">{s.name}</p>
+                          <span className={`text-[11px] px-2 py-0.5 rounded-full border ${sprintStateBadgeClass(s.state)}`}>
+                            {s.state || lane.key}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">{formatDate(s.startDate)} - {formatDate(s.endDate)}</p>
+                        <p className="text-xs text-slate-500 mt-1">Goal: {s.goal || 'N/A'}</p>
+                      </div>
+                    ))}
+                    {laneSprints.length === 0 && (
+                      <div className="text-sm text-slate-500 border border-dashed border-slate-700 rounded-md p-3">No {lane.label.toLowerCase()} sprints.</div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
           </div>
-          <div className="card p-4">
-            <h3 className="text-base font-semibold mb-2">Jira Activity Timeline</h3>
-            <p className="text-xs text-slate-400 mb-2">Latest updates from Jira issues</p>
-            <ul className="space-y-2 text-sm text-slate-300 max-h-80 overflow-auto">
-              {jiraIssueStats.recentActivity.map((issue) => (
-                <li key={issue.id || issue.key} className="border border-slate-700 rounded-md p-2">
-                  <p className="font-medium">{issue.key} - {issue.fields?.summary}</p>
-                  <p className="text-xs text-slate-400">Updated: {formatDate(issue.fields?.updated)} • {issue.fields?.status?.name || 'Unknown'}</p>
-                </li>
-              ))}
-              {jiraIssueStats.recentActivity.length === 0 && <li className="text-slate-400">No Jira timeline activity found.</li>}
-            </ul>
-          </div>
+
+          {jiraSprintTimeline.length === 0 && (
+            <p className="text-sm text-slate-400 mt-3">No Jira sprint timeline found for this project.</p>
+          )}
         </div>
       )}
 
@@ -397,7 +1218,7 @@ export default function WorkspacePage() {
                 <li className="flex items-center justify-between"><span>Burndown Points</span><span>{dashboard?.burndownData?.length ?? 0}</span></li>
               </ul>
             ) : (
-              <p className="text-sm text-slate-400">Local report metrics are unavailable without a local project.</p>
+              <p className="text-sm text-slate-400">Workspace report metrics are unavailable until this Jira key is linked to a DevTrack project.</p>
             )}
           </div>
           <div className="card p-4">
@@ -476,7 +1297,7 @@ export default function WorkspacePage() {
                 {commits.length === 0 && <li className="text-slate-400">No local commit data.</li>}
               </ul>
             ) : (
-              <p className="text-sm text-slate-400">Local GitHub activity unavailable. Select a local project to load commits.</p>
+              <p className="text-sm text-slate-400">Workspace GitHub activity unavailable until this Jira key is linked to a DevTrack project.</p>
             )}
           </div>
           <div className="card p-4">

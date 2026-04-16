@@ -16,6 +16,7 @@ const connectDB = require('./src/config/db');
 const { errorHandler, notFound } = require('./src/middleware/error');
 const logger = require('./src/config/logger');
 const JobRunner = require('./src/config/jobs');
+const { emitPendingSnapshot } = require('./src/controllers/manualBridgeController');
 
 // Route imports
 const authRoutes = require('./src/routes/auth');
@@ -28,12 +29,20 @@ const dashboardRoutes = require('./src/routes/dashboard');
 const sprintRoutes = require('./src/routes/sprints');
 const insightRoutes = require('./src/routes/insightRoutes');
 const adminRoutes = require('./src/routes/admin');
+const manualBridgeRoutes = require('./src/routes/manualBridge');
 
 // Connect to MongoDB
 connectDB();
 
 const app = express();
 const server = http.createServer(app);
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  const envOrigin = process.env.FRONTEND_URL;
+  if (envOrigin && origin === envOrigin) return true;
+  return /^http:\/\/localhost:(5173|5174|5175|5176)$/.test(origin);
+};
 
 morgan.token('id', (req) => req.requestId || '-');
 
@@ -46,7 +55,10 @@ app.use((req, res, next) => {
 // Socket.io setup
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: (origin, callback) => {
+      if (isAllowedOrigin(origin)) return callback(null, true);
+      return callback(new Error('Not allowed by Socket CORS'));
+    },
     methods: ['GET', 'POST'],
   },
 });
@@ -90,7 +102,10 @@ const authLimiter = rateLimit({
 // Security middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
 }));
 app.use(compression());
@@ -135,6 +150,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/sprints', sprintRoutes);
 app.use('/api/insights', insightRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/manual-bridge', manualBridgeRoutes);
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
@@ -147,6 +163,10 @@ io.on('connection', (socket) => {
 
   socket.on('leave-project', (projectId) => {
     socket.leave(`project:${projectId}`);
+  });
+
+  socket.on('manual-bridge:sync', async () => {
+    await emitPendingSnapshot(io);
   });
 
   socket.on('disconnect', () => {

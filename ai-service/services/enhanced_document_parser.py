@@ -51,6 +51,36 @@ class EnhancedDocumentParser:
     # Minimum thresholds for validation
     MIN_TEXT_LENGTH = 50  # Minimum characters
     MIN_CONTENT_RATIO = 0.3  # Minimum ratio of meaningful content (non-whitespace)
+
+    @staticmethod
+    def split_by_headings(text: str) -> list[dict]:
+        """Split text into heading-aware sections (Markdown or numbered headings)."""
+        if not text or not text.strip():
+            return []
+
+        lines = text.splitlines()
+        sections = []
+        current_title = "Preamble"
+        current_body = []
+        heading_re = __import__("re").compile(r"^\s*(#{1,6}\s+.+|\d+(?:\.\d+){0,3}\s+.+)\s*$")
+
+        for line in lines:
+            if heading_re.match(line):
+                body_text = "\n".join(current_body).strip()
+                if body_text:
+                    sections.append({"heading": current_title, "text": body_text})
+                current_title = line.strip().lstrip("#").strip()
+                current_body = []
+            else:
+                current_body.append(line)
+
+        tail_text = "\n".join(current_body).strip()
+        if tail_text:
+            sections.append({"heading": current_title, "text": tail_text})
+
+        if not sections:
+            return [{"heading": "Document", "text": text.strip()}]
+        return sections
     
     @staticmethod
     def detect_file_type(file_path: str) -> Tuple[str, str]:
@@ -168,6 +198,9 @@ class EnhancedDocumentParser:
             metadata["parsing_stage"] = "validation"
             metadata["text_length"] = len(text)
             metadata["word_count"] = len(text.split())
+            sections = EnhancedDocumentParser.split_by_headings(text)
+            metadata["section_count"] = len(sections)
+            metadata["headings"] = [s.get("heading") for s in sections[:50]]
             
             # Step 3: Validate extracted text
             if validate:

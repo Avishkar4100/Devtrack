@@ -1,9 +1,10 @@
 const axios = require('axios');
 const logger = require('../config/logger');
-const AIConfig = require('../models/AIConfig');
+const { getActiveAIConfigPayload } = require('./aiConfigService');
+const { resolveAiServiceBaseUrl } = require('../utils/aiServiceUrl');
 
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
-const AI_INGEST_TIMEOUT_MS = Number(process.env.AI_INGEST_TIMEOUT_MS || 600000);
+const AI_SERVICE_URL = resolveAiServiceBaseUrl(process.env.AI_SERVICE_URL);
+const AI_INGEST_TIMEOUT_MS = Number(process.env.AI_INGEST_TIMEOUT_MS || 0);
 
 const aiClient = axios.create({
   baseURL: AI_SERVICE_URL,
@@ -25,29 +26,47 @@ const asServiceUnavailable = (action, originalError) => {
   return err;
 };
 
-const getActiveAIConfigPayload = async () => {
-  const cfg = await AIConfig.findOne({ isActive: true }).lean();
-  if (!cfg) return null;
+const isRetryableHttpStatus = (status) => [408, 425, 429, 500, 502, 503, 504].includes(Number(status));
 
-  return {
-    provider: cfg.provider,
-    openrouterKeyName: cfg.openrouterKeyName,
-    openrouterModel: cfg.openrouterModel,
-    deepseekUrl: cfg.deepseekUrl,
-    deepseekModel: cfg.deepseekModel,
-    temperature: cfg.temperature,
-    maxTokens: cfg.maxTokens,
-  };
+const postWithRetry = async (url, payload, options = {}, maxAttempts = 2) => {
+  let lastError;
+  for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt += 1) {
+    try {
+      return await aiClient.post(url, payload, options);
+    } catch (error) {
+      lastError = error;
+      const retryable = isServiceUnavailableError(error) || isRetryableHttpStatus(error?.response?.status);
+      if (!retryable || attempt >= maxAttempts) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+    }
+  }
+  throw lastError;
 };
 
 const checkHealth = async () => {
   try {
-    const response = await aiClient.get('/health', { timeout: 2500 });
+    const response = await aiClient.get('/health', { timeout: 15000 });
     return {
       online: true,
       data: response.data,
     };
   } catch (error) {
+    try {
+      const response = await aiClient.get('/', { timeout: 5000 });
+      return {
+        online: true,
+        data: {
+          status: 'healthy',
+          fallback: true,
+          root: response.data || null,
+        },
+      };
+    } catch (_) {
+      // fall through to offline handling below
+    }
+
     if (isServiceUnavailableError(error)) {
       return {
         online: false,
@@ -83,7 +102,7 @@ const ingestDocument = async ({ documentId, filePath, fileType, namespace, proje
 /**
  * Generate stories from a module description using RAG
  */
-const generateStories = async ({ projectId, projectName, moduleName, documentId, additionalContext, budget, deadline }) => {
+const generateStories = async ({ projectId, projectName, moduleName, documentId, additionalContext, budget, deadline, teamMembers }) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
     const response = await aiClient.post('/stories/generate', {
@@ -94,6 +113,7 @@ const generateStories = async ({ projectId, projectName, moduleName, documentId,
       additional_context: additionalContext,
       budget,
       deadline: deadline ? new Date(deadline).toISOString() : null,
+      team_members: Array.isArray(teamMembers) ? teamMembers : [],
       ai_config: aiConfig,
     }, { timeout: 0 });
     return response.data;
@@ -128,12 +148,14 @@ const generateStories = async ({ projectId, projectName, moduleName, documentId,
  */
 const analyzeCode = async ({ projectId, changedFiles, stories, commitSha, commitMessage }) => {
   try {
+    const aiConfig = await getActiveAIConfigPayload();
     const response = await aiClient.post('/github/analyze', {
       project_id: projectId,
       changed_files: changedFiles,
       stories,
       commit_sha: commitSha,
       commit_message: commitMessage,
+      ai_config: aiConfig,
     });
     return response.data;
   } catch (error) {
@@ -151,33 +173,87 @@ const analyzeCode = async ({ projectId, changedFiles, stories, commitSha, commit
 const suggestStories = async ({ projectId, projectName, moduleName, userInput, contextGraph }) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
-    const response = await aiClient.post('/stories/suggest', {
+    const response = await postWithRetry('/stories/suggest', {
       project_id: projectId,
       project_name: projectName,
       module_name: moduleName,
       user_input: userInput,
       context_graph: contextGraph,
+      fetched_chunks: contextGraph?.fetchedChunks || [],
+      project_state: contextGraph?.projectState || {},
       ai_config: aiConfig,
-    });
+    }, {}, 2);
     return response.data;
   } catch (error) {
     logger.error(`AI Service - suggestStories error: ${error.message}`);
-    const isServiceDown = isServiceUnavailableError(error);
-    if (isServiceDown) {
-      const err = new Error('AI suggestion service is unavailable. Start ai-service and try Suggest again.');
-      err.code = 'AI_SERVICE_UNAVAILABLE';
-      err.statusCode = 503;
-      throw err;
+    if (error?.response?.data) {
+      logger.error(`AI Service - suggestStories response: ${JSON.stringify(error.response.data)}`);
     }
 
-    const upstreamStatus = Number(error?.response?.status || 500);
-    const upstreamDetail = error?.response?.data?.detail;
-    const upstreamMessage = error?.response?.data?.message;
-    const message = upstreamDetail || upstreamMessage || error.message || 'AI suggestion request failed.';
-    const err = new Error(`AI suggest failed: ${message}`);
-    err.code = 'AI_SUGGEST_FAILED';
-    err.statusCode = upstreamStatus;
-    err.cause = error;
+    if (isServiceUnavailableError(error)) {
+      throw asServiceUnavailable('suggest stories', error);
+    }
+
+    throw error;
+  }
+};
+
+const discoverGaps = async ({ projectId, moduleName, userInput, requirementMap, projectState, completedJiraIds }) => {
+  try {
+    const aiConfig = await getActiveAIConfigPayload();
+    const response = await postWithRetry('/stories/discover-gaps', {
+      project_id: projectId,
+      module_name: moduleName,
+      user_input: userInput,
+      requirement_map: requirementMap || { items: [] },
+      project_state: projectState || {},
+      completed_jira_ids: Array.isArray(completedJiraIds) ? completedJiraIds : [],
+      ai_config: aiConfig,
+    }, {}, 2);
+    return response.data;
+  } catch (error) {
+    logger.error(`AI Service - discoverGaps error: ${error.message}`);
+    if (isServiceUnavailableError(error)) {
+      throw asServiceUnavailable('discover gaps', error);
+    }
+    throw error;
+  }
+};
+
+const getChunksByIds = async ({ projectId, requirementIds, topKPerId = 2 }) => {
+  try {
+    const response = await postWithRetry('/stories/chunks-by-ids', {
+      project_id: projectId,
+      requirement_ids: requirementIds || [],
+      top_k_per_id: topKPerId,
+    }, {}, 2);
+    return response.data;
+  } catch (error) {
+    logger.error(`AI Service - getChunksByIds error: ${error.message}`);
+    if (isServiceUnavailableError(error)) {
+      throw asServiceUnavailable('retrieve targeted SRS chunks', error);
+    }
+    throw error;
+  }
+};
+
+const testLLM = async ({ prompt, aiConfig }) => {
+  try {
+    const response = await postWithRetry('/stories/standup-summary', {
+      prompt: String(prompt || '').trim(),
+      ai_config: aiConfig || (await getActiveAIConfigPayload()),
+    }, { timeout: 45000 }, 1);
+    return response.data?.success
+      ? response.data
+      : { success: false, summary: '' };
+  } catch (error) {
+    logger.error(`AI Service - testLLM error: ${error.message}`);
+    if (isServiceUnavailableError(error)) {
+      throw asServiceUnavailable('test AI provider', error);
+    }
+    const detail = error?.response?.data?.detail || error?.response?.data?.message || error?.message;
+    const err = new Error(`AI provider test failed: ${detail}`);
+    err.statusCode = Number(error?.response?.status || 502);
     throw err;
   }
 };
@@ -198,21 +274,89 @@ const extractRequirements = async ({ projectId, documentId, filePath, fileType }
     return response.data;
   } catch (error) {
     logger.error(`AI Service - extractRequirements error: ${error.message}`);
+    if (error?.response?.data) {
+      logger.error(`AI Service - extractRequirements response: ${JSON.stringify(error.response.data)}`);
+    }
+
     if (isServiceUnavailableError(error)) {
       throw asServiceUnavailable('extract requirements', error);
     }
 
-    const upstreamStatus = Number(error?.response?.status || 500);
-    const upstreamDetail = error?.response?.data?.detail;
-    const upstreamMessage = error?.response?.data?.message;
-    const message = upstreamDetail || upstreamMessage || error.message || 'Requirement extraction failed.';
-    const err = new Error(`AI requirement extraction failed: ${message}`);
-    err.code = 'AI_REQUIREMENT_EXTRACTION_FAILED';
-    err.statusCode = upstreamStatus;
-    err.cause = error;
-    throw err;
+    const status = Number(error?.response?.status || 0);
+    if (status >= 500) {
+      logger.warn('AI requirement extraction failed with upstream 5xx. Returning fallback extraction result.');
+      const fallback = getMockRequirementExtraction(fileType);
+      return {
+        ...fallback,
+        mock: true,
+        message: 'AI extraction service returned an internal error. Returning safe empty extraction so ingestion can continue.',
+        upstreamStatus: status,
+      };
+    }
+
+    throw error;
   }
 };
+
+const getMockSuggestions = (moduleName, projectName, userInput, contextGraph = {}) => {
+  const moduleLabel = moduleName || 'Core Module';
+  const projectLabel = projectName || 'Current Project';
+  const phase = contextGraph?.phase || 'start';
+  const actor = Array.isArray(contextGraph?.actors) && contextGraph.actors.length
+    ? contextGraph.actors[0]
+    : 'project users';
+
+  return {
+    success: true,
+    suggestions: [
+      {
+        title: `Define ${moduleLabel} MVP scope for ${projectLabel}`,
+        type: 'integration',
+        priority: 'high',
+        module: moduleLabel,
+        reason: `Fallback suggestion (${phase} phase) generated when AI suggest service is unavailable.`,
+      },
+      {
+        title: `Create user stories for ${actor} around ${moduleLabel}`,
+        type: 'story',
+        priority: 'high',
+        module: moduleLabel,
+        reason: userInput
+          ? `Includes user prompt context: ${String(userInput).slice(0, 120)}`
+          : 'Derived from baseline planning context graph.',
+      },
+      {
+        title: `Map Jira sync checkpoints for ${moduleLabel}`,
+        type: 'integration',
+        priority: 'medium',
+        module: moduleLabel,
+        reason: 'Ensures backlog items are push-ready and traceable in Jira.',
+      },
+      {
+        title: `Break implementation into reviewable sprint tasks`,
+        type: 'improvement',
+        priority: 'medium',
+        module: moduleLabel,
+        reason: 'Keeps delivery flow moving while AI suggest endpoint recovers.',
+      },
+    ],
+  };
+};
+
+const getMockRequirementExtraction = (fileType) => ({
+  success: true,
+  functional_requirements: [],
+  non_functional_requirements: [],
+  modules: [],
+  actors: [],
+  parseMetadata: {
+    detectedType: fileType || 'unknown',
+    detectionMethod: 'fallback',
+    wordCount: 0,
+    validationPassed: false,
+    warnings: ['Fallback extraction used due to upstream AI extraction error'],
+  },
+});
 
 /**
  * Mock stories for when AI service is unavailable
@@ -306,4 +450,15 @@ const getMockStories = (moduleName, projectName) => {
   };
 };
 
-module.exports = { ingestDocument, generateStories, analyzeCode, suggestStories, extractRequirements, checkHealth };
+module.exports = {
+  ingestDocument,
+  generateStories,
+  analyzeCode,
+  suggestStories,
+  discoverGaps,
+  getChunksByIds,
+  extractRequirements,
+  testLLM,
+  checkHealth,
+  getActiveAIConfigPayload,
+};

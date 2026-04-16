@@ -3,141 +3,59 @@ import json
 import re
 import logging
 from typing import List, Dict, Any
+from services.manual_bridge_service import manual_bridge_service
 
 logger = logging.getLogger(__name__)
 
 
-STORY_GENERATION_PROMPT = """You are a senior software architect generating a production-ready Jira backlog.
+STORY_GENERATION_PROMPT = """### [CONTEXT_CACHE_START]
+# SRS DOCUMENT:
+{full_srs_text}
+### [CONTEXT_CACHE_END]
 
-Project: {project_name}
-Module Focus: {module_name}
-{constraints}
+You are a Senior Technical Architect. Convert the SELECTED PATH into a Jira-ready JSON payload.
 
-Context from SRS document:
-{context}
+# SELECTED PATH:
+{selected_suggestion_details}
 
-Additional context & Planning Suggestions:
-{additional_context}
+# TEAM DIRECTORY:
+{team_members_json}
+/* Format: [{{"name": "Bob", "role": "Backend", "id": "USER-123"}}, ...] */
 
-Instructions:
-1. Generate a COMPLETE backlog hierarchy: Epics -> Stories -> Tasks -> Subtasks.
-2. CREATE EXACTLY 3 MAJOR EPICS:
-   - Epic 1: Core Infrastructure/Setup (foundation, data models, core services)
-   - Epic 2: Domain Features (primary business logic and user workflows from SRS and suggestions)
-   - Epic 3: Integrations/Advanced Features (external services, advanced capabilities from suggestions)
-3. Incorporate ALL suggestions from planning prompts AND user input into the epic and story structure.
-4. Focus ONLY on domain-specific features from SRS context.
-5. DO NOT include generic tasks: optimize, refactor, improve, enhance, validation.
-6. Ensure logical engineering dependency flow and no orphan items.
-7. Each of the 3 epics MUST have at least 2-3 stories; each story MUST have at least 1-2 tasks.
-8. Return STRICT JSON only - no markdown, code blocks, or extra text.
+# PROJECT STATE (For Linking):
+{active_jira_state}
 
-Return ONLY valid JSON with exact shape:
+# TASK:
+1. Generate 1 Epic and 3-5 specific Stories/Tasks to fulfill the Selected Path.
+2. ASSIGNMENT: Map tasks to team members based on their Roles.
+3. LINKING: Search the Project State. If a new task depends on an existing Jira ID, add a "blocks" or "is blocked by" relationship.
+4. SPECIFICITY: Use exact terms from the SRS (e.g., if the SRS mentions "AES-256", the task description must include "AES-256").
+5. TRACEABILITY: Every generated Story/Task description must include source requirement IDs using format source_requirement: FR-XXX-001.
+
+# OUTPUT RULES:
+- Return ONLY a JSON object.
+- Include "Acceptance Criteria" as a checklist for QA.
+- Ensure "summary" is concise and "description" is technical.
+
+# JSON STRUCTURE:
 {{
-    "epics": [
+    "issues": [
         {{
-            "tempId": "epic-1",
-            "title": "Core Infrastructure Setup",
-            "description": "Foundation services, database models, and core architecture",
-            "type": "epic",
-            "module": "core",
-            "priority": "high",
-            "assignee": null,
-            "status": "todo",
-            "startDate": null,
-            "dueDate": null,
-            "storyPoints": 0,
-            "parentId": null,
-            "sprint": "S1"
+            "type": "Epic",
+            "summary": "...",
+            "description": "...",
+            "assignee": "USER-ID",
+            "priority": "High",
+            "links": [{{ "type": "blocks", "outwardIssue": "PROJ-10" }}],
+            "acceptance_criteria": ["...", "..."]
         }},
         {{
-            "tempId": "epic-2",
-            "title": "Domain Features",
-            "description": "Primary business workflows and user-facing functionality",
-            "type": "epic",
-            "module": "domain",
-            "priority": "high",
-            "assignee": null,
-            "status": "todo",
-            "startDate": null,
-            "dueDate": null,
-            "storyPoints": 0,
-            "parentId": null,
-            "sprint": "S1"
-        }},
-        {{
-            "tempId": "epic-3",
-            "title": "Integrations & Advanced Features",
-            "description": "External integrations, performance enhancements, and advanced capabilities",
-            "type": "epic",
-            "module": "integrations",
-            "priority": "medium",
-            "assignee": null,
-            "status": "todo",
-            "startDate": null,
-            "dueDate": null,
-            "storyPoints": 0,
-            "parentId": null,
-            "sprint": "S1"
-        }}
-    ],
-    "stories": [
-        {{
-            "tempId": "story-1",
-            "epicTempId": "epic-1",
-            "title": "",
-            "description": "",
-            "type": "story",
-            "module": "",
-            "priority": "high|medium|low",
-            "assignee": null,
-            "status": "todo",
-            "startDate": null,
-            "dueDate": null,
-            "storyPoints": 0,
-            "parentId": "epic-1",
-            "acceptanceCriteria": ["", ""],
-            "sprint": "S1"
-        }}
-    ],
-    "tasks": [
-        {{
-            "tempId": "task-1",
-            "epicTempId": "epic-1",
-            "parentTempId": "story-1",
-            "title": "",
-            "description": "",
-            "type": "task",
-            "module": "",
-            "priority": "high|medium|low",
-            "assignee": null,
-            "status": "todo",
-            "startDate": null,
-            "dueDate": null,
-            "storyPoints": 0,
-            "parentId": "story-1",
-            "acceptanceCriteria": [""],
-            "sprint": "S1"
-        }}
-    ],
-    "subtasks": [
-        {{
-            "tempId": "subtask-1",
-            "epicTempId": "epic-1",
-            "parentTempId": "task-1",
-            "title": "",
-            "description": "",
-            "type": "subtask",
-            "module": "",
-            "priority": "high|medium|low",
-            "assignee": null,
-            "status": "todo",
-            "startDate": null,
-            "dueDate": null,
-            "storyPoints": 0,
-            "parentId": "task-1",
-            "acceptanceCriteria": [""],
-            "sprint": "S1"
+            "type": "Story",
+            "parent_epic_index": 0,
+            "summary": "...",
+            "description": "...",
+            "assignee": "USER-ID",
+            "acceptance_criteria": ["..."]
         }}
     ]
 }}"""
@@ -196,54 +114,64 @@ Rules:
 - Do not include markdown."""
 
 
-PLANNER_SUGGEST_PROMPT = """You are an Agile planning copilot for a project that may be at very early stage.
+PLANNER_SUGGEST_PROMPT = """You are an Elite Agile Product Manager running a discovery phase.
 
-Project: {project_name}
-Module: {module_name}
-User Input: {user_input}
+Requirement Map (Master Index JSON):
+{requirement_map_json}
 
-Vectorless context graph JSON:
-{context_graph}
+Current Project State JSON:
+{project_state_json}
+
+Module Focus: {module_name}
+User Instruction: {user_input}
 
 Task:
-Generate practical NEXT planning suggestions grounded ONLY in the provided context.
-
-Personalization requirements:
-- Use concrete domain terms, entities, and workflows that appear in the provided context graph snippets.
-- Include requirement identifiers when present (for example FR-1, FR-2, NFR-1) and reference them naturally.
-- Mention at least one specific business noun from the SRS in every suggestion (for example Patient, Appointment, Invoice, Course, Shipment, Claim) when present in context.
-- Avoid generic filler like "core functionality", "initial MVP", "define acceptance criteria", unless paired with concrete SRS-specific details.
-- If context provides explicit fields/states/roles/integrations, reflect those details directly in suggestions.
-
-Critical behavior:
-- If context indicates startup/initiation state (for example source=srs_only, no jira/commit progress), produce startup suggestions first.
-- Startup suggestions should focus on: MVP slicing from SRS, first epic/story breakdown, dependency/risk spikes only if present in SRS, and clear acceptance criteria setup.
-- Do NOT produce mid-project/maintenance suggestions (refactor technical debt, performance tuning, phase-2 module planning) unless explicitly supported by the context.
-- Do NOT invent domains/integrations (FHIR, WebRTC, payments, mobile, etc.) unless present in SRS/context.
-- Prefer requirement-grounded wording. If SRS has requirement IDs (FR-*, NFR-*), reference them naturally.
-
-Return ONLY valid JSON:
-{{
-    "epics": [
-        "Epic-level planning suggestion 1",
-        "Epic-level planning suggestion 2"
-    ],
-    "stories": [
-        "Story-level planning suggestion 1",
-        "Story-level planning suggestion 2"
-    ],
-    "tasks": [
-        "Task-level planning suggestion 1",
-        "Task-level planning suggestion 2"
-    ]
-}}
+1. Compare the requirement map against current project state.
+2. Identify 5-8 requirement IDs that are highest-value gaps to explore next.
+3. Prefer IDs with clear dependency order and active business impact.
 
 Output rules:
-- 2 to 4 epics, 4 to 8 stories, 4 to 8 tasks
-- Each entry must be one sentence, 10-24 words, begin with an action verb
-- Keep suggestions backlog/planning oriented and immediately actionable
-- Ensure each suggestion is distinct and targets a different planning action (scope, workflow, data model, role permissions, integrations, NFRs, risks, validation).
-- No markdown, no extra keys, JSON only
+- Return ONLY valid JSON.
+- Return IDs exactly as provided in the map.
+- No markdown, no commentary.
+
+JSON shape:
+{{
+    "requirement_ids": ["FR-AUTH-001", "NFR-SEC-002"],
+    "reason": "One short sentence explaining selection strategy"
+}}
+"""
+
+
+DISCOVERY_GAPS_PROMPT = """You are a requirements discovery analyst.
+
+Requirement Map (Master Index JSON):
+{requirement_map_json}
+
+Completed Jira IDs JSON:
+{completed_jira_ids_json}
+
+Current Project State JSON:
+{project_state_json}
+
+Module Focus: {module_name}
+User Instruction: {user_input}
+
+Task:
+1. Compare the requirement map against the completed Jira IDs and project state.
+2. Identify 5-8 requirement IDs that are missing, at risk, or need deeper exploration.
+3. Prefer IDs with visible gaps, dependencies, or blockers.
+
+Output rules:
+- Return ONLY valid JSON.
+- Return IDs exactly as provided in the map.
+- No markdown, no commentary.
+
+JSON shape:
+{{
+    "requirement_ids": ["FR-AUTH-001", "NFR-SEC-002"],
+    "reason": "One short sentence explaining selection strategy"
+}}
 """
 
 
@@ -251,15 +179,17 @@ REQUIREMENT_EXTRACTION_PROMPT = """Extract structured requirements from the foll
 
 Return ONLY valid JSON with this shape:
 {{
-    "functional_requirements": ["..."],
-    "non_functional_requirements": ["..."],
-    "modules": ["..."],
-    "actors": ["..."]
+        "functional_requirements": ["FR-XXX-001: ..."],
+        "non_functional_requirements": ["NFR-XXX-001: ..."],
+        "modules": ["..."],
+        "actors": ["..."]
 }}
 
 Rules:
 - Keep requirements concise and deduplicated
-- Preserve requirement IDs like FR-1 / NFR-2 if present
+- Preserve requirement IDs like FR-1 / NFR-2 if present and normalize them consistently
+- If IDs are missing, generate deterministic IDs using FR-<MODULE>-### and NFR-<CATEGORY>-###
+- Every extracted requirement line must include its explicit ID prefix
 - Do not invent modules or actors
 
 SRS:
@@ -267,52 +197,53 @@ SRS:
 """
 
 
-PHASE_ACTION_SUGGEST_PROMPT = """You are an AI software planning assistant.
+PHASE_ACTION_SUGGEST_PROMPT = """You are an Elite Agile Product Manager.
 
-Project: {project_name}
-Module Focus: {module_name}
-Project Phase: {phase}
-User Input: {user_input}
+Targeted SRS Chunks (already filtered by requirement IDs):
+{fetched_srs_chunks}
 
-Modules:
-{modules}
+Current Project State JSON:
+{project_state_json}
 
-Functional Requirements:
-{functional_requirements}
-
-Non-Functional Requirements:
-{non_functional_requirements}
-
-Actors:
-{actors}
-
-Existing Work:
-{existing_work}
+User Instruction:
+{user_custom_instruction}
 
 Task:
-Suggest 5 to 7 high-value development actions.
+Generate 6 to 7 precise, no-fluff next-step suggestions grounded in the targeted SRS chunks.
 
 Rules:
-- You MUST prioritize features directly derived from the SRS domain and listed modules/requirements.
-- If domain terms imply healthcare, prioritize appointment, doctor, patient, scheduling flows first.
-- Each suggestion MUST belong to a concrete module from the provided module list when available.
-- Align with project phase:
-    - START phase: suggest ONLY core product features and required integrations.
-    - START phase: DO NOT suggest optimization/UI tweaks/refactors/improvements.
-- Avoid duplicates and avoid generic planning language.
-- DO NOT include titles containing these words: optimize, refactor, improve, enhance, validation, error handling, define, plan.
-- Return at least 3 core features and at most 7 total suggestions.
+- Every suggestion must reference at least one requirement ID (FR/NFR) in title or description.
+- Explain why now using dependency status from project state when possible.
+- Keep each suggestion specific and implementation-ready.
+- Avoid generic wording like optimize/refactor/improve unless explicitly requested.
 
-Return ONLY valid JSON array:
-[
-    {{
-        "title": "",
-        "type": "feature | improvement | integration",
-        "priority": "high | medium | low",
-        "module": "",
-        "reason": ""
-    }}
-]
+Return ONLY valid JSON:
+{{
+    "suggestions": [
+        {{
+            "id": "sug-1",
+            "title": "Implement MFA verification flow (FR-AUTH-002)",
+            "description": "Build TOTP enrollment and recovery codes; this depends on completed registration flow PROJ-10.",
+            "impact": "High",
+            "estimated_effort": "Medium",
+            "module": "Auth"
+        }}
+    ]
+}}
+"""
+
+
+STANDUP_SUMMARY_PROMPT = """You are an engineering manager assistant.
+
+Create a concise standup summary from the following project context.
+
+Return plain text only with 3 short sections:
+1) What moved
+2) What is pending
+3) Health and risk
+
+Context:
+{context}
 """
 
 
@@ -355,10 +286,91 @@ class LLMService:
     def _get_deepseek_client(self, base_url: str):
         from openai import OpenAI
         api_key = os.getenv("DEEPSEEK_LOCAL_API_KEY") or os.getenv("OPENAI_API_KEY") or "not-needed"
+
+        normalized = (base_url or "").strip()
+        if normalized and not normalized.rstrip("/").endswith("/v1"):
+            normalized = f"{normalized.rstrip('/')}/v1"
+
         return OpenAI(
             api_key=api_key,
-            base_url=base_url,
+            base_url=normalized,
         )
+
+    @staticmethod
+    def _extract_text_from_chat_response(response: Any) -> str:
+        """Extract plain text from OpenAI-compatible chat responses across providers."""
+        if response is None:
+            return ""
+
+        # Newer SDKs sometimes expose consolidated output text.
+        output_text = getattr(response, "output_text", None)
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text.strip()
+
+        choices = getattr(response, "choices", None)
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+
+            message = getattr(first, "message", None)
+            if message is not None:
+                content = getattr(message, "content", None)
+                if isinstance(content, str) and content.strip():
+                    return content.strip()
+
+                if isinstance(content, list):
+                    pieces = []
+                    for item in content:
+                        if isinstance(item, str) and item.strip():
+                            pieces.append(item.strip())
+                        elif isinstance(item, dict):
+                            text = (item.get("text") or item.get("content") or "")
+                            if isinstance(text, str) and text.strip():
+                                pieces.append(text.strip())
+                        else:
+                            part_text = getattr(item, "text", None)
+                            if isinstance(part_text, str) and part_text.strip():
+                                pieces.append(part_text.strip())
+                    if pieces:
+                        return "\n".join(pieces).strip()
+
+            text = getattr(first, "text", None)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+
+            delta = getattr(first, "delta", None)
+            if delta is not None:
+                delta_content = getattr(delta, "content", None)
+                if isinstance(delta_content, str) and delta_content.strip():
+                    return delta_content.strip()
+
+        # Last-resort dictionary traversal for provider-specific objects.
+        response_dict = None
+        if hasattr(response, "model_dump"):
+            try:
+                response_dict = response.model_dump()
+            except Exception:
+                response_dict = None
+        if response_dict is None and hasattr(response, "to_dict"):
+            try:
+                response_dict = response.to_dict()
+            except Exception:
+                response_dict = None
+
+        if isinstance(response_dict, dict):
+            choices_dict = response_dict.get("choices") or []
+            if isinstance(choices_dict, list) and choices_dict:
+                first = choices_dict[0] or {}
+                if isinstance(first, dict):
+                    message = first.get("message") or {}
+                    if isinstance(message, dict):
+                        content = message.get("content")
+                        if isinstance(content, str) and content.strip():
+                            return content.strip()
+                    text = first.get("text")
+                    if isinstance(text, str) and text.strip():
+                        return text.strip()
+
+        return ""
 
     # Free models to try in order if one is rate-limited or unavailable
     FREE_MODELS = [
@@ -554,6 +566,7 @@ class LLMService:
         context: str,
         additional_context: str,
         constraints: str,
+        team_members_json: str = "[]",
     ) -> str:
         ctx_budget = 11000
         add_budget = 13000
@@ -561,13 +574,20 @@ class LLMService:
         for _ in range(6):
             compact_context = self._compact_rag_context(context, ctx_budget, module_name)
             compact_additional = self._extract_vectorless_summary(additional_context, module_name, add_budget)
+            selected_path = "\n".join(
+                part for part in [
+                    f"Project: {project_name}",
+                    f"Module: {module_name}",
+                    constraints or "",
+                    compact_additional or "",
+                ] if part
+            )
 
             prompt = STORY_GENERATION_PROMPT.format(
-                project_name=project_name,
-                module_name=module_name,
-                context=compact_context or "No SRS document ingested yet.",
-                additional_context=compact_additional or "None",
-                constraints=constraints or "",
+                full_srs_text=compact_context or "No SRS document ingested yet.",
+                selected_suggestion_details=selected_path or "No selected path provided.",
+                team_members_json=team_members_json or "[]",
+                active_jira_state=compact_additional or "[]",
             )
 
             token_estimate = self._estimate_tokens(prompt)
@@ -581,12 +601,19 @@ class LLMService:
         # Final defensive pass.
         compact_context = self._select_salient_lines(context or "", 5200, module_name)
         compact_additional = self._select_salient_lines(additional_context or "", 6200, module_name)
+        selected_path = "\n".join(
+            part for part in [
+                f"Project: {project_name}",
+                f"Module: {module_name}",
+                constraints or "",
+                compact_additional or "",
+            ] if part
+        )
         return STORY_GENERATION_PROMPT.format(
-            project_name=project_name,
-            module_name=module_name,
-            context=compact_context or "No SRS document ingested yet.",
-            additional_context=compact_additional or "None",
-            constraints=constraints or "",
+            full_srs_text=compact_context or "No SRS document ingested yet.",
+            selected_suggestion_details=selected_path or "No selected path provided.",
+            team_members_json=team_members_json or "[]",
+            active_jira_state=compact_additional or "[]",
         )
 
     @staticmethod
@@ -642,11 +669,30 @@ class LLMService:
         ]
         return any(item in msg for item in checks)
 
-    def _call_llm(self, prompt: str, temperature: float = 0.3, ai_config: Dict[str, Any] = None) -> str:
+    def _call_llm(
+        self,
+        prompt: str,
+        temperature: float = 0.3,
+        ai_config: Dict[str, Any] = None,
+        operation: str = "llm_call",
+    ) -> str:
         cfg = ai_config or {}
         provider = cfg.get("provider") or "openrouter"
         resolved_temperature = float(cfg.get("temperature", temperature))
         resolved_max_tokens = int(cfg.get("maxTokens", self.max_tokens))
+
+        if provider == "manual_bridge":
+            timeout_seconds = int(cfg.get("manualBridgeTimeoutSeconds") or os.getenv("MANUAL_BRIDGE_TIMEOUT_SECONDS") or 1800)
+            return manual_bridge_service.submit_and_wait(
+                prompt=prompt,
+                operation=operation,
+                timeout_seconds=timeout_seconds,
+                context={
+                    "provider": provider,
+                    "temperature": resolved_temperature,
+                    "maxTokens": resolved_max_tokens,
+                },
+            )
 
         if provider == "deepseek_local":
             deepseek_url = (cfg.get("deepseekUrl") or os.getenv("DEEPSEEK_LOCAL_URL") or "").strip()
@@ -661,7 +707,10 @@ class LLMService:
                 temperature=resolved_temperature,
                 max_tokens=resolved_max_tokens,
             )
-            return response.choices[0].message.content
+            text = self._extract_text_from_chat_response(response)
+            if text:
+                return text
+            raise ValueError("DeepSeek local provider returned an empty or unsupported response shape")
 
         key_name = cfg.get("openrouterKeyName") or "OPENROUTER_API_KEY"
         api_key = os.getenv(key_name) or os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
@@ -682,7 +731,10 @@ class LLMService:
                     temperature=resolved_temperature,
                     max_tokens=resolved_max_tokens,
                 )
-                return response.choices[0].message.content
+                text = self._extract_text_from_chat_response(response)
+                if text:
+                    return text
+                raise ValueError(f"Provider returned an empty or unsupported response shape for model {model}")
             except Exception as e:
                 err = str(e)
                 if '429' in err or '404' in err or 'rate' in err.lower() or 'not found' in err.lower():
@@ -698,6 +750,7 @@ class LLMService:
         context: str,
         additional_context: str = "",
         constraints: str = "",
+        team_members_json: str = "[]",
         ai_config: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         prompt = self._build_generate_prompt_with_budget(
@@ -706,9 +759,10 @@ class LLMService:
             context=context or "",
             additional_context=additional_context or "",
             constraints=constraints or "",
+            team_members_json=team_members_json or "[]",
         )
 
-        raw = self._call_llm(prompt, temperature=0.4, ai_config=ai_config)
+        raw = self._call_llm(prompt, temperature=0.4, ai_config=ai_config, operation="generate_stories")
 
         # Parse JSON (handle markdown code blocks)
         raw = raw.strip()
@@ -728,7 +782,102 @@ class LLMService:
             else:
                 raise ValueError(f"LLM returned invalid JSON: {raw[:200]}")
 
+        if isinstance(result, dict) and isinstance(result.get("issues"), list):
+            result = self._convert_issue_payload_to_backlog(result, module_name)
+
         return self._normalize_generated_backlog(result, module_name)
+
+    def _convert_issue_payload_to_backlog(self, payload: Dict[str, Any], module_name: str) -> Dict[str, Any]:
+        issues = payload.get("issues") or []
+        epics = []
+        stories = []
+        tasks = []
+        subtasks = []
+
+        epic_count = 0
+        story_count = 0
+        task_count = 0
+        subtask_count = 0
+
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+
+            issue_type = str(issue.get("type") or "story").strip().lower()
+            summary = str(issue.get("summary") or "").strip()
+            description = str(issue.get("description") or "").strip()
+            assignee = issue.get("assignee")
+            acceptance = issue.get("acceptance_criteria") or issue.get("acceptanceCriteria") or []
+            if not isinstance(acceptance, list):
+                acceptance = [str(acceptance)] if str(acceptance).strip() else []
+            priority = str(issue.get("priority") or "medium").lower()
+            if priority not in {"high", "medium", "low"}:
+                priority = "medium"
+
+            if issue_type == "epic":
+                epic_count += 1
+                epics.append({
+                    "tempId": f"epic-{epic_count}",
+                    "title": summary or f"Epic {epic_count}",
+                    "description": description,
+                    "type": "epic",
+                    "module": module_name,
+                    "priority": priority,
+                    "assignee": assignee,
+                    "acceptanceCriteria": [str(x).strip() for x in acceptance if str(x).strip()],
+                })
+                continue
+
+            parent_epic_index = int(issue.get("parent_epic_index") or 0)
+            epic_temp_id = f"epic-{max(1, parent_epic_index + 1)}"
+
+            if issue_type in {"task", "subtask"}:
+                task_count += 1
+                parent_temp_id = str(issue.get("parent_temp_id") or issue.get("parentTempId") or "")
+                if not parent_temp_id:
+                    parent_temp_id = f"story-{max(1, min(story_count, 1))}"
+
+                row = {
+                    "tempId": f"task-{task_count}",
+                    "epicTempId": epic_temp_id,
+                    "parentTempId": parent_temp_id,
+                    "title": summary or f"Task {task_count}",
+                    "description": description,
+                    "type": "task",
+                    "module": module_name,
+                    "priority": priority,
+                    "assignee": assignee,
+                    "acceptanceCriteria": [str(x).strip() for x in acceptance if str(x).strip()],
+                }
+
+                if issue_type == "subtask":
+                    subtask_count += 1
+                    row["tempId"] = f"subtask-{subtask_count}"
+                    row["type"] = "subtask"
+                    subtasks.append(row)
+                else:
+                    tasks.append(row)
+                continue
+
+            story_count += 1
+            stories.append({
+                "tempId": f"story-{story_count}",
+                "epicTempId": epic_temp_id,
+                "title": summary or f"Story {story_count}",
+                "description": description,
+                "type": "story",
+                "module": module_name,
+                "priority": priority,
+                "assignee": assignee,
+                "acceptanceCriteria": [str(x).strip() for x in acceptance if str(x).strip()],
+            })
+
+        return {
+            "epics": epics,
+            "stories": stories,
+            "tasks": tasks,
+            "subtasks": subtasks,
+        }
 
     def _normalize_generated_backlog(self, result: Dict[str, Any], module_name: str) -> Dict[str, Any]:
         epics = result.get("epics") if isinstance(result, dict) else []
@@ -859,6 +1008,7 @@ class LLMService:
         acceptance_criteria: List[str],
         code_diff: str,
         commit_message: str,
+        ai_config: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         criteria_text = "\n".join(f"- {c}" for c in acceptance_criteria)
 
@@ -869,7 +1019,7 @@ class LLMService:
             commit_message=commit_message,
         )
 
-        raw = self._call_llm(prompt, temperature=0.1)
+        raw = self._call_llm(prompt, temperature=0.1, ai_config=ai_config, operation="validate_code")
         raw = raw.strip()
 
         if raw.startswith("```"):
@@ -884,15 +1034,20 @@ class LLMService:
 
     def suggest_planner_prompts(self, project_name: str, module_name: str, user_input: str, context_graph: Dict[str, Any], ai_config: Dict[str, Any] = None) -> Dict[str, List[str]]:
         compact_graph = self._compact_context_graph_for_prompt(context_graph)
+        requirement_map = {
+            "project": project_name,
+            "module": module_name,
+            "requirements": compact_graph.get("documents", []),
+        }
         prompt = PLANNER_SUGGEST_PROMPT.format(
-            project_name=project_name,
+            requirement_map_json=json.dumps(requirement_map, separators=(",", ":")),
+            project_state_json=json.dumps(context_graph or {}, separators=(",", ":")),
             module_name=module_name,
             user_input=user_input or "",
-            context_graph=json.dumps(compact_graph, separators=(",", ":")),
         )
 
         try:
-            raw = self._call_llm(prompt, temperature=0.2, ai_config=ai_config).strip()
+            raw = self._call_llm(prompt, temperature=0.2, ai_config=ai_config, operation="suggest_planner").strip()
         except Exception as err:
             if not self._is_context_overflow_error(err):
                 logger.warning("suggest_planner_prompts failed before parse (non-overflow): %s", str(err))
@@ -907,13 +1062,13 @@ class LLMService:
                 max_docs=1,
             )
             retry_prompt = PLANNER_SUGGEST_PROMPT.format(
-                project_name=project_name,
+                requirement_map_json=json.dumps(requirement_map, separators=(",", ":")),
+                project_state_json=json.dumps(retry_graph, separators=(",", ":")),
                 module_name=module_name,
                 user_input=user_input or "",
-                context_graph=json.dumps(retry_graph, separators=(",", ":")),
             )
             try:
-                raw = self._call_llm(retry_prompt, temperature=0.2, ai_config=ai_config).strip()
+                raw = self._call_llm(retry_prompt, temperature=0.2, ai_config=ai_config, operation="suggest_planner").strip()
             except Exception as retry_err:
                 logger.warning("suggest_planner_prompts retry failed: %s", str(retry_err))
                 raise RuntimeError(f"LLM call failed after compact retry: {str(retry_err)}")
@@ -925,12 +1080,10 @@ class LLMService:
 
         try:
             parsed = json.loads(raw)
-            epics = parsed.get("epics", [])
-            stories = parsed.get("stories", [])
-            tasks = parsed.get("tasks", [])
+            target_ids = parsed.get("requirement_ids", [])
 
             # Backward compatibility with older prompt responses.
-            if not (isinstance(epics, list) and isinstance(stories, list) and isinstance(tasks, list)):
+            if not isinstance(target_ids, list):
                 legacy = parsed.get("suggestions", [])
                 if isinstance(legacy, list):
                     logger.info("suggest_planner_prompts using legacy suggestions array format")
@@ -943,9 +1096,9 @@ class LLMService:
                 raise ValueError("LLM returned JSON with invalid suggestion keys")
 
             return {
-                "epics": [str(s).strip() for s in epics if str(s).strip()][:4],
-                "stories": [str(s).strip() for s in stories if str(s).strip()][:8],
-                "tasks": [str(s).strip() for s in tasks if str(s).strip()][:8],
+                "epics": [f"Target requirement {str(r).strip()}" for r in target_ids[:2] if str(r).strip()],
+                "stories": [f"Explore requirement {str(r).strip()}" for r in target_ids[2:6] if str(r).strip()],
+                "tasks": [f"Fetch context for {str(r).strip()}" for r in target_ids[6:10] if str(r).strip()],
             }
         except Exception as parse_err:
             logger.warning("suggest_planner_prompts JSON parse failed: %s | raw_head=%s", str(parse_err), raw[:240])
@@ -956,7 +1109,7 @@ class LLMService:
             srs_text=self._trim_text(text, 32000),
         )
 
-        raw = self._call_llm(prompt, temperature=0.1, ai_config=ai_config).strip()
+        raw = self._call_llm(prompt, temperature=0.1, ai_config=ai_config, operation="extract_requirements").strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -975,6 +1128,47 @@ class LLMService:
             "actors": [str(x).strip() for x in (parsed.get("actors") or []) if str(x).strip()][:20],
         }
 
+    def extract_target_requirement_ids(
+        self,
+        module_name: str,
+        user_input: str,
+        requirement_map_json: str,
+        project_state_json: str,
+        completed_jira_ids_json: str = "[]",
+        ai_config: Dict[str, Any] = None,
+    ) -> List[str]:
+        prompt = DISCOVERY_GAPS_PROMPT.format(
+            requirement_map_json=self._trim_text(requirement_map_json or "{}", 18000),
+            project_state_json=self._trim_text(project_state_json or "{}", 18000),
+            completed_jira_ids_json=self._trim_text(completed_jira_ids_json or "[]", 12000),
+            module_name=module_name,
+            user_input=user_input or "",
+        )
+
+        raw = self._call_llm(prompt, temperature=0.1, ai_config=ai_config, operation="discover_gaps").strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+
+        try:
+            parsed = json.loads(raw)
+            ids = parsed.get("requirement_ids") if isinstance(parsed, dict) else []
+            if not isinstance(ids, list):
+                raise ValueError("Invalid requirement_ids format")
+            normalized = []
+            seen = set()
+            for rid in ids:
+                val = str(rid or "").strip().upper()
+                if not val or val in seen:
+                    continue
+                seen.add(val)
+                normalized.append(val)
+            return normalized[:8]
+        except Exception as parse_err:
+            logger.warning("extract_target_requirement_ids JSON parse failed: %s | raw_head=%s", str(parse_err), raw[:260])
+            raise ValueError("LLM returned invalid JSON for requirement ID discovery")
+
     def suggest_phase_actions(
         self,
         project_name: str,
@@ -986,21 +1180,35 @@ class LLMService:
         non_functional_requirements: List[str],
         actors: List[str],
         existing_work: List[Dict[str, Any]],
+        fetched_chunks: List[str] = None,
+        project_state: Dict[str, Any] = None,
         ai_config: Dict[str, Any] = None,
     ) -> List[Dict[str, str]]:
+        srs_lines = fetched_chunks or []
+        if not srs_lines:
+            srs_lines = [
+                f"Project: {project_name}",
+                f"Module Focus: {module_name}",
+                f"Phase: {phase}",
+                "Modules:",
+                *[f"- {m}" for m in (modules or [])[:20]],
+                "Functional Requirements:",
+                *[f"- {fr}" for fr in (functional_requirements or [])[:40]],
+                "Non-Functional Requirements:",
+                *[f"- {nfr}" for nfr in (non_functional_requirements or [])[:30]],
+                "Actors:",
+                *[f"- {actor}" for actor in (actors or [])[:20]],
+            ]
+        full_srs_text = "\n".join(srs_lines)
+        project_state_payload = project_state if isinstance(project_state, dict) else {"existing_work": existing_work[:120]}
+
         prompt = PHASE_ACTION_SUGGEST_PROMPT.format(
-            project_name=project_name,
-            module_name=module_name,
-            phase=phase,
-            user_input=user_input or "",
-            modules=json.dumps(modules[:20], ensure_ascii=False),
-            functional_requirements=json.dumps(functional_requirements[:40], ensure_ascii=False),
-            non_functional_requirements=json.dumps(non_functional_requirements[:30], ensure_ascii=False),
-            actors=json.dumps(actors[:20], ensure_ascii=False),
-            existing_work=json.dumps(existing_work[:12], ensure_ascii=False),
+            fetched_srs_chunks=self._trim_text(full_srs_text, 14000),
+            project_state_json=self._trim_text(json.dumps(project_state_payload, ensure_ascii=False), 9000),
+            user_custom_instruction=user_input or "",
         )
 
-        raw = self._call_llm(prompt, temperature=0.2, ai_config=ai_config).strip()
+        raw = self._call_llm(prompt, temperature=0.2, ai_config=ai_config, operation="suggest_phase_actions").strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -1012,8 +1220,9 @@ class LLMService:
             logger.warning("suggest_phase_actions JSON parse failed: %s | raw_head=%s", str(parse_err), raw[:280])
             raise ValueError("LLM returned invalid JSON for phase-aware suggestions")
 
-        if not isinstance(parsed, list):
-            raise ValueError("LLM returned non-array response for phase-aware suggestions")
+        suggestions = parsed.get("suggestions") if isinstance(parsed, dict) else None
+        if not isinstance(suggestions, list):
+            raise ValueError("LLM returned invalid JSON for gap-analysis suggestions")
 
         normalized = []
         module_catalog = [str(m).strip().lower() for m in (modules or []) if str(m).strip()]
@@ -1023,14 +1232,23 @@ class LLMService:
         ]
         seen_keys = set()
 
-        for item in parsed:
+        for idx, item in enumerate(suggestions):
             if not isinstance(item, dict):
                 continue
             title = str(item.get("title", "")).strip()
-            action_type = str(item.get("type", "feature")).strip().lower()
-            priority = str(item.get("priority", "medium")).strip().lower()
+            description = str(item.get("description", "")).strip()
+            impact = str(item.get("impact", "medium")).strip().lower()
+            effort = str(item.get("estimated_effort", "medium")).strip().lower()
+
+            action_type = "feature"
+            if impact == "high" and ("integration" in title.lower() or "api" in title.lower()):
+                action_type = "integration"
+            elif impact == "low":
+                action_type = "improvement"
+
+            priority = "high" if impact == "high" else ("low" if impact == "low" else "medium")
             module = str(item.get("module", module_name)).strip()
-            reason = str(item.get("reason", "")).strip()
+            reason = description or f"Gap-analysis suggestion {idx + 1} (effort: {effort or 'medium'})."
 
             if not title:
                 continue
@@ -1073,14 +1291,14 @@ class LLMService:
 
         return normalized[:7]
 
-    def summarize_jira_project(self, project_key: str, issues: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def summarize_jira_project(self, project_key: str, issues: List[Dict[str, Any]], ai_config: Dict[str, Any] = None) -> Dict[str, Any]:
         issues_text = "\n".join(
             f"- {i.get('key', 'N/A')} | {i.get('type', 'Unknown')} | {i.get('status', 'Unknown')} | {i.get('priority', 'Unknown')} | {i.get('summary', '')}"
             for i in issues[:120]
         ) or "No issues provided"
 
         prompt = JIRA_SUMMARY_PROMPT.format(project_key=project_key, issues_text=issues_text)
-        raw = self._call_llm(prompt, temperature=0.2).strip()
+        raw = self._call_llm(prompt, temperature=0.2, ai_config=ai_config, operation="summarize_jira").strip()
 
         if raw.startswith("```"):
             raw = raw.split("```")[1]
@@ -1100,3 +1318,7 @@ class LLMService:
                 "topRisks": [],
                 "nextActions": [],
             }
+
+    def summarize_standup(self, context: str, ai_config: Dict[str, Any] = None) -> str:
+        prompt = STANDUP_SUMMARY_PROMPT.format(context=self._trim_text(context, 16000))
+        return self._call_llm(prompt, temperature=0.2, ai_config=ai_config, operation="standup_summary").strip()

@@ -9,18 +9,11 @@ const {
   updateAIConfigById,
   activateAIConfig,
   deleteAIConfig,
+  testAIConfig,
   listUsers,
   createUser,
   updateUser,
   deleteUser,
-  listOrganizations,
-  createOrganization,
-  updateOrganization,
-  deleteOrganization,
-  listProjects,
-  createProject,
-  updateProject,
-  deleteProject,
 } = require('../controllers/adminController');
 
 router.use(protect, authorize('admin'));
@@ -32,20 +25,11 @@ router.put('/ai-config', updateAIConfig);
 router.put('/ai-config/:id', updateAIConfigById);
 router.put('/ai-config/:id/activate', activateAIConfig);
 router.delete('/ai-config/:id', deleteAIConfig);
+router.post('/ai-config/test', testAIConfig);
 
 router.get('/users', listUsers);
 router.post('/users', createUser);
 router.put('/users/:id', updateUser);
 router.delete('/users/:id', deleteUser);
-
-router.get('/organizations', listOrganizations);
-router.post('/organizations', createOrganization);
-router.put('/organizations/:id', updateOrganization);
-router.delete('/organizations/:id', deleteOrganization);
-
-router.get('/projects', listProjects);
-router.post('/projects', createProject);
-router.put('/projects/:id', updateProject);
-router.delete('/projects/:id', deleteProject);
 
 module.exports = router;
