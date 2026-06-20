@@ -2,6 +2,7 @@ const axios = require('axios');
 const logger = require('../config/logger');
 const { getActiveAIConfigPayload } = require('./aiConfigService');
 const { resolveAiServiceBaseUrl } = require('../utils/aiServiceUrl');
+const { recordAIUsage } = require('./aiUsageService');
 
 const AI_SERVICE_URL = resolveAiServiceBaseUrl(process.env.AI_SERVICE_URL);
 const AI_INGEST_TIMEOUT_MS = Number(process.env.AI_INGEST_TIMEOUT_MS || 0);
@@ -11,6 +12,40 @@ const aiClient = axios.create({
   timeout: 120000, // 2 minutes for AI ops
   headers: { 'Content-Type': 'application/json' },
 });
+
+const summarizeText = (value, maxChars = 1200) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars)}...[truncated]`;
+};
+
+const buildUsageRequestSummary = (label, parts = []) => (
+  [label, ...parts.filter(Boolean)].join(' | ')
+);
+
+const recordUsageIfPresent = async ({ operation, aiConfig, requestSummary, responseData, responseSummary, errorMessage = '' }) => {
+  const meta = responseData?.meta;
+  if (!meta || (meta.provider !== 'deepseek_api' && meta.provider !== 'deepseek_local' && meta.provider !== 'openrouter')) {
+    return;
+  }
+
+  try {
+    await recordAIUsage({
+      provider: aiConfig?.provider || meta.provider,
+      model: aiConfig?.deepseekModel || aiConfig?.openrouterModel || meta.model || '',
+      operation,
+      requestSummary,
+      responseSummary,
+      requestMeta: meta?.request || {},
+      responseMeta: meta,
+      latencyMs: meta?.latencyMs || 0,
+      status: errorMessage ? 'error' : 'success',
+      errorMessage,
+    });
+  } catch (err) {
+    logger.warn(`AI usage log write failed for ${operation}: ${err.message}`);
+  }
+};
 
 const isServiceUnavailableError = (error) => {
   const transientCodes = ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNABORTED'];
@@ -105,6 +140,12 @@ const ingestDocument = async ({ documentId, filePath, fileType, namespace, proje
 const generateStories = async ({ projectId, projectName, moduleName, documentId, additionalContext, budget, deadline, teamMembers }) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
+    const requestSummary = buildUsageRequestSummary('generateStories', [
+      `project=${projectName || projectId || 'unknown'}`,
+      `module=${moduleName || 'unknown'}`,
+      documentId ? `document=${documentId}` : '',
+      additionalContext ? `context=${summarizeText(additionalContext, 300)}` : '',
+    ]);
     const response = await aiClient.post('/stories/generate', {
       project_id: projectId,
       project_name: projectName,
@@ -116,6 +157,13 @@ const generateStories = async ({ projectId, projectName, moduleName, documentId,
       team_members: Array.isArray(teamMembers) ? teamMembers : [],
       ai_config: aiConfig,
     }, { timeout: 0 });
+    await recordUsageIfPresent({
+      operation: 'generateStories',
+      aiConfig,
+      requestSummary,
+      responseData: response.data,
+      responseSummary: summarizeText(JSON.stringify(response.data?.epics || response.data?.stories || response.data || {}), 500),
+    });
     return response.data;
   } catch (error) {
     logger.error(`AI Service - generateStories error: ${error.message}`);
@@ -143,12 +191,47 @@ const generateStories = async ({ projectId, projectName, moduleName, documentId,
   }
 };
 
+const previewGenerateStoriesPrompt = async ({ projectId, projectName, moduleName, documentId, additionalContext, budget, deadline, teamMembers }) => {
+  try {
+    const aiConfig = await getActiveAIConfigPayload();
+    const response = await aiClient.post('/stories/generate-prompt-preview', {
+      project_id: projectId,
+      project_name: projectName,
+      module_name: moduleName,
+      document_id: documentId,
+      additional_context: additionalContext,
+      budget,
+      deadline: deadline ? new Date(deadline).toISOString() : null,
+      team_members: Array.isArray(teamMembers) ? teamMembers : [],
+      ai_config: aiConfig,
+    }, { timeout: 0 });
+    return response.data;
+  } catch (error) {
+    logger.error(`AI Service - previewGenerateStoriesPrompt error: ${error.message}`);
+    if (error?.response?.data) {
+      logger.error(`AI Service - previewGenerateStoriesPrompt response: ${JSON.stringify(error.response.data)}`);
+    }
+
+    if (isServiceUnavailableError(error)) {
+      throw asServiceUnavailable('preview generate stories prompt', error);
+    }
+
+    throw error;
+  }
+};
+
 /**
  * Analyze code against story acceptance criteria
  */
 const analyzeCode = async ({ projectId, changedFiles, stories, commitSha, commitMessage }) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
+    const requestSummary = buildUsageRequestSummary('analyzeCode', [
+      `project=${projectId || 'unknown'}`,
+      `commit=${commitSha || 'unknown'}`,
+      `files=${Array.isArray(changedFiles) ? changedFiles.length : 0}`,
+      commitMessage ? `message=${summarizeText(commitMessage, 200)}` : '',
+    ]);
     const response = await aiClient.post('/github/analyze', {
       project_id: projectId,
       changed_files: changedFiles,
@@ -156,6 +239,13 @@ const analyzeCode = async ({ projectId, changedFiles, stories, commitSha, commit
       commit_sha: commitSha,
       commit_message: commitMessage,
       ai_config: aiConfig,
+    });
+    await recordUsageIfPresent({
+      operation: 'analyzeCode',
+      aiConfig,
+      requestSummary,
+      responseData: response.data,
+      responseSummary: summarizeText(JSON.stringify(response.data?.results || response.data || {}), 500),
     });
     return response.data;
   } catch (error) {
@@ -173,6 +263,11 @@ const analyzeCode = async ({ projectId, changedFiles, stories, commitSha, commit
 const suggestStories = async ({ projectId, projectName, moduleName, userInput, contextGraph }) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
+    const requestSummary = buildUsageRequestSummary('suggestStories', [
+      `project=${projectName || projectId || 'unknown'}`,
+      `module=${moduleName || 'unknown'}`,
+      userInput ? `input=${summarizeText(userInput, 250)}` : '',
+    ]);
     const response = await postWithRetry('/stories/suggest', {
       project_id: projectId,
       project_name: projectName,
@@ -183,6 +278,13 @@ const suggestStories = async ({ projectId, projectName, moduleName, userInput, c
       project_state: contextGraph?.projectState || {},
       ai_config: aiConfig,
     }, {}, 2);
+    await recordUsageIfPresent({
+      operation: 'suggestStories',
+      aiConfig,
+      requestSummary,
+      responseData: response.data,
+      responseSummary: summarizeText(JSON.stringify(response.data?.suggestions || response.data || {}), 500),
+    });
     return response.data;
   } catch (error) {
     logger.error(`AI Service - suggestStories error: ${error.message}`);
@@ -201,6 +303,11 @@ const suggestStories = async ({ projectId, projectName, moduleName, userInput, c
 const discoverGaps = async ({ projectId, moduleName, userInput, requirementMap, projectState, completedJiraIds }) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
+    const requestSummary = buildUsageRequestSummary('discoverGaps', [
+      `project=${projectId || 'unknown'}`,
+      `module=${moduleName || 'unknown'}`,
+      userInput ? `input=${summarizeText(userInput, 250)}` : '',
+    ]);
     const response = await postWithRetry('/stories/discover-gaps', {
       project_id: projectId,
       module_name: moduleName,
@@ -210,6 +317,13 @@ const discoverGaps = async ({ projectId, moduleName, userInput, requirementMap, 
       completed_jira_ids: Array.isArray(completedJiraIds) ? completedJiraIds : [],
       ai_config: aiConfig,
     }, {}, 2);
+    await recordUsageIfPresent({
+      operation: 'discoverGaps',
+      aiConfig,
+      requestSummary,
+      responseData: response.data,
+      responseSummary: summarizeText(JSON.stringify(response.data?.requirement_ids || response.data || {}), 500),
+    });
     return response.data;
   } catch (error) {
     logger.error(`AI Service - discoverGaps error: ${error.message}`);
@@ -239,10 +353,18 @@ const getChunksByIds = async ({ projectId, requirementIds, topKPerId = 2 }) => {
 
 const testLLM = async ({ prompt, aiConfig }) => {
   try {
+    const resolvedConfig = aiConfig || (await getActiveAIConfigPayload());
     const response = await postWithRetry('/stories/standup-summary', {
       prompt: String(prompt || '').trim(),
-      ai_config: aiConfig || (await getActiveAIConfigPayload()),
+      ai_config: resolvedConfig,
     }, { timeout: 45000 }, 1);
+    await recordUsageIfPresent({
+      operation: 'testLLM',
+      aiConfig: resolvedConfig,
+      requestSummary: buildUsageRequestSummary('testLLM', [`prompt=${summarizeText(prompt, 400)}`]),
+      responseData: response.data,
+      responseSummary: summarizeText(response.data?.summary || response.data?.output || response.data || '', 500),
+    });
     return response.data?.success
       ? response.data
       : { success: false, summary: '' };
@@ -264,6 +386,11 @@ const testLLM = async ({ prompt, aiConfig }) => {
 const extractRequirements = async ({ projectId, documentId, filePath, fileType }) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
+    const requestSummary = buildUsageRequestSummary('extractRequirements', [
+      `project=${projectId || 'unknown'}`,
+      `document=${documentId || 'unknown'}`,
+      `type=${fileType || 'unknown'}`,
+    ]);
     const response = await aiClient.post('/stories/extract-requirements', {
       project_id: projectId,
       document_id: documentId,
@@ -271,6 +398,13 @@ const extractRequirements = async ({ projectId, documentId, filePath, fileType }
       file_type: fileType,
       ai_config: aiConfig,
     }, { timeout: AI_INGEST_TIMEOUT_MS });
+    await recordUsageIfPresent({
+      operation: 'extractRequirements',
+      aiConfig,
+      requestSummary,
+      responseData: response.data,
+      responseSummary: summarizeText(JSON.stringify(response.data?.functional_requirements || response.data || {}), 500),
+    });
     return response.data;
   } catch (error) {
     logger.error(`AI Service - extractRequirements error: ${error.message}`);
@@ -453,6 +587,7 @@ const getMockStories = (moduleName, projectName) => {
 module.exports = {
   ingestDocument,
   generateStories,
+  previewGenerateStoriesPrompt,
   analyzeCode,
   suggestStories,
   discoverGaps,

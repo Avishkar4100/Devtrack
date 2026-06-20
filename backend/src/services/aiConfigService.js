@@ -10,6 +10,8 @@ const getActiveAIConfigPayload = async () => {
     openrouterModel: cfg.openrouterModel,
     deepseekUrl: cfg.deepseekUrl,
     deepseekModel: cfg.deepseekModel,
+    deepseekThinking: cfg.deepseekThinking,
+    deepseekReasoningEffort: cfg.deepseekReasoningEffort,
     temperature: cfg.temperature,
     maxTokens: cfg.maxTokens,
     manualBridgeTimeoutSeconds: cfg.manualBridgeTimeoutSeconds,

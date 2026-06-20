@@ -1,6 +1,7 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
 import api from '@/lib/api'
 import { useProjectStore } from '@/store/projectStore'
 import PageErrorBoundary from '@/components/PageErrorBoundary'
@@ -48,17 +49,45 @@ export default function InsightsPage() {
 }
 
 function InsightsContent() {
-  const { selectedProjectId, selectedJiraProjectKey, setSelectedProjectId } = useProjectStore()
+  const {
+    projects: storeProjects,
+    selectedProjectId,
+    selectedJiraProjectKey,
+    setSelectedProjectId,
+    setSelectedJiraProjectKey,
+  } = useProjectStore()
 
-  const { data: overviewSummary } = useQuery({
-    queryKey: ['overview-summary'],
-    queryFn: async () => (await api.get('/dashboard/overview-summary')).data.data,
-  })
+  const [overviewSummary, setOverviewSummary] = useState(null)
+  const [projectInsights, setProjectInsights] = useState(null)
+  const [loadedProjectId, setLoadedProjectId] = useState('')
 
-  const { data: projectInsights } = useQuery({
-    queryKey: ['project-insights', selectedProjectId],
-    enabled: !!selectedProjectId,
-    queryFn: async () => (await api.get(`/insights/${selectedProjectId}`)).data.data,
+  const loadInsights = useMutation({
+    mutationFn: async () => {
+      const projectId = selectedProjectId
+      const overviewPromise = api.get('/dashboard/overview-summary')
+      const projectPromise = projectId
+        ? api.get(`/insights/${projectId}`)
+        : Promise.resolve(null)
+
+      const [overviewResponse, projectResponse] = await Promise.all([overviewPromise, projectPromise])
+      return {
+        overview: overviewResponse?.data?.data || null,
+        project: projectResponse?.data?.data || null,
+        projectId,
+      }
+    },
+    onError: (err) => {
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to load AI insights')
+    },
+    onSuccess: ({ overview, project, projectId }) => {
+      setOverviewSummary(overview)
+      setProjectInsights(project)
+      setLoadedProjectId(projectId || '')
+      if (!selectedProjectId && overview?.selectedProjectId) {
+        setSelectedProjectId(overview.selectedProjectId)
+        setSelectedJiraProjectKey(overview.selectedJiraProjectKey || '')
+      }
+    },
   })
 
   const { data: jiraIssues = [] } = useQuery({
@@ -69,7 +98,7 @@ function InsightsContent() {
     })).data.data?.issues || [],
   })
 
-  const projects = overviewSummary?.projects || []
+  const projects = overviewSummary?.projects || storeProjects || []
   const globalSummary = overviewSummary?.summary
 
   const rows = useMemo(() => {
@@ -127,9 +156,22 @@ function InsightsContent() {
     return fromExecutive
   }, [executive])
 
+  const hasGlobalInsights = Boolean(overviewSummary)
+  const hasProjectInsights = Boolean(projectInsights && loadedProjectId === selectedProjectId)
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-4">
-      <h1 className="text-[34px] font-bold tracking-tight text-slate-100">Insights</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-[34px] font-bold tracking-tight text-slate-100">Insights</h1>
+        <button
+          type="button"
+          className="btn-primary btn-sm"
+          onClick={() => loadInsights.mutate()}
+          disabled={loadInsights.isPending}
+        >
+          {loadInsights.isPending ? 'Loading AI Insights...' : 'Load AI Insights'}
+        </button>
+      </div>
 
       <div className="card p-4">
         <h2 className="text-base font-semibold mb-3 text-slate-100">Project Risk Board</h2>
@@ -162,7 +204,7 @@ function InsightsContent() {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="py-4 text-slate-400">No project insight data yet.</td>
+                  <td colSpan={4} className="py-4 text-slate-400">No project data yet. Click "Load AI Insights" to generate it.</td>
                 </tr>
               )}
             </tbody>
@@ -170,7 +212,13 @@ function InsightsContent() {
         </div>
       </div>
 
-      {!!selectedProjectId && (
+      {!hasGlobalInsights && (
+        <div className="card p-4 text-sm text-slate-400">
+          AI insights are loaded manually now. Use the button above to generate the project summary and delivery breakdown.
+        </div>
+      )}
+
+      {hasProjectInsights && !!selectedProjectId && (
         <>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {overall.map((metric) => (

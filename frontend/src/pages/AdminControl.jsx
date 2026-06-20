@@ -3,6 +3,24 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
 import toast from 'react-hot-toast'
 
+const PROVIDER_LABELS = {
+  openrouter: 'OpenRouter',
+  deepseek_local: 'DeepSeek Local',
+  deepseek_api: 'DeepSeek Official',
+  manual_bridge: 'Manual Bridge',
+}
+
+const DEEPSEEK_OFFICIAL_MODELS = [
+  { value: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
+  { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro' },
+  { value: 'deepseek-chat', label: 'deepseek-chat (deprecated 2026-07-24)' },
+  { value: 'deepseek-reasoner', label: 'deepseek-reasoner (deprecated 2026-07-24)' },
+]
+
+const normalizeDeepseekModels = (models) => (models || DEEPSEEK_OFFICIAL_MODELS).map((model) => (
+  typeof model === 'string' ? { value: model, label: model } : model
+))
+
 export default function AdminControlPage() {
   const qc = useQueryClient()
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'manager' })
@@ -51,6 +69,8 @@ export default function AdminControlPage() {
       openrouterModel: cfg.openrouterModel,
       deepseekUrl: cfg.deepseekUrl,
       deepseekModel: cfg.deepseekModel,
+      deepseekThinking: cfg.deepseekThinking ?? true,
+      deepseekReasoningEffort: cfg.deepseekReasoningEffort || 'high',
       temperature: cfg.temperature,
       maxTokens: cfg.maxTokens,
       manualBridgeTimeoutSeconds: cfg.manualBridgeTimeoutSeconds || opts?.manualBridgeDefaultTimeoutSeconds || 1800,
@@ -76,14 +96,41 @@ export default function AdminControlPage() {
           <h2 className="text-base font-semibold text-gray-100">AI Configuration</h2>
           <div className="grid md:grid-cols-3 gap-2">
             <select className="input" value={aiForm.provider} onChange={(e) => setAiForm((s) => ({ ...s, provider: e.target.value }))}>
-              {opts?.providers?.map((p) => <option key={p} value={p}>{p}</option>)}
+              {opts?.providers?.map((p) => <option key={p} value={p}>{PROVIDER_LABELS[p] || p}</option>)}
             </select>
             <select className="input" value={aiForm.openrouterKeyName} onChange={(e) => setAiForm((s) => ({ ...s, openrouterKeyName: e.target.value }))}>
               {(opts?.openrouterKeyNames || []).map((k) => <option key={k} value={k}>{k}</option>)}
             </select>
             <input className="input" placeholder="OpenRouter Model" value={aiForm.openrouterModel} onChange={(e) => setAiForm((s) => ({ ...s, openrouterModel: e.target.value }))} />
-            <input className="input" placeholder="DeepSeek URL" value={aiForm.deepseekUrl} onChange={(e) => setAiForm((s) => ({ ...s, deepseekUrl: e.target.value }))} />
-            <input className="input" placeholder="DeepSeek Model" value={aiForm.deepseekModel} onChange={(e) => setAiForm((s) => ({ ...s, deepseekModel: e.target.value }))} />
+            {aiForm.provider === 'deepseek_local' && (
+              <input className="input" placeholder="DeepSeek URL" value={aiForm.deepseekUrl} onChange={(e) => setAiForm((s) => ({ ...s, deepseekUrl: e.target.value }))} />
+            )}
+            {aiForm.provider === 'deepseek_api' && (
+              <>
+                <select className="input" value={aiForm.deepseekModel} onChange={(e) => setAiForm((s) => ({ ...s, deepseekModel: e.target.value }))}>
+                  {normalizeDeepseekModels(opts?.deepseekOfficialModels).map((m) => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </select>
+                <div className="text-xs text-slate-400 flex items-center">
+                  Uses `DEEPSEEK_API_KEY` from `ai-service/.env`, `thinking`, `reasoning_effort`, and the official DeepSeek endpoint.
+                </div>
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(aiForm.deepseekThinking)}
+                    onChange={(e) => setAiForm((s) => ({ ...s, deepseekThinking: e.target.checked }))}
+                  />
+                  Thinking mode
+                </label>
+                <select className="input" value={aiForm.deepseekReasoningEffort} onChange={(e) => setAiForm((s) => ({ ...s, deepseekReasoningEffort: e.target.value }))}>
+                  {(opts?.deepseekReasoningEffortOptions || ['high', 'max']).map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </>
+            )}
+            {aiForm.provider === 'deepseek_local' && (
+              <input className="input" placeholder="DeepSeek Model" value={aiForm.deepseekModel} onChange={(e) => setAiForm((s) => ({ ...s, deepseekModel: e.target.value }))} />
+            )}
             <input className="input" type="number" placeholder="Temperature" value={aiForm.temperature} onChange={(e) => setAiForm((s) => ({ ...s, temperature: Number(e.target.value) }))} />
             <input className="input" type="number" placeholder="Max Tokens" value={aiForm.maxTokens} onChange={(e) => setAiForm((s) => ({ ...s, maxTokens: Number(e.target.value) }))} />
             <input className="input" type="number" placeholder="Manual Bridge Timeout (seconds)" value={aiForm.manualBridgeTimeoutSeconds} onChange={(e) => setAiForm((s) => ({ ...s, manualBridgeTimeoutSeconds: Number(e.target.value) }))} />
@@ -119,7 +166,7 @@ export default function AdminControlPage() {
         <div className="card p-4 space-y-3">
           <h2 className="text-base font-semibold text-gray-100">Workspace Provisioning</h2>
           <p className="text-sm text-slate-300">
-            Organization and starter project are auto-created when a user logs in.
+            A personal organization workspace is auto-created when a user logs in.
             Users manage their own projects from the Projects section.
           </p>
         </div>

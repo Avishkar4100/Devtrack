@@ -38,7 +38,8 @@ async def summarize_jira(req: JiraSummaryRequest) -> Dict[str, Any]:
             issues=[i.model_dump() for i in req.issues],
             ai_config=req.ai_config,
         )
-        return {'success': True, 'data': result}
+        meta = llm_service.get_last_call_meta()
+        return {'success': True, 'data': result, 'meta': meta}
     except Exception as err:
         logger.error('Jira summarization failed for %s: %s', req.project_key, err)
         raise HTTPException(

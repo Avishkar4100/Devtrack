@@ -32,6 +32,10 @@ class GenerateStoriesRequest(BaseModel):
     ai_config: Optional[Dict[str, Any]] = None
 
 
+class GeneratePromptPreviewRequest(GenerateStoriesRequest):
+    pass
+
+
 class SuggestStoriesRequest(BaseModel):
     project_id: str
     project_name: str
@@ -257,11 +261,42 @@ async def generate_stories(req: GenerateStoriesRequest):
             team_members_json=json.dumps(req.team_members or [], ensure_ascii=False),
             ai_config=req.ai_config,
         )
+        meta = llm_service.get_last_call_meta()
 
-        return {"success": True, **result}
+        return {"success": True, **result, "meta": meta}
     except Exception as err:
         logger.error("Story generation failed for project %s module %s: %s", req.project_id, req.module_name, err)
         raise HTTPException(status_code=502, detail=f"Story generation failed: {_safe_error_text(err, 'LLM request failed')}")
+
+
+@router.post("/generate-prompt-preview")
+async def generate_prompt_preview(req: GeneratePromptPreviewRequest):
+    try:
+        context_chunks = rag_service.retrieve(
+            query=req.module_name,
+            project_id=req.project_id,
+            top_k=int(__import__('os').getenv('TOP_K_RETRIEVAL', 5)),
+        )
+
+        context_text = "\n\n".join(context_chunks) if context_chunks else ""
+
+        budget_info = f"Budget: ${req.budget:,.0f}" if req.budget else ""
+        deadline_info = f"Deadline: {req.deadline}" if req.deadline else ""
+        constraints = f"\n{budget_info}\n{deadline_info}".strip()
+
+        prompt = llm_service.preview_generate_stories_prompt(
+            project_name=req.project_name,
+            module_name=req.module_name,
+            context=context_text,
+            additional_context=req.additional_context or "",
+            constraints=constraints,
+            team_members_json=json.dumps(req.team_members or [], ensure_ascii=False),
+        )
+
+        return {"success": True, "prompt_preview": prompt}
+    except Exception as err:
+        logger.error("Story prompt preview failed for project %s module %s: %s", req.project_id, req.module_name, err)
+        raise HTTPException(status_code=502, detail=f"Story prompt preview failed: {_safe_error_text(err, 'LLM prompt preview failed')}")
 
 
 @router.post("/extract-requirements")
@@ -292,6 +327,7 @@ async def extract_requirements(req: ExtractRequirementsRequest):
             text=text,
             ai_config=req.ai_config,
         )
+        meta = llm_service.get_last_call_meta()
         logger.info(
             f"Successfully extracted requirements from {req.document_id}: "
             f"{len(extracted.get('functional_requirements', []))} functional, "
@@ -306,6 +342,7 @@ async def extract_requirements(req: ExtractRequirementsRequest):
     return {
         "success": True,
         **extracted,
+        "meta": meta,
         "parseMetadata": {
             "detectedType": parse_result.metadata.get("detected_type"),
             "detectionMethod": parse_result.metadata.get("detection_method"),
@@ -333,10 +370,11 @@ async def suggest_stories(req: SuggestStoriesRequest):
             project_state=req.project_state or {},
             ai_config=req.ai_config,
         )
+        meta = llm_service.get_last_call_meta()
     except Exception as err:
         raise HTTPException(status_code=502, detail=f"Suggest generation failed: {_safe_error_text(err, 'LLM suggest failed')}")
 
-    return {"success": True, "suggestions": suggestions}
+    return {"success": True, "suggestions": suggestions, "meta": meta}
 
 
 @router.post("/discover-gaps")
@@ -350,10 +388,11 @@ async def discover_gaps(req: DiscoverGapsRequest):
             completed_jira_ids_json=json.dumps(req.completed_jira_ids or [], ensure_ascii=False),
             ai_config=req.ai_config,
         )
+        meta = llm_service.get_last_call_meta()
     except Exception as err:
         raise HTTPException(status_code=502, detail=f"Gap discovery failed: {_safe_error_text(err, 'LLM gap discovery failed')}")
 
-    return {"success": True, "requirement_ids": requirement_ids}
+    return {"success": True, "requirement_ids": requirement_ids, "meta": meta}
 
 
 @router.post("/chunks-by-ids")
@@ -374,6 +413,7 @@ async def chunks_by_ids(req: ChunksByIdsRequest):
 async def standup_summary(req: StandupSummaryRequest):
     try:
         summary = llm_service.summarize_standup(context=req.prompt, ai_config=req.ai_config)
-        return {"success": True, "summary": summary}
+        meta = llm_service.get_last_call_meta()
+        return {"success": True, "summary": summary, "meta": meta}
     except Exception as err:
         raise HTTPException(status_code=502, detail=f"Standup summary failed: {_safe_error_text(err, 'LLM standup summarization failed')}")

@@ -18,7 +18,19 @@ export default function ProjectsPage() {
   const canManageProjects = user?.role !== 'admin'
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ name: '', description: '', key: '', color: '#6366f1', budget: '', deadline: '', technology: '', status: 'active' })
+  const [form, setForm] = useState({
+    name: '',
+    description: '',
+    key: '',
+    color: '#6366f1',
+    budget: '',
+    deadline: '',
+    technology: '',
+    status: 'active',
+    jiraProjectKey: '',
+    githubRepo: '',
+    githubBranch: 'main',
+  })
 
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ['projects'],
@@ -29,6 +41,23 @@ export default function ProjectsPage() {
     },
   })
 
+  const { data: jiraProjects = [] } = useQuery({
+    queryKey: ['projects-create-jira-projects', user?.jiraEmail, user?.jiraDomain],
+    enabled: Boolean(showCreate && user?.jiraEmail && user?.jiraDomain),
+    queryFn: async () => (await api.get('/jira/server/projects')).data.data || [],
+    staleTime: 1000 * 60 * 5,
+  })
+
+  const { data: githubRepos = [] } = useQuery({
+    queryKey: ['projects-create-github-repositories', user?.id, user?.hasGithubToken],
+    enabled: Boolean(showCreate && user?.hasGithubToken),
+    queryFn: async () => {
+      const { data } = await api.get('/github/repositories')
+      return data?.data?.repositories || []
+    },
+    staleTime: 1000 * 60 * 5,
+  })
+
   const createMutation = useMutation({
     mutationFn: (body) => api.post('/projects', body),
     onSuccess: () => {
@@ -36,6 +65,9 @@ export default function ProjectsPage() {
       setShowCreate(false)
       resetForm()
       toast.success('Project created!')
+    },
+    onError: (error) => {
+      toast.error(error?.response?.data?.message || 'Failed to create project')
     },
   })
 
@@ -47,20 +79,19 @@ export default function ProjectsPage() {
     },
   })
 
-  const createTestMutation = useMutation({
-    mutationFn: () => api.post('/projects', {
-      name: 'Test Project',
-      key: `TEST${Date.now().toString().slice(-4)}`,
-      description: 'Temporary debug seed project',
-      status: 'active',
-    }),
-    onSuccess: () => {
-      qc.invalidateQueries(['projects'])
-      toast.success('Test project created')
-    },
+  const resetForm = () => setForm({
+    name: '',
+    description: '',
+    key: '',
+    color: '#6366f1',
+    budget: '',
+    deadline: '',
+    technology: '',
+    status: 'active',
+    jiraProjectKey: '',
+    githubRepo: '',
+    githubBranch: 'main',
   })
-
-  const resetForm = () => setForm({ name: '', description: '', key: '', color: '#6366f1', budget: '', deadline: '', technology: '', status: 'active' })
 
   const handleNameChange = (name) => {
     setForm({ ...form, name, key: form.key || generateProjectKey(name) })
@@ -135,10 +166,6 @@ export default function ProjectsPage() {
                 <PlusIcon className="w-4 h-4" /> Create Project
               </motion.button>
             )}
-            <motion.button onClick={() => createTestMutation.mutate()} className="btn-secondary"
-              whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }} disabled={createTestMutation.isPending}>
-              {createTestMutation.isPending ? 'Creating...' : 'Create Test Project'}
-            </motion.button>
           </div>
         </motion.div>
       ) : (
@@ -158,7 +185,18 @@ export default function ProjectsPage() {
       <AnimatePresence>
         {showCreate && canManageProjects && (
           <Modal title="Create New Project" onClose={() => { setShowCreate(false); resetForm() }}>
-            <form onSubmit={(e) => { e.preventDefault(); createMutation.mutate(form) }} className="space-y-4">
+            <form onSubmit={(e) => {
+              e.preventDefault()
+              if (!form.jiraProjectKey) {
+                toast.error('Select a Jira project for this workspace project')
+                return
+              }
+              if (!form.githubRepo) {
+                toast.error('Select a GitHub repository for this workspace project')
+                return
+              }
+              createMutation.mutate(form)
+            }} className="space-y-4">
               <div>
                 <label className="input-label">Project Name *</label>
                 <input type="text" value={form.name} onChange={(e) => handleNameChange(e.target.value)}
@@ -200,6 +238,60 @@ export default function ProjectsPage() {
                 <input type="text" value={form.technology} onChange={(e) => setForm({ ...form, technology: e.target.value })}
                   className="input" placeholder="React, Node.js, MongoDB..." />
               </div>
+
+              <div className="grid grid-cols-1 gap-3">
+                <div>
+                  <label className="input-label">Jira Project *</label>
+                  <select
+                    value={form.jiraProjectKey}
+                    onChange={(e) => setForm({ ...form, jiraProjectKey: e.target.value })}
+                    className="input"
+                    required
+                    disabled={!user?.jiraEmail || !user?.jiraDomain}
+                  >
+                    <option value="">
+                      {user?.jiraEmail && user?.jiraDomain ? 'Select Jira project' : 'Configure Jira in Settings first'}
+                    </option>
+                    {jiraProjects.map((jp) => (
+                      <option key={jp.id || jp.key} value={jp.key}>{jp.key} - {jp.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="input-label">GitHub Repository *</label>
+                  <select
+                    value={form.githubRepo}
+                    onChange={(e) => setForm({ ...form, githubRepo: e.target.value })}
+                    className="input"
+                    required
+                    disabled={!user?.hasGithubToken}
+                  >
+                    <option value="">
+                      {user?.hasGithubToken ? 'Select GitHub repository' : 'Configure GitHub in Settings first'}
+                    </option>
+                    {githubRepos.map((repo) => {
+                      const fullName = repo?.full_name || repo?.fullName || repo?.name || ''
+                      return (
+                        <option key={fullName} value={fullName}>{fullName}</option>
+                      )
+                    })}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="input-label">GitHub Branch *</label>
+                  <input
+                    type="text"
+                    value={form.githubBranch}
+                    onChange={(e) => setForm({ ...form, githubBranch: e.target.value })}
+                    className="input"
+                    placeholder="main"
+                    required
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="input-label">Project Color</label>
                 <div className="flex gap-2 flex-wrap">

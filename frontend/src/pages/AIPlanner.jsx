@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom'
 import api from '@/lib/api'
 import { useProjectStore } from '@/store/projectStore'
 import { useWorkspaceStateStore } from '@/store/workspaceStateStore'
-import { useManualBridgeStore } from '@/store/manualBridgeStore'
 import { appLogger } from '@/lib/logger'
 import toast from 'react-hot-toast'
 
@@ -50,6 +49,11 @@ const validateBacklogItems = ({ epics, stories, tasks, subtasks }) => {
 
 const DEFAULT_SUGGESTIONS = { epics: [], stories: [], tasks: [] }
 const DEFAULT_BACKLOG_DRAFT = { epics: [], stories: [], tasks: [], subtasks: [] }
+const DEFAULT_SUGGEST_CONTEXT = {
+  discoveredRequirementIds: [],
+  fetchedChunks: 0,
+  fetchedChunkPreview: [],
+}
 const DEFAULT_PLANNER_CHAT = [
   {
     role: 'assistant',
@@ -66,7 +70,6 @@ export default function AIPlannerPage() {
   const {
     selectedProjectId,
     selectedJiraProjectKey,
-    setSelectedProjectId,
     setSelectedJiraProjectKey,
     projects,
   } = useProjectStore()
@@ -74,9 +77,7 @@ export default function AIPlannerPage() {
   const plannerHydrated = useWorkspaceStateStore((state) => state.hydrated)
   const persistedAIPlanner = useWorkspaceStateStore((state) => state.aiPlannerByProject[plannerStorageKey])
   const setAIPlannerState = useWorkspaceStateStore((state) => state.setAIPlannerState)
-  const manualBridgePendingCount = useManualBridgeStore((state) => state.pendingCount)
 
-  const [chatInput, setChatInput] = useState('')
   const [planningPrompt, setPlanningPrompt] = useState('')
   const [srsFile, setSrsFile] = useState(null)
   const [mapFile, setMapFile] = useState(null)
@@ -84,7 +85,9 @@ export default function AIPlannerPage() {
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [aiPlannerTab, setAiPlannerTab] = useState('planner')
   const [suggestions, setSuggestions] = useState(DEFAULT_SUGGESTIONS)
+  const [suggestContext, setSuggestContext] = useState(DEFAULT_SUGGEST_CONTEXT)
   const [backlogDraft, setBacklogDraft] = useState(DEFAULT_BACKLOG_DRAFT)
+  const [promptPreview, setPromptPreview] = useState('')
   const [latestDocumentStatus, setLatestDocumentStatus] = useState(null)
   const [lastSrsLabel, setLastSrsLabel] = useState('')
   const [plannerChat, setPlannerChat] = useState(DEFAULT_PLANNER_CHAT)
@@ -103,13 +106,14 @@ export default function AIPlannerPage() {
     plannerLoadedKeyRef.current = plannerStorageKey
     const snapshot = persistedAIPlanner || {}
 
-    setChatInput(snapshot.chatInput || '')
     setPlanningPrompt(snapshot.planningPrompt || '')
     setAiPlannerTab(snapshot.aiPlannerTab || 'planner')
     setSelectedSuggestionChips(Array.isArray(snapshot.selectedSuggestionChips) ? snapshot.selectedSuggestionChips : [])
     setSuggestionsOpen(Boolean(snapshot.suggestionsOpen))
     setSuggestions(snapshot.suggestions || DEFAULT_SUGGESTIONS)
+    setSuggestContext(snapshot.suggestContext || DEFAULT_SUGGEST_CONTEXT)
     setBacklogDraft(snapshot.backlogDraft || DEFAULT_BACKLOG_DRAFT)
+    setPromptPreview(snapshot.promptPreview || '')
     setLastSrsLabel(snapshot.lastSrsLabel || '')
     setPlannerChat(Array.isArray(snapshot.plannerChat) && snapshot.plannerChat.length ? snapshot.plannerChat : DEFAULT_PLANNER_CHAT)
   }, [plannerHydrated, plannerStorageKey, persistedAIPlanner])
@@ -119,26 +123,28 @@ export default function AIPlannerPage() {
     if (plannerLoadedKeyRef.current !== plannerStorageKey) return
 
     setAIPlannerState(plannerStorageKey, {
-      chatInput,
       planningPrompt,
       aiPlannerTab,
       selectedSuggestionChips,
       suggestionsOpen,
       suggestions,
+      suggestContext,
       backlogDraft,
+      promptPreview,
       lastSrsLabel,
       plannerChat,
     })
   }, [
     plannerHydrated,
     plannerStorageKey,
-    chatInput,
     planningPrompt,
     aiPlannerTab,
     selectedSuggestionChips,
     suggestionsOpen,
     suggestions,
+    suggestContext,
     backlogDraft,
+    promptPreview,
     lastSrsLabel,
     plannerChat,
     setAIPlannerState,
@@ -198,48 +204,31 @@ export default function AIPlannerPage() {
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-  const resolveProjectId = async () => {
-    if (selectedProjectId) return selectedProjectId
-
-    if (selectedJiraProjectKey) {
-      const linkedProject = projects.find((p) => p?.jiraProjectKey === selectedJiraProjectKey)
-      if (linkedProject?._id) {
-        setSelectedProjectId(linkedProject._id)
-        return linkedProject._id
-      }
+  const copyText = async (value, label = 'text') => {
+    const text = String(value || '').trim()
+    if (!text) {
+      toast.error(`Nothing to copy from ${label}`)
+      return
     }
 
-    const remoteProjects = (await api.get('/projects')).data.data || []
-    if (selectedJiraProjectKey) {
-      const linkedRemoteProject = remoteProjects.find((p) => p?.jiraProjectKey === selectedJiraProjectKey)
-      if (linkedRemoteProject?._id) {
-        setSelectedProjectId(linkedRemoteProject._id)
-        return linkedRemoteProject._id
-      }
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success(`${label} copied`)
+    } catch {
+      toast.error(`Could not copy ${label}`)
     }
-
-    if (remoteProjects[0]?._id) {
-      setSelectedProjectId(remoteProjects[0]._id)
-      return remoteProjects[0]._id
-    }
-    return ''
   }
+
+  const resolveProjectId = async () => selectedProjectId || ''
 
   useEffect(() => {
     if (!plannerHydrated) return
     if (projectBootstrapAttemptedRef.current) return
 
-    if (selectedProjectId) {
-      projectBootstrapAttemptedRef.current = true
-      return
-    }
-
-    if (!projects.length && !selectedJiraProjectKey) return
-
     projectBootstrapAttemptedRef.current = true
-    resolveProjectId().catch(() => {
+    if (!selectedProjectId) {
       projectBootstrapAttemptedRef.current = false
-    })
+    }
   }, [plannerHydrated, selectedProjectId, selectedJiraProjectKey, projects])
 
   const handleSrsFileChange = (e) => {
@@ -407,9 +396,6 @@ export default function AIPlannerPage() {
   })
 
   const generateRequirementMap = useMutation({
-    onMutate: () => {
-      window.dispatchEvent(new CustomEvent('manual-bridge:refresh'))
-    },
     mutationFn: async () => {
       const resolvedProjectId = await resolveProjectId()
       if (!resolvedProjectId) {
@@ -462,14 +448,11 @@ export default function AIPlannerPage() {
   })
 
   const fetchSuggestions = useMutation({
-    onMutate: () => {
-      window.dispatchEvent(new CustomEvent('manual-bridge:refresh'))
-    },
     mutationFn: async () => {
       const resolvedProjectId = await resolveProjectId()
       if (!resolvedProjectId) throw new Error('No project available. Please create one first.')
 
-      const inputText = chatInput.trim() || planningPrompt.trim() || 'Suggest next planning prompts'
+      const inputText = planningPrompt.trim() || 'Suggest next planning prompts'
       const projectStateResponse = await api.get(`/stories/project-state/${resolvedProjectId}`)
       const projectState = projectStateResponse?.data?.data || {}
 
@@ -496,11 +479,21 @@ export default function AIPlannerPage() {
       const tasks = Array.isArray(structured.tasks) ? structured.tasks : []
       const planningWarnings = data?.planningMeta?.warnings || []
       const isLowConfidence = data?.planningMeta?.contextQuality === 'low'
+      const nextSuggestContext = {
+        discoveredRequirementIds: Array.isArray(data?.planningMeta?.discoveredRequirementIds)
+          ? data.planningMeta.discoveredRequirementIds
+          : [],
+        fetchedChunks: Number(data?.planningMeta?.fetchedChunks || 0),
+        fetchedChunkPreview: Array.isArray(data?.planningMeta?.fetchedChunkPreview)
+          ? data.planningMeta.fetchedChunkPreview
+          : [],
+      }
       setSuggestions({
         epics,
         stories,
         tasks,
       })
+      setSuggestContext(nextSuggestContext)
       const hasAny = epics.length + stories.length + tasks.length > 0
       setSuggestionsOpen(hasAny)
 
@@ -540,7 +533,6 @@ export default function AIPlannerPage() {
   })
 
   const hasSuggestions = (suggestions.epics?.length || 0) + (suggestions.stories?.length || 0) + (suggestions.tasks?.length || 0) > 0
-  const llmActionWaiting = manualBridgePendingCount > 0
 
   const renderSuggestionGroup = (title, prefix, items = []) => {
     if (!items.length) return null
@@ -564,40 +556,63 @@ export default function AIPlannerPage() {
     )
   }
 
-  const generateBacklog = useMutation({
-    onMutate: () => {
-      window.dispatchEvent(new CustomEvent('manual-bridge:refresh'))
-    },
+  const buildCombinedPlanningContext = () => {
+    const suggestionContext = [
+      suggestions.epics.length > 0 && `Suggested Epics:\n${suggestions.epics.map((e) => `- ${e}`).join('\n')}`,
+      suggestions.stories.length > 0 && `Suggested Stories:\n${suggestions.stories.map((s) => `- ${s}`).join('\n')}`,
+      suggestions.tasks.length > 0 && `Suggested Tasks:\n${suggestions.tasks.map((t) => `- ${t}`).join('\n')}`,
+    ].filter(Boolean).join('\n\n')
+
+    const chatContext = plannerChat
+      .filter((m) => m.role === 'user')
+      .map((m) => m.text)
+      .join('\n')
+
+    const selectedContext = selectedSuggestionChips.length > 0 ? `Selected Planning Chips:\n${selectedSuggestionChips.map((s) => `- ${s}`).join('\n')}` : ''
+
+    return [
+      chatContext,
+      selectedContext,
+      planningPrompt && `Planning Prompt:\n${planningPrompt}`,
+      suggestionContext,
+    ].filter(Boolean).join('\n\n')
+  }
+
+  const previewBacklogPrompt = useMutation({
     mutationFn: async () => {
       const resolvedProjectId = await resolveProjectId()
       if (!resolvedProjectId) throw new Error('No project available. Please create one first.')
 
-      // Build comprehensive context combining user input, suggestions, planning prompt, and chat history
-      const suggestionContext = [
-        suggestions.epics.length > 0 && `Suggested Epics:\n${suggestions.epics.map((e) => `- ${e}`).join('\n')}`,
-        suggestions.stories.length > 0 && `Suggested Stories:\n${suggestions.stories.map((s) => `- ${s}`).join('\n')}`,
-        suggestions.tasks.length > 0 && `Suggested Tasks:\n${suggestions.tasks.map((t) => `- ${t}`).join('\n')}`,
-      ].filter(Boolean).join('\n\n')
+      const combinedContext = buildCombinedPlanningContext()
 
-      const chatContext = plannerChat
-        .filter((m) => m.role === 'user')
-        .map((m) => m.text)
-        .join('\n')
+      const response = await api.post(`/stories/generate-preview/${resolvedProjectId}`, {
+        moduleName,
+        additionalContext: combinedContext,
+        suggestContext,
+      }, {
+        timeout: 0,
+      })
+      return { data: response.data.data, resolvedProjectId }
+    },
+    onSuccess: ({ data }) => {
+      setPromptPreview(data?.promptPreview || '')
+      const previewLength = String(data?.promptPreview || '').length
+      setPlannerChat((prev) => [...prev, { role: 'assistant', text: `Backlog prompt preview ready (${previewLength} characters).` }])
+      toast.success('Prompt preview loaded')
+    },
+    onError: (error) => toast.error(error?.message || 'Failed to load prompt preview'),
+  })
 
-      const selectedContext = selectedSuggestionChips.length > 0 ? `Selected Planning Chips:\n${selectedSuggestionChips.map((s) => `- ${s}`).join('\n')}` : ''
-
-      const combinedContext = [
-        chatContext,
-        selectedContext,
-        planningPrompt && `Planning Prompt:\n${planningPrompt}`,
-        suggestionContext,
-      ]
-        .filter(Boolean)
-        .join('\n\n')
+  const generateBacklog = useMutation({
+    mutationFn: async () => {
+      const resolvedProjectId = await resolveProjectId()
+      if (!resolvedProjectId) throw new Error('No project available. Please create one first.')
+      const combinedContext = buildCombinedPlanningContext()
 
       const response = await api.post(`/stories/generate/${resolvedProjectId}`, {
         moduleName,
         additionalContext: combinedContext,
+        suggestContext,
       }, {
         timeout: 0,
       })
@@ -636,7 +651,8 @@ export default function AIPlannerPage() {
     onError: (error) => toast.error(error?.message || 'Failed to generate backlog'),
   })
 
-  const llmActionLocked = llmActionWaiting || fetchSuggestions.isPending || generateBacklog.isPending || generateRequirementMap.isPending
+  const llmActionLocked = fetchSuggestions.isPending || generateBacklog.isPending || generateRequirementMap.isPending
+    || previewBacklogPrompt.isPending
 
   const confirmAndPush = useMutation({
     mutationFn: async () => {
@@ -887,6 +903,33 @@ export default function AIPlannerPage() {
       ? `${srsFile.name} - ready to upload`
       : 'Not uploaded')
 
+  const getTimelineTone = (msg) => {
+    const text = String(msg?.text || '').toLowerCase()
+    const isError = /(failed|error|timeout|warning|warn|cancelled|rejected|invalid)/.test(text)
+
+    if (isError) {
+      return {
+        line: '#ef4444',
+        text: '#fca5a5',
+        glow: 'rgba(239, 68, 68, 0.28)',
+      }
+    }
+
+    if (msg?.role === 'user') {
+      return {
+        line: '#22c55e',
+        text: '#86efac',
+        glow: 'rgba(34, 197, 94, 0.2)',
+      }
+    }
+
+    return {
+      line: '#22c55e',
+      text: '#4ade80',
+      glow: 'rgba(34, 197, 94, 0.25)',
+    }
+  }
+
   return (
     <div className="p-5 max-w-[1250px] mx-auto">
       <h1 className="text-[40px] font-bold leading-none mb-4" style={{ color: 'var(--text-primary)' }}>AI Planner</h1>
@@ -949,7 +992,7 @@ export default function AIPlannerPage() {
               <button className="btn-secondary" onClick={() => generateRequirementMap.mutate()} disabled={llmActionLocked}>
                 {generateRequirementMap.isPending
                   ? 'Generating Map...'
-                  : (llmActionWaiting ? `Waiting for Request Terminal (${manualBridgePendingCount})...` : 'Create Requirement Map')}
+                  : 'Create Requirement Map'}
               </button>
               <button className="btn-secondary" onClick={() => mapPickerRef.current?.click()}>
                 Select Map .json
@@ -972,33 +1015,33 @@ export default function AIPlannerPage() {
               />
             </div>
 
-            <div className="mt-3">
-              <label className="block text-sm font-semibold mb-1">Chat Input</label>
-              <input
-                className="input"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask planner for next sprint plan"
-              />
-            </div>
-
             <div className="flex flex-wrap gap-2 mt-3">
               <button
                 className="btn-primary"
                 onClick={() => {
                   if (!ensureSrsReadyForPlanning()) return
-                  if (chatInput.trim()) {
-                    setPlannerChat((prev) => [...prev, { role: 'user', text: chatInput.trim() }])
+                  if (planningPrompt.trim()) {
+                    setPlannerChat((prev) => [...prev, { role: 'user', text: planningPrompt.trim() }])
                   }
-                  setPlanningPrompt((prev) => prev || chatInput)
-                  setChatInput('')
                   fetchSuggestions.mutate()
                 }}
                 disabled={llmActionLocked}
               >
                 {fetchSuggestions.isPending
                   ? 'Suggesting...'
-                  : (llmActionWaiting ? `Waiting for Request Terminal (${manualBridgePendingCount})...` : 'Suggest')}
+                  : 'Suggest'}
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  if (!ensureSrsReadyForPlanning()) return
+                  previewBacklogPrompt.mutate()
+                }}
+                disabled={llmActionLocked}
+              >
+                {previewBacklogPrompt.isPending
+                  ? 'Loading Prompt...'
+                  : 'Preview Backlog Prompt'}
               </button>
               <button
                 className="btn-primary"
@@ -1010,7 +1053,7 @@ export default function AIPlannerPage() {
               >
                 {generateBacklog.isPending
                   ? 'Generating...'
-                  : (llmActionWaiting ? `Waiting for Request Terminal (${manualBridgePendingCount})...` : 'Generate Backlog')}
+                  : 'Generate Backlog'}
               </button>
             </div>
 
@@ -1041,19 +1084,101 @@ export default function AIPlannerPage() {
               {!hasSuggestions && <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Click Suggest to generate dynamic recommendations.</p>}
             </div>
 
+            {(suggestContext.discoveredRequirementIds.length > 0 || suggestContext.fetchedChunks > 0) && (
+              <div className="mt-3 rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-input)' }}>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>Selected Retrieval Context</p>
+                  <button
+                    className="btn-secondary btn-sm"
+                    onClick={() => copyText(
+                      [
+                        `Requirement IDs: ${suggestContext.discoveredRequirementIds.length ? suggestContext.discoveredRequirementIds.join(', ') : 'none'}`,
+                        `Fetched chunks: ${suggestContext.fetchedChunks || 0}`,
+                        ...(suggestContext.fetchedChunkPreview || []).map((chunk, index) => `Chunk ${index + 1}: ${chunk}`),
+                      ].join('\n'),
+                      'retrieval context',
+                    )}
+                  >
+                    Copy All
+                  </button>
+                </div>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  Requirement IDs: {suggestContext.discoveredRequirementIds.length ? suggestContext.discoveredRequirementIds.join(', ') : 'none'}
+                </p>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  Fetched chunks: {suggestContext.fetchedChunks || 0}
+                </p>
+                {suggestContext.fetchedChunkPreview?.length > 0 ? (
+                  <div className="mt-2 space-y-2">
+                    {suggestContext.fetchedChunkPreview.map((chunk, index) => (
+                      <div key={`${index}-${String(chunk || '').slice(0, 16)}`} className="rounded-md border px-2 py-2" style={{ borderColor: 'rgba(148,163,184,0.22)', background: 'rgba(15,23,42,0.6)' }}>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Chunk {index + 1}</p>
+                          <button className="btn-secondary btn-sm" onClick={() => copyText(chunk, `chunk ${index + 1}`)}>Copy</button>
+                        </div>
+                        <p className="text-xs mt-1 break-words" style={{ color: 'var(--text-secondary)' }}>{chunk}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>No chunk preview returned yet.</p>
+                )}
+              </div>
+            )}
+
+            <div className="mt-3 rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-input)' }}>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>Generate Backlog Prompt Preview</p>
+                <div className="flex gap-2">
+                  <button className="btn-secondary btn-sm" onClick={() => copyText(promptPreview, 'prompt preview')} disabled={!promptPreview}>
+                    Copy Prompt
+                  </button>
+                  <button className="btn-secondary btn-sm" onClick={() => previewBacklogPrompt.mutate()} disabled={llmActionLocked}>
+                    {previewBacklogPrompt.isPending ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                This is the exact prompt payload returned by the backend for the current planner inputs.
+              </p>
+              <textarea
+                className="input min-h-[240px] mt-2 font-mono text-xs leading-5"
+                value={promptPreview || 'Click Preview Backlog Prompt to load the exact prompt.'}
+                readOnly
+              />
+            </div>
+
             <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--border)' }}>
               <h4 className="text-[20px] font-bold">Planner Timeline</h4>
-              <div className="mt-2 space-y-2 max-h-[320px] overflow-auto">
-                {plannerChat.map((msg, idx) => (
-                  <div key={`${msg.role}-${idx}`} className="rounded-md border px-3 py-2 text-sm" style={{
-                    borderColor: 'var(--border-input)',
-                    background: msg.role === 'assistant' ? 'var(--bg-input)' : 'rgba(99,102,241,0.18)',
-                    color: 'var(--text-primary)',
-                  }}>
-                    <span className="font-semibold mr-2">{msg.role === 'assistant' ? 'AI' : 'You'}:</span>
-                    {msg.text}
-                  </div>
-                ))}
+              <div
+                className="mt-2 space-y-2 max-h-[320px] overflow-auto rounded-md border p-2"
+                style={{
+                  borderColor: '#0f172a',
+                  background: '#020617',
+                  boxShadow: 'inset 0 0 0 1px rgba(34, 197, 94, 0.08)',
+                }}
+              >
+                {plannerChat.map((msg, idx) => {
+                  const tone = getTimelineTone(msg)
+                  return (
+                    <div
+                      key={`${msg.role}-${idx}`}
+                      className="rounded-md border px-3 py-2 text-sm"
+                      style={{
+                        borderColor: tone.line,
+                        background: 'rgba(2, 6, 23, 0.92)',
+                        color: tone.text,
+                        boxShadow: `0 0 0 1px ${tone.glow}`,
+                        fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+                      }}
+                    >
+                      <span className="font-semibold mr-2" style={{ color: tone.line }}>
+                        {msg.role === 'assistant' ? '[AI]' : '[YOU]'}:
+                      </span>
+                      {msg.text}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </div>

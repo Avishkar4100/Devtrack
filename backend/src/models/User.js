@@ -54,6 +54,10 @@ const UserSchema = new mongoose.Schema(
     githubUsername: {
       type: String,
     },
+    githubSelectedRepo: {
+      type: String,
+      trim: true,
+    },
     lastLogin: {
       type: Date,
     },

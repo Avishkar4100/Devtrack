@@ -4,15 +4,36 @@ const Story = require('../models/Story');
 const Document = require('../models/Document');
 const AuditLog = require('../models/AuditLog');
 const AIConfig = require('../models/AIConfig');
+const AIUsageLog = require('../models/AIUsageLog');
 const Organization = require('../models/Organization');
 const logger = require('../config/logger');
 const aiService = require('../services/aiService');
+const { calculateCostUsd, normalizeModel } = require('../services/aiUsageService');
 
-const SUPPORTED_AI_PROVIDERS = ['openrouter', 'deepseek_local', 'manual_bridge'];
+const SUPPORTED_AI_PROVIDERS = ['openrouter', 'deepseek_local', 'deepseek_api', 'manual_bridge'];
+const DEEPSEEK_OFFICIAL_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'];
+
+const getDefaultDeepseekModel = (provider) => (
+  provider === 'deepseek_api'
+    ? (process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash')
+    : (process.env.DEEPSEEK_MODEL || 'deepseek-chat')
+);
 
 const getOpenrouterKeyNames = () => Object.keys(process.env)
   .filter((k) => /^OPENROUTER_API_KEY(_\d+)?$/.test(k))
   .sort((a, b) => a.localeCompare(b));
+
+const getDefaultAIConfigName = (provider, index = 0) => {
+  const labels = {
+    openrouter: 'OpenRouter',
+    deepseek_local: 'DeepSeek Local',
+    deepseek_api: 'DeepSeek Official',
+    manual_bridge: 'Manual Bridge',
+  };
+  const label = labels[provider];
+  if (label) return `Default ${label}`;
+  return index === 0 ? 'Default AI Config' : `AI Config ${index + 1}`;
+};
 
 const normalizeAIConfig = (cfg, userId, index = 0) => {
   let changed = false;
@@ -21,7 +42,7 @@ const normalizeAIConfig = (cfg, userId, index = 0) => {
     changed = true;
   }
   if (!cfg.name || !cfg.name.trim()) {
-    cfg.name = index === 0 ? 'Default OpenRouter' : `AI Config ${index + 1}`;
+    cfg.name = getDefaultAIConfigName(cfg.provider, index);
     changed = true;
   }
   if (!cfg.openrouterKeyName) {
@@ -33,7 +54,19 @@ const normalizeAIConfig = (cfg, userId, index = 0) => {
     changed = true;
   }
   if (!cfg.deepseekModel) {
-    cfg.deepseekModel = 'deepseek-chat';
+    cfg.deepseekModel = getDefaultDeepseekModel(cfg.provider);
+    changed = true;
+  }
+  if (cfg.provider === 'deepseek_api' && cfg.deepseekThinking === undefined) {
+    cfg.deepseekThinking = true;
+    changed = true;
+  }
+  if (cfg.provider === 'deepseek_api' && !cfg.deepseekReasoningEffort) {
+    cfg.deepseekReasoningEffort = 'high';
+    changed = true;
+  }
+  if (cfg.deepseekBudgetUsd === undefined || Number(cfg.deepseekBudgetUsd) < 0) {
+    cfg.deepseekBudgetUsd = 0;
     changed = true;
   }
   if (!cfg.maxTokens || Number(cfg.maxTokens) < 4096) {
@@ -55,12 +88,15 @@ const ensureAIConfigs = async (userId = null) => {
 
   if (configs.length === 0) {
     const created = await AIConfig.create({
-      name: 'Default OpenRouter',
+      name: getDefaultAIConfigName('openrouter', 0),
       provider: 'openrouter',
       openrouterKeyName: 'OPENROUTER_API_KEY',
       openrouterModel: process.env.LLM_MODEL || 'google/gemma-3-27b-it:free',
       deepseekUrl: process.env.DEEPSEEK_LOCAL_URL || '',
-      deepseekModel: 'deepseek-chat',
+      deepseekModel: getDefaultDeepseekModel('openrouter'),
+      deepseekThinking: true,
+      deepseekReasoningEffort: 'high',
+      deepseekBudgetUsd: 0,
       isActive: true,
       updatedBy: userId || undefined,
     });
@@ -98,6 +134,9 @@ const buildAIConfigPayload = (body = {}) => {
     'openrouterModel',
     'deepseekUrl',
     'deepseekModel',
+    'deepseekThinking',
+    'deepseekReasoningEffort',
+    'deepseekBudgetUsd',
     'temperature',
     'maxTokens',
     'manualBridgeTimeoutSeconds',
@@ -110,7 +149,19 @@ const buildAIConfigPayload = (body = {}) => {
 
   if (payload.name !== undefined) payload.name = String(payload.name).trim();
   if (payload.provider !== undefined && !SUPPORTED_AI_PROVIDERS.includes(payload.provider)) {
-    throw new Error('Invalid provider. Allowed values: openrouter, deepseek_local, manual_bridge');
+    throw new Error('Invalid provider. Allowed values: openrouter, deepseek_local, deepseek_api, manual_bridge');
+  }
+  if (payload.deepseekThinking !== undefined) {
+    payload.deepseekThinking = payload.deepseekThinking === true || payload.deepseekThinking === 'true';
+  }
+  if (payload.deepseekReasoningEffort !== undefined && !['high', 'max'].includes(payload.deepseekReasoningEffort)) {
+    throw new Error('Invalid deepseekReasoningEffort. Allowed values: high, max');
+  }
+  if (payload.deepseekBudgetUsd !== undefined) {
+    payload.deepseekBudgetUsd = Number(payload.deepseekBudgetUsd);
+    if (Number.isNaN(payload.deepseekBudgetUsd) || payload.deepseekBudgetUsd < 0) {
+      throw new Error('Invalid deepseekBudgetUsd. Must be a non-negative number');
+    }
   }
   return payload;
 };
@@ -121,6 +172,9 @@ const toAIServicePayload = (cfg) => ({
   openrouterModel: cfg.openrouterModel,
   deepseekUrl: cfg.deepseekUrl,
   deepseekModel: cfg.deepseekModel,
+  deepseekThinking: cfg.deepseekThinking,
+  deepseekReasoningEffort: cfg.deepseekReasoningEffort,
+  deepseekBudgetUsd: cfg.deepseekBudgetUsd,
   temperature: cfg.temperature,
   maxTokens: cfg.maxTokens,
   manualBridgeTimeoutSeconds: cfg.manualBridgeTimeoutSeconds,
@@ -209,6 +263,11 @@ const getAIConfig = async (req, res) => {
         openrouterKeyNames: getOpenrouterKeyNames(),
         defaultOpenrouterModel: process.env.LLM_MODEL || 'google/gemma-3-27b-it:free',
         deepseekDefaultUrl: process.env.DEEPSEEK_LOCAL_URL || '',
+        deepseekDefaultModel: getDefaultDeepseekModel('deepseek_api'),
+        deepseekOfficialModels: DEEPSEEK_OFFICIAL_MODELS,
+        deepseekDefaultThinking: true,
+        deepseekReasoningEffortOptions: ['high', 'max'],
+        deepseekDefaultBudgetUsd: 0,
         manualBridgeDefaultTimeoutSeconds: Number(process.env.MANUAL_BRIDGE_TIMEOUT_SECONDS || 1800),
       },
     },
@@ -260,7 +319,9 @@ const createAIConfig = async (req, res) => {
   payload.provider = payload.provider || 'openrouter';
   payload.openrouterKeyName = payload.openrouterKeyName || 'OPENROUTER_API_KEY';
   payload.openrouterModel = payload.openrouterModel || process.env.LLM_MODEL || 'google/gemma-3-27b-it:free';
-  payload.deepseekModel = payload.deepseekModel || 'deepseek-chat';
+  payload.deepseekModel = payload.deepseekModel || getDefaultDeepseekModel(payload.provider);
+  payload.deepseekThinking = payload.deepseekThinking === undefined ? true : payload.deepseekThinking;
+  payload.deepseekReasoningEffort = payload.deepseekReasoningEffort || 'high';
   payload.manualBridgeTimeoutSeconds = Number(payload.manualBridgeTimeoutSeconds || process.env.MANUAL_BRIDGE_TIMEOUT_SECONDS || 1800);
 
   const shouldActivate = payload.isActive === true;
@@ -344,6 +405,96 @@ const deleteAIConfig = async (req, res) => {
   }
 
   res.status(200).json({ success: true, message: 'AI configuration deleted' });
+};
+
+const buildAIUsageLogQuery = (query = {}) => {
+  const filter = {};
+  if (query.provider) filter.provider = query.provider;
+  if (query.operation) filter.operation = query.operation;
+  if (query.status) filter.status = query.status;
+  if (query.model) filter.model = query.model;
+  return filter;
+};
+
+// @desc    List AI usage logs
+// @route   GET /api/admin/ai-usage-logs
+// @access  Private (Admin)
+const listAIUsageLogs = async (req, res) => {
+  const limit = Math.min(Number(req.query.limit || 50), 200);
+  const page = Math.max(Number(req.query.page || 1), 1);
+  const skip = (page - 1) * limit;
+  const filter = buildAIUsageLogQuery(req.query);
+
+  const [items, total] = await Promise.all([
+    AIUsageLog.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).populate('user', 'name email role'),
+    AIUsageLog.countDocuments(filter),
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      items,
+      total,
+      page,
+      limit,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    },
+  });
+};
+
+// @desc    Get AI usage summary
+// @route   GET /api/admin/ai-usage-summary
+// @access  Private (Admin)
+const getAIUsageSummary = async (req, res) => {
+  const provider = req.query.provider || 'deepseek_api';
+  const cfg = await AIConfig.findOne({ isActive: true }).lean();
+  const activeBudgetUsd = Number(cfg?.deepseekBudgetUsd || 0);
+  const match = buildAIUsageLogQuery({ provider, status: 'success' });
+
+  const agg = await AIUsageLog.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        totalCalls: { $sum: 1 },
+        totalPromptTokens: { $sum: '$promptTokens' },
+        totalCompletionTokens: { $sum: '$completionTokens' },
+        totalTokens: { $sum: '$totalTokens' },
+        totalCostUsd: { $sum: '$costUsd' },
+        avgLatencyMs: { $avg: '$latencyMs' },
+      },
+    },
+  ]);
+
+  const summary = agg[0] || {
+    totalCalls: 0,
+    totalPromptTokens: 0,
+    totalCompletionTokens: 0,
+    totalTokens: 0,
+    totalCostUsd: 0,
+    avgLatencyMs: 0,
+  };
+
+  const latestLogs = await AIUsageLog.find(match)
+    .sort({ createdAt: -1 })
+    .limit(10)
+    .populate('user', 'name email role');
+
+  res.status(200).json({
+    success: true,
+    data: {
+      provider,
+      budgetUsd: activeBudgetUsd,
+      spentUsd: summary.totalCostUsd || 0,
+      remainingUsd: activeBudgetUsd > 0 ? Math.max(0, activeBudgetUsd - (summary.totalCostUsd || 0)) : null,
+      totalCalls: summary.totalCalls || 0,
+      totalPromptTokens: summary.totalPromptTokens || 0,
+      totalCompletionTokens: summary.totalCompletionTokens || 0,
+      totalTokens: summary.totalTokens || 0,
+      avgLatencyMs: Math.round(summary.avgLatencyMs || 0),
+      latestLogs,
+    },
+  });
 };
 
 // @desc    Test AI config/provider health with a custom message
@@ -605,6 +756,8 @@ module.exports = {
   updateAIConfigById,
   activateAIConfig,
   deleteAIConfig,
+  listAIUsageLogs,
+  getAIUsageSummary,
   testAIConfig,
   listUsers,
   createUser,

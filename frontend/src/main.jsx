@@ -4,8 +4,8 @@ import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
-import App from './App.jsx'
 import './index.css'
+import './polyfills.js'
 import ThemeSync from './components/ThemeSync.jsx'
 import NotificationSync from './components/NotificationSync.jsx'
 import AppErrorBoundary from './components/AppErrorBoundary.jsx'
@@ -56,29 +56,40 @@ const queryClient = new QueryClient({
   },
 })
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <AppErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-          <ThemeSync />
-          <NotificationSync />
-          <App />
-          <Toaster
-            position="top-right"
-            toastOptions={{
-              style: {
-                background: '#ffffff',
-                color: '#111827',
-                border: '1px solid #e5e7eb',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-              },
-              success: { iconTheme: { primary: '#10b981', secondary: '#ffffff' } },
-              error: { iconTheme: { primary: '#ef4444', secondary: '#ffffff' } },
-            }}
-          />
-        </BrowserRouter>
-      </QueryClientProvider>
-    </AppErrorBoundary>
-  </React.StrictMode>
-)
+const root = ReactDOM.createRoot(document.getElementById('root'))
+
+const renderApp = async () => {
+  const { default: App } = await import('./App.jsx')
+
+  root.render(
+    <React.StrictMode>
+      <AppErrorBoundary>
+        <QueryClientProvider client={queryClient}>
+          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <ThemeSync />
+            <NotificationSync />
+            <App />
+            <Toaster
+              position="top-right"
+              toastOptions={{
+                style: {
+                  background: '#ffffff',
+                  color: '#111827',
+                  border: '1px solid #e5e7eb',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+                },
+                success: { iconTheme: { primary: '#10b981', secondary: '#ffffff' } },
+                error: { iconTheme: { primary: '#ef4444', secondary: '#ffffff' } },
+              }}
+            />
+          </BrowserRouter>
+        </QueryClientProvider>
+      </AppErrorBoundary>
+    </React.StrictMode>
+  )
+}
+
+renderApp().catch((error) => {
+  appLogger.error('Failed to bootstrap app', { error: error?.message || String(error) })
+  notifyGlobalError(error?.message || 'Failed to bootstrap application', 'bootstrap')
+})

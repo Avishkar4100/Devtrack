@@ -135,6 +135,7 @@ export default function WorkspacePage() {
   const [newCommentBody, setNewCommentBody] = useState('')
   const [editingCommentId, setEditingCommentId] = useState('')
   const [editingCommentBody, setEditingCommentBody] = useState('')
+  const [selectedCommitSha, setSelectedCommitSha] = useState('')
 
   const { data: project } = useQuery({
     queryKey: ['workspace-project', selectedProjectId],
@@ -160,11 +161,65 @@ export default function WorkspacePage() {
     queryFn: async () => (await api.get(`/stories/epics/${selectedProjectId}`)).data.data || [],
   })
 
-  const { data: commits = [] } = useQuery({
+  const { data: commitPayload } = useQuery({
     queryKey: ['workspace-commits', selectedProjectId],
     enabled: !!selectedProjectId,
-    queryFn: async () => (await api.get(`/github/commits/${selectedProjectId}`)).data.data || [],
+    queryFn: async () => {
+      const response = await api.get(`/github/commits/${selectedProjectId}`, { params: { fetchAll: true } })
+      return {
+        commits: response?.data?.data || [],
+        meta: response?.data?.meta || null,
+      }
+    },
   })
+
+  const commits = commitPayload?.commits || []
+  const commitFetchMeta = commitPayload?.meta || null
+
+  const sortedCommits = useMemo(() => (
+    [...(commits || [])].sort((a, b) => {
+      const aTime = new Date(a?.commit?.author?.date || a?.commit?.committer?.date || a?.date || a?.createdAt || 0).getTime()
+      const bTime = new Date(b?.commit?.author?.date || b?.commit?.committer?.date || b?.date || b?.createdAt || 0).getTime()
+      return bTime - aTime
+    })
+  ), [commits])
+
+  useEffect(() => {
+    if (!sortedCommits.length) {
+      setSelectedCommitSha('')
+      return
+    }
+
+    if (!selectedCommitSha || !sortedCommits.some((commit) => commit.sha === selectedCommitSha)) {
+      setSelectedCommitSha(sortedCommits[0]?.sha || '')
+    }
+  }, [sortedCommits, selectedCommitSha])
+
+  const {
+    data: selectedCommitDetail,
+    isLoading: isCommitDetailLoading,
+    isFetching: isCommitDetailFetching,
+  } = useQuery({
+    queryKey: ['workspace-commit-detail', selectedProjectId, selectedCommitSha],
+    enabled: activeTab === 'development' && !!selectedProjectId && !!selectedCommitSha,
+    queryFn: async () => (await api.get(`/github/commits/${selectedProjectId}/${selectedCommitSha}`)).data.data,
+  })
+
+  const selectedCommitTokenEstimate = useMemo(() => {
+    if (!selectedCommitDetail) return 0
+
+    const filePatches = (selectedCommitDetail.files || [])
+      .map((file) => file?.patch || '')
+      .join('\n')
+
+    const baseText = [
+      selectedCommitDetail.commit?.message || '',
+      selectedCommitDetail.commit?.author?.name || '',
+      filePatches,
+    ].join('\n')
+
+    return Math.max(0, Math.ceil(String(baseText).length / 4))
+  }, [selectedCommitDetail])
 
   const { data: dashboard } = useQuery({
     queryKey: ['workspace-dashboard', selectedProjectId],
@@ -459,15 +514,6 @@ export default function WorkspacePage() {
     closed: jiraSprintTimeline.filter((s) => String(s?.state).toLowerCase() === 'closed'),
   }), [jiraSprintTimeline])
 
-  const commitsByAuthor = useMemo(() => {
-    const map = new Map()
-    commits.forEach((c) => {
-      const author = getCommitAuthor(c)
-      map.set(author, (map.get(author) || 0) + 1)
-    })
-    return [...map.entries()].map(([author, count]) => ({ author, count }))
-  }, [commits])
-
   const teamMembers = useMemo(() => {
     const owner = project?.owner
       ? [{
@@ -607,11 +653,11 @@ export default function WorkspacePage() {
         </div>
       </div>
 
-      {!selectedProjectId && !selectedJiraProjectKey && (
-        <div className="card p-4 text-slate-400">Select a Jira project from the sidebar to load workspace data.</div>
+      {!selectedProjectId && (
+        <div className="card p-4 text-slate-400">Select a linked local project from the sidebar to load workspace data.</div>
       )}
 
-      {(selectedProjectId || selectedJiraProjectKey) && activeTab === 'active-sprints' && (
+      {selectedProjectId && activeTab === 'active-sprints' && (
         <div className="grid md:grid-cols-2 gap-3">
           <div className="card p-4">
             <h3 className="text-base font-semibold mb-2">Active Sprint</h3>
@@ -1157,7 +1203,7 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {(selectedProjectId || selectedJiraProjectKey) && activeTab === 'timeline' && (
+      {selectedProjectId && activeTab === 'timeline' && (
         <div className="card p-4">
           <h3 className="text-base font-semibold mb-2">Sprint Timeline</h3>
           <p className="text-xs text-slate-400 mb-3">
@@ -1206,7 +1252,7 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {(selectedProjectId || selectedJiraProjectKey) && activeTab === 'reports' && (
+      {selectedProjectId && activeTab === 'reports' && (
         <div className="grid md:grid-cols-2 gap-3">
           <div className="card p-4">
             <h3 className="text-base font-semibold mb-2">Velocity / Burndown Summary</h3>
@@ -1246,7 +1292,7 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {(selectedProjectId || selectedJiraProjectKey) && activeTab === 'team-members' && (
+      {selectedProjectId && activeTab === 'team-members' && (
         <div className="grid md:grid-cols-2 gap-3">
           <div className="card p-4">
             <h3 className="text-base font-semibold mb-2">Team Members</h3>
@@ -1278,50 +1324,129 @@ export default function WorkspacePage() {
                 return new Date(m.joinedAt) > new Date(latest) ? m.joinedAt : latest
               }, null))}
             </div>
+
+            <div className="mt-4 pt-3 border-t border-slate-700">
+              <h4 className="text-sm font-semibold text-slate-200 mb-2">Jira Contributor Activity</h4>
+              <ul className="space-y-2 text-sm text-slate-300">
+                {jiraIssueStats.assigneeDistribution.slice(0, 12).map((row) => (
+                  <li key={row.name} className="flex items-center justify-between border border-slate-700 rounded-md p-2">
+                    <span>{row.name}</span>
+                    <span className="text-slate-400">{row.count} issues</span>
+                  </li>
+                ))}
+                {jiraIssueStats.assigneeDistribution.length === 0 && <li className="text-slate-400">No Jira contributor activity yet.</li>}
+              </ul>
+            </div>
           </div>
         </div>
       )}
 
-      {(selectedProjectId || selectedJiraProjectKey) && activeTab === 'development' && (
-        <div className="grid md:grid-cols-2 gap-3">
+      {selectedProjectId && activeTab === 'development' && (
+        <div className="grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-3">
           <div className="card p-4">
-            <h3 className="text-base font-semibold mb-2">Recent Development Activity</h3>
+            <h3 className="text-base font-semibold mb-2">Recent Commits</h3>
+            {selectedProjectId && (
+              <p className="text-xs text-slate-400 mb-2">
+                Loaded {commitFetchMeta?.fetchedCount || sortedCommits.length} commits
+                {commitFetchMeta?.repo ? ` from ${commitFetchMeta.repo}` : ''}
+                {commitFetchMeta?.branch ? ` (${commitFetchMeta.branch})` : ''}
+                {commitFetchMeta?.complete === false ? ' • More commits exist; increase backend page cap.' : ''}
+              </p>
+            )}
             {selectedProjectId ? (
-              <ul className="space-y-2 text-sm text-slate-300 max-h-80 overflow-auto">
-                {commits.map((c) => (
-                  <li key={c._id || c.sha} className="border border-slate-700 rounded-md p-2">
-                    <p className="font-medium">{c.message || c.commit?.message || 'Commit'}</p>
-                    <p className="text-xs text-slate-400">{getCommitAuthor(c)} • {formatDate(c.createdAt || c.date || c.commit?.author?.date)}</p>
-                  </li>
-                ))}
-                {commits.length === 0 && <li className="text-slate-400">No local commit data.</li>}
+              <ul className="space-y-2 text-sm text-slate-300 max-h-[72vh] overflow-auto pr-1">
+                {sortedCommits.map((c) => {
+                  const isSelected = c.sha === selectedCommitSha
+                  return (
+                    <li key={c.sha || c._id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCommitSha(c.sha)}
+                        className={`w-full text-left border rounded-md p-3 transition-all duration-200 ${
+                          isSelected
+                            ? 'border-indigo-500 bg-indigo-500/10 shadow-[0_0_0_1px_rgba(99,102,241,0.35)]'
+                            : 'border-slate-700 bg-slate-900/40 hover:border-slate-500'
+                        }`}
+                      >
+                        <p className="font-medium line-clamp-2">{c.commit?.message || c.message || 'Commit'}</p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {(c.sha || '').slice(0, 10)} • {getCommitAuthor(c)} • {formatDate(c.commit?.author?.date || c.date || c.createdAt)}
+                        </p>
+                      </button>
+                    </li>
+                  )
+                })}
+                {sortedCommits.length === 0 && <li className="text-slate-400">No commit data found for this project.</li>}
               </ul>
             ) : (
               <p className="text-sm text-slate-400">Workspace GitHub activity unavailable until this Jira key is linked to a DevTrack project.</p>
             )}
           </div>
+
           <div className="card p-4">
-            <h3 className="text-base font-semibold mb-2">Jira Contributor Activity</h3>
-            <ul className="space-y-2 text-sm text-slate-300">
-              {jiraIssueStats.assigneeDistribution.slice(0, 8).map((row) => (
-                <li key={row.name} className="flex items-center justify-between border border-slate-700 rounded-md p-2">
-                  <span>{row.name}</span>
-                  <span className="text-slate-400">{row.count} issues</span>
-                </li>
-              ))}
-              {jiraIssueStats.assigneeDistribution.length === 0 && <li className="text-slate-400">No Jira contributor activity yet.</li>}
-            </ul>
-            {selectedProjectId && commitsByAuthor.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-slate-700">
-                <p className="text-xs text-slate-400 mb-2">Local Commit Contributors</p>
-                <ul className="space-y-1 text-sm text-slate-300">
-                  {commitsByAuthor.slice(0, 4).map((row) => (
-                    <li key={row.author} className="flex items-center justify-between">
-                      <span>{row.author}</span>
-                      <span className="text-slate-400">{row.count} commits</span>
-                    </li>
-                  ))}
-                </ul>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h3 className="text-base font-semibold">Commit Code View</h3>
+              {selectedProjectId && selectedCommitSha && selectedCommitDetail && !isCommitDetailLoading && (
+                <span className="text-[11px] px-2 py-1 rounded-full border border-slate-700 text-slate-300 bg-slate-900/60">
+                  Approx tokens: {selectedCommitTokenEstimate}
+                </span>
+              )}
+            </div>
+
+            {!selectedProjectId && (
+              <p className="text-sm text-slate-400">Select a linked project to inspect commit code changes.</p>
+            )}
+
+            {selectedProjectId && !selectedCommitSha && (
+              <p className="text-sm text-slate-400">Select a commit on the left to load file-level code changes.</p>
+            )}
+
+            {selectedProjectId && selectedCommitSha && isCommitDetailLoading && (
+              <div className="space-y-3 animate-pulse">
+                <div className="h-6 w-1/3 bg-slate-700 rounded" />
+                <div className="h-16 bg-slate-800 rounded" />
+                <div className="h-32 bg-slate-800 rounded" />
+              </div>
+            )}
+
+            {selectedProjectId && selectedCommitSha && selectedCommitDetail && !isCommitDetailLoading && (
+              <div className="space-y-3 max-h-[72vh] overflow-auto pr-1">
+                <div className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                  <p className="text-xs text-slate-400">Commit</p>
+                  <p className="text-sm text-slate-100 break-all">{selectedCommitDetail.sha}</p>
+                  <p className="text-sm text-slate-200 mt-2">{selectedCommitDetail.commit?.message || 'No commit message'}</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {selectedCommitDetail.commit?.author?.name || getCommitAuthor(selectedCommitDetail)} • {formatDateTime(selectedCommitDetail.commit?.author?.date || selectedCommitDetail.commit?.committer?.date)}
+                    {isCommitDetailFetching ? ' • Refreshing…' : ''}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Files changed: {selectedCommitDetail.files?.length || 0} • +{selectedCommitDetail.stats?.additions || 0} / -{selectedCommitDetail.stats?.deletions || 0}
+                  </p>
+                </div>
+
+                <div className="text-xs text-slate-400">Changed Files and Patch</div>
+
+                {(selectedCommitDetail.files || []).map((file) => (
+                  <div key={file.sha || file.filename} className="border border-slate-700 rounded-md p-3 bg-slate-900/40">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium text-slate-100 break-all">{file.filename}</p>
+                      <span className="text-[11px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-300">
+                        {file.status || 'modified'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1">+{file.additions || 0} / -{file.deletions || 0}</p>
+
+                    <div className="mt-2 rounded-md border border-slate-800 bg-black/50 p-2">
+                      <pre className="text-[11px] leading-5 whitespace-pre-wrap break-words text-slate-200 font-mono">
+                        {file.patch || 'No textual patch available for this file (binary or too large).'}
+                      </pre>
+                    </div>
+                  </div>
+                ))}
+
+                {(!selectedCommitDetail.files || selectedCommitDetail.files.length === 0) && (
+                  <p className="text-sm text-slate-400">No changed files were returned for this commit.</p>
+                )}
               </div>
             )}
           </div>

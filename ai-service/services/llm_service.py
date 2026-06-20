@@ -2,10 +2,12 @@ import os
 import json
 import re
 import logging
+from contextvars import ContextVar
 from typing import List, Dict, Any
 from services.manual_bridge_service import manual_bridge_service
 
 logger = logging.getLogger(__name__)
+_LAST_CALL_META: ContextVar[Dict[str, Any] | None] = ContextVar("_LAST_CALL_META", default=None)
 
 
 STORY_GENERATION_PROMPT = """### [CONTEXT_CACHE_START]
@@ -158,9 +160,11 @@ Module Focus: {module_name}
 User Instruction: {user_input}
 
 Task:
-1. Compare the requirement map against the completed Jira IDs and project state.
-2. Identify 5-8 requirement IDs that are missing, at risk, or need deeper exploration.
-3. Prefer IDs with visible gaps, dependencies, or blockers.
+1. Compare the requirement map against completed Jira IDs and current project state.
+2. Select a dynamic set of requirement IDs to explore next (typically 3-8, never fixed).
+3. If project state is mostly empty/early, prioritize foundational major requirements first.
+4. If major requirements are complete, prioritize remaining major gaps, blocked dependencies, and high-value minor items.
+5. Prefer IDs with visible dependency impact and sequencing value.
 
 Output rules:
 - Return ONLY valid JSON.
@@ -170,7 +174,7 @@ Output rules:
 JSON shape:
 {{
     "requirement_ids": ["FR-AUTH-001", "NFR-SEC-002"],
-    "reason": "One short sentence explaining selection strategy"
+    "reason": "One short sentence explaining selection strategy based on state and map"
 }}
 """
 
@@ -209,21 +213,24 @@ User Instruction:
 {user_custom_instruction}
 
 Task:
-Generate 6 to 7 precise, no-fluff next-step suggestions grounded in the targeted SRS chunks.
+Generate 6 to 7 precise, no-fluff backlog suggestions grounded in the targeted SRS chunks and current project state.
 
 Rules:
+- Use mixed types across: epic, story, task, subtask.
 - Every suggestion must reference at least one requirement ID (FR/NFR) in title or description.
-- Explain why now using dependency status from project state when possible.
+- Explain why now using project-state dependency/progress signals when possible.
 - Keep each suggestion specific and implementation-ready.
-- Avoid generic wording like optimize/refactor/improve unless explicitly requested.
+- Avoid generic wording unless explicitly requested by the user instruction.
 
 Return ONLY valid JSON:
 {{
     "suggestions": [
         {{
             "id": "sug-1",
+            "type": "story",
             "title": "Implement MFA verification flow (FR-AUTH-002)",
             "description": "Build TOTP enrollment and recovery codes; this depends on completed registration flow PROJ-10.",
+            "logic": "Missing high-value auth flow and depends on identity base already in-progress.",
             "impact": "High",
             "estimated_effort": "Medium",
             "module": "Auth"
@@ -257,6 +264,40 @@ class LLMService:
         self.model = os.getenv("LLM_MODEL", "google/gemini-2.0-flash-exp:free")
         self.max_tokens = int(os.getenv("MAX_TOKENS", 8192))
         self._client = None
+
+    @staticmethod
+    def _normalize_usage(response: Any) -> Dict[str, int]:
+        usage = getattr(response, "usage", None)
+        if usage is None and isinstance(response, dict):
+            usage = response.get("usage")
+
+        def _read(src: Any, key: str) -> int:
+            if src is None:
+                return 0
+            if isinstance(src, dict):
+                return int(src.get(key) or 0)
+            return int(getattr(src, key, 0) or 0)
+
+        return {
+            "prompt_tokens": _read(usage, "prompt_tokens"),
+            "completion_tokens": _read(usage, "completion_tokens"),
+            "total_tokens": _read(usage, "total_tokens"),
+            "prompt_cache_hit_tokens": _read(usage, "prompt_cache_hit_tokens"),
+            "prompt_cache_miss_tokens": _read(usage, "prompt_cache_miss_tokens"),
+        }
+
+    @staticmethod
+    def _trim_meta_text(value: Any, max_chars: int = 1200) -> str:
+        text = str(value or "").strip()
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + " ...[truncated]"
+
+    def _set_last_call_meta(self, meta: Dict[str, Any]):
+        _LAST_CALL_META.set(meta)
+
+    def get_last_call_meta(self) -> Dict[str, Any] | None:
+        return _LAST_CALL_META.get()
 
     def _get_client(self):
         if not self._client:
@@ -294,6 +335,17 @@ class LLMService:
         return OpenAI(
             api_key=api_key,
             base_url=normalized,
+        )
+
+    def _get_deepseek_official_client(self):
+        from openai import OpenAI
+        api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("DeepSeek API key is not configured")
+
+        return OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com",
         )
 
     @staticmethod
@@ -616,6 +668,24 @@ class LLMService:
             active_jira_state=compact_additional or "[]",
         )
 
+    def preview_generate_stories_prompt(
+        self,
+        project_name: str,
+        module_name: str,
+        context: str,
+        additional_context: str = "",
+        constraints: str = "",
+        team_members_json: str = "[]",
+    ) -> str:
+        return self._build_generate_prompt_with_budget(
+            project_name=project_name,
+            module_name=module_name,
+            context=context or "",
+            additional_context=additional_context or "",
+            constraints=constraints or "",
+            team_members_json=team_members_json or "[]",
+        )
+
     @staticmethod
     def _trim_text(value: Any, max_chars: int) -> str:
         text = str(value or "")
@@ -680,10 +750,11 @@ class LLMService:
         provider = cfg.get("provider") or "openrouter"
         resolved_temperature = float(cfg.get("temperature", temperature))
         resolved_max_tokens = int(cfg.get("maxTokens", self.max_tokens))
+        started_at = __import__("time").time()
 
         if provider == "manual_bridge":
             timeout_seconds = int(cfg.get("manualBridgeTimeoutSeconds") or os.getenv("MANUAL_BRIDGE_TIMEOUT_SECONDS") or 1800)
-            return manual_bridge_service.submit_and_wait(
+            result = manual_bridge_service.submit_and_wait(
                 prompt=prompt,
                 operation=operation,
                 timeout_seconds=timeout_seconds,
@@ -693,6 +764,20 @@ class LLMService:
                     "maxTokens": resolved_max_tokens,
                 },
             )
+            self._set_last_call_meta({
+                "provider": provider,
+                "model": cfg.get("model") or cfg.get("openrouterModel") or cfg.get("deepseekModel") or "",
+                "operation": operation,
+                "latencyMs": int((__import__("time").time() - started_at) * 1000),
+                "usage": None,
+                "request": {
+                    "promptPreview": self._trim_meta_text(prompt),
+                },
+                "response": {
+                    "textPreview": self._trim_meta_text(result),
+                },
+            })
+            return result
 
         if provider == "deepseek_local":
             deepseek_url = (cfg.get("deepseekUrl") or os.getenv("DEEPSEEK_LOCAL_URL") or "").strip()
@@ -709,8 +794,56 @@ class LLMService:
             )
             text = self._extract_text_from_chat_response(response)
             if text:
+                self._set_last_call_meta({
+                    "provider": provider,
+                    "model": deepseek_model,
+                    "operation": operation,
+                    "latencyMs": int((__import__("time").time() - started_at) * 1000),
+                    "usage": self._normalize_usage(response),
+                    "request": {
+                        "promptPreview": self._trim_meta_text(prompt),
+                    },
+                    "response": {
+                        "textPreview": self._trim_meta_text(text),
+                    },
+                })
                 return text
             raise ValueError("DeepSeek local provider returned an empty or unsupported response shape")
+
+        if provider == "deepseek_api":
+            deepseek_model = cfg.get("deepseekModel") or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+            deepseek_thinking = cfg.get("deepseekThinking")
+            if deepseek_thinking is None:
+                deepseek_thinking = True
+            deepseek_reasoning_effort = cfg.get("deepseekReasoningEffort") or "high"
+            client = self._get_deepseek_official_client()
+            response = client.chat.completions.create(
+                model=deepseek_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=resolved_temperature,
+                max_tokens=resolved_max_tokens,
+                reasoning_effort=deepseek_reasoning_effort,
+                extra_body={"thinking": {"type": "enabled" if deepseek_thinking else "disabled"}},
+            )
+            text = self._extract_text_from_chat_response(response)
+            if text:
+                self._set_last_call_meta({
+                    "provider": provider,
+                    "model": deepseek_model,
+                    "operation": operation,
+                    "latencyMs": int((__import__("time").time() - started_at) * 1000),
+                    "usage": self._normalize_usage(response),
+                    "request": {
+                        "promptPreview": self._trim_meta_text(prompt),
+                        "thinking": deepseek_thinking,
+                        "reasoningEffort": deepseek_reasoning_effort,
+                    },
+                    "response": {
+                        "textPreview": self._trim_meta_text(text),
+                    },
+                })
+                return text
+            raise ValueError("DeepSeek API provider returned an empty or unsupported response shape")
 
         key_name = cfg.get("openrouterKeyName") or "OPENROUTER_API_KEY"
         api_key = os.getenv(key_name) or os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
@@ -733,6 +866,19 @@ class LLMService:
                 )
                 text = self._extract_text_from_chat_response(response)
                 if text:
+                    self._set_last_call_meta({
+                        "provider": provider,
+                        "model": model,
+                        "operation": operation,
+                        "latencyMs": int((__import__("time").time() - started_at) * 1000),
+                        "usage": self._normalize_usage(response),
+                        "request": {
+                            "promptPreview": self._trim_meta_text(prompt),
+                        },
+                        "response": {
+                            "textPreview": self._trim_meta_text(text),
+                        },
+                    })
                     return text
                 raise ValueError(f"Provider returned an empty or unsupported response shape for model {model}")
             except Exception as e:
@@ -1164,7 +1310,7 @@ class LLMService:
                     continue
                 seen.add(val)
                 normalized.append(val)
-            return normalized[:8]
+            return normalized[:10]
         except Exception as parse_err:
             logger.warning("extract_target_requirement_ids JSON parse failed: %s | raw_head=%s", str(parse_err), raw[:260])
             raise ValueError("LLM returned invalid JSON for requirement ID discovery")
@@ -1226,10 +1372,6 @@ class LLMService:
 
         normalized = []
         module_catalog = [str(m).strip().lower() for m in (modules or []) if str(m).strip()]
-        banned_words = [
-            "optimize", "refactor", "improve", "enhance",
-            "validation", "error handling", "define", "plan",
-        ]
         seen_keys = set()
 
         for idx, item in enumerate(suggestions):
@@ -1237,33 +1379,42 @@ class LLMService:
                 continue
             title = str(item.get("title", "")).strip()
             description = str(item.get("description", "")).strip()
+            logic = str(item.get("logic", "")).strip()
             impact = str(item.get("impact", "medium")).strip().lower()
             effort = str(item.get("estimated_effort", "medium")).strip().lower()
 
-            action_type = "feature"
-            if impact == "high" and ("integration" in title.lower() or "api" in title.lower()):
-                action_type = "integration"
-            elif impact == "low":
-                action_type = "improvement"
+            raw_type = str(item.get("type", "")).strip().lower()
+            type_alias = {
+                "epic": "epic",
+                "story": "story",
+                "task": "task",
+                "subtask": "subtask",
+                "sub-task": "subtask",
+                "integration": "epic",
+                "improvement": "task",
+                "feature": "story",
+            }
+            action_type = type_alias.get(raw_type)
+            if not action_type:
+                if impact == "high" and ("integration" in title.lower() or "api" in title.lower()):
+                    action_type = "epic"
+                elif impact == "low":
+                    action_type = "task"
+                else:
+                    action_type = "story"
 
             priority = "high" if impact == "high" else ("low" if impact == "low" else "medium")
             module = str(item.get("module", module_name)).strip()
-            reason = description or f"Gap-analysis suggestion {idx + 1} (effort: {effort or 'medium'})."
+            reason = logic or description or f"Gap-analysis suggestion {idx + 1} (effort: {effort or 'medium'})."
 
             if not title:
                 continue
 
             title_low = title.lower()
-            if any(word in title_low for word in banned_words):
-                continue
-
-            if action_type not in {"feature", "improvement", "integration"}:
-                action_type = "feature"
+            if action_type not in {"epic", "story", "task", "subtask"}:
+                action_type = "story"
             if priority not in {"high", "medium", "low"}:
                 priority = "medium"
-
-            if phase == "start" and action_type == "improvement":
-                continue
 
             module_low = module.lower()
             if module_catalog and module_low not in module_catalog:
@@ -1281,13 +1432,13 @@ class LLMService:
                 "priority": priority,
                 "module": module,
                 "reason": reason,
+                "description": description,
+                "impact": impact,
+                "estimated_effort": effort,
             })
 
-        if phase == "start":
-            core = [x for x in normalized if x["type"] in {"feature", "integration"}]
-            if len(core) < 3:
-                raise ValueError("Insufficient core feature suggestions for START phase")
-            return core[:7]
+        if len(normalized) < 3:
+            raise ValueError("Insufficient structured suggestions generated")
 
         return normalized[:7]
 

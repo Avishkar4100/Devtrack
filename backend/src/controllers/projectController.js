@@ -5,6 +5,7 @@ const Story = require('../models/Story');
 const AuditLog = require('../models/AuditLog');
 const logger = require('../config/logger');
 const mongoose = require('mongoose');
+const axios = require('axios');
 
 const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(String(value || ''));
 
@@ -24,6 +25,23 @@ const toIdString = (value) => {
     }
   }
   return '';
+};
+
+const normalizeJiraDomain = (domain = '') => {
+  const raw = String(domain || '').trim().replace(/^"|"$/g, '');
+  if (!raw) return '';
+
+  try {
+    const parsed = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+    return parsed.hostname;
+  } catch {
+    return raw
+      .replace(/^https?:\/\//i, '')
+      .replace(/^"|"$/g, '')
+      .replace(/\/rest\/api\/\d+.*$/i, '')
+      .replace(/\/.*$/, '')
+      .replace(/\/+$/g, '');
+  }
 };
 
 // @desc    Get all projects for current user
@@ -81,16 +99,91 @@ const createProject = async (req, res) => {
     return res.status(403).json({ success: false, message: 'Admin accounts cannot create user workspace projects here' });
   }
 
-  const { name, description, key, budget, deadline, technology, color, tags } = req.body;
+  const {
+    name,
+    description,
+    key,
+    budget,
+    deadline,
+    technology,
+    color,
+    tags,
+    jiraProjectKey,
+    githubRepo,
+    githubBranch,
+  } = req.body;
+
+  const normalizedJiraKey = String(jiraProjectKey || '').trim().toUpperCase();
+  const normalizedRepo = String(githubRepo || '').trim();
+  const normalizedBranch = String(githubBranch || 'main').trim() || 'main';
+
+  if (!normalizedJiraKey) {
+    return res.status(400).json({ success: false, message: 'Jira project key is required when creating a project.' });
+  }
+  if (!normalizedRepo) {
+    return res.status(400).json({ success: false, message: 'GitHub repository (owner/repo) is required when creating a project.' });
+  }
 
   const fallbackKey = (name || 'PROJECT')
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '')
     .slice(0, 10) || 'PROJECT';
 
-  const defaultRepoOwner = (process.env.GITHUB_REPO_OWNER || '').trim();
-  const defaultRepoName = (process.env.GITHUB_REPO_NAME || '').trim();
-  const defaultGithubRepo = defaultRepoOwner && defaultRepoName ? `${defaultRepoOwner}/${defaultRepoName}` : undefined;
+  const integrationUser = await User.findById(req.user.id).select('+jiraApiToken +githubToken jiraEmail jiraDomain');
+  if (!integrationUser?.jiraApiToken || !integrationUser?.jiraEmail || !integrationUser?.jiraDomain) {
+    return res.status(400).json({ success: false, message: 'Jira is not configured. Save Jira credentials in Settings first.' });
+  }
+  if (!integrationUser?.githubToken) {
+    return res.status(400).json({ success: false, message: 'GitHub is not configured. Save GitHub token in Settings first.' });
+  }
+
+  const jiraDomain = normalizeJiraDomain(integrationUser.jiraDomain);
+  const jiraBase = `https://${jiraDomain}/rest/api/3`;
+
+  let jiraProject = null;
+  try {
+    const jiraRes = await axios.get(`${jiraBase}/project/${encodeURIComponent(normalizedJiraKey)}`, {
+      auth: {
+        username: integrationUser.jiraEmail,
+        password: integrationUser.jiraApiToken,
+      },
+    });
+    jiraProject = jiraRes.data;
+  } catch (error) {
+    const status = error?.response?.status;
+    if (status === 404) {
+      return res.status(400).json({ success: false, message: `Jira project key ${normalizedJiraKey} not found.` });
+    }
+    logger.warn(`Jira project validation failed during project create: ${error.message}`);
+    return res.status(400).json({ success: false, message: `Unable to validate Jira project key ${normalizedJiraKey}.` });
+  }
+
+  try {
+    await axios.get(`https://api.github.com/repos/${normalizedRepo}`, {
+      headers: {
+        Authorization: `token ${integrationUser.githubToken}`,
+        'User-Agent': 'DevTrack-App',
+      },
+    });
+  } catch (error) {
+    const status = error?.response?.status;
+    if (status === 404) {
+      return res.status(400).json({ success: false, message: `GitHub repository ${normalizedRepo} not found or not accessible.` });
+    }
+    logger.warn(`GitHub repo validation failed during project create: ${error.message}`);
+    return res.status(400).json({ success: false, message: `Unable to validate GitHub repository ${normalizedRepo}.` });
+  }
+
+  try {
+    await axios.get(`https://api.github.com/repos/${normalizedRepo}/branches/${encodeURIComponent(normalizedBranch)}`, {
+      headers: {
+        Authorization: `token ${integrationUser.githubToken}`,
+        'User-Agent': 'DevTrack-App',
+      },
+    });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: `GitHub branch ${normalizedBranch} not found in ${normalizedRepo}.` });
+  }
 
   const project = await Project.create({
     name,
@@ -102,8 +195,12 @@ const createProject = async (req, res) => {
     technology,
     color,
     tags,
-    githubRepo: defaultGithubRepo,
-    githubConnected: Boolean(defaultGithubRepo),
+    jiraProjectKey: jiraProject?.key || normalizedJiraKey,
+    jiraProjectId: jiraProject?.id || undefined,
+    jiraConnected: true,
+    githubRepo: normalizedRepo,
+    githubBranch: normalizedBranch,
+    githubConnected: true,
   });
 
   await AuditLog.create({
@@ -112,7 +209,13 @@ const createProject = async (req, res) => {
     action: 'project_created',
     entity: 'project',
     entityId: project._id,
-    details: { name: project.name, key: project.key },
+    details: {
+      name: project.name,
+      key: project.key,
+      jiraProjectKey: project.jiraProjectKey,
+      githubRepo: project.githubRepo,
+      githubBranch: project.githubBranch,
+    },
     ipAddress: req.ip,
   });
 

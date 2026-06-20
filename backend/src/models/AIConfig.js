@@ -10,7 +10,7 @@ const AIConfigSchema = new mongoose.Schema(
     },
     provider: {
       type: String,
-      enum: ['openrouter', 'deepseek_local', 'manual_bridge'],
+      enum: ['openrouter', 'deepseek_local', 'deepseek_api', 'manual_bridge'],
       default: 'openrouter',
     },
     openrouterKeyName: {
@@ -28,6 +28,20 @@ const AIConfigSchema = new mongoose.Schema(
     deepseekModel: {
       type: String,
       default: 'deepseek-chat',
+    },
+    deepseekThinking: {
+      type: Boolean,
+      default: true,
+    },
+    deepseekReasoningEffort: {
+      type: String,
+      enum: ['high', 'max'],
+      default: 'high',
+    },
+    deepseekBudgetUsd: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     temperature: {
       type: Number,

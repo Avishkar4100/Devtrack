@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 
 
 def _get_chroma_client(persist_dir: str):
+    os.environ.setdefault("ANONYMIZED_TELEMETRY", "FALSE")
     import chromadb
     from chromadb.config import Settings
 

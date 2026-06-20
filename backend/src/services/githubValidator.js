@@ -197,6 +197,49 @@ class GitHubValidator {
         total: repos.length,
       };
     } catch (error) {
+      if (error.response?.status === 401) {
+        return {
+          valid: false,
+          error: 'GitHub token is invalid or expired.',
+        };
+      }
+
+      if (error.response?.status === 403) {
+        const apiMessage = String(error.response?.data?.message || '').toLowerCase();
+        if (apiMessage.includes('rate limit')) {
+          return {
+            valid: false,
+            error: 'GitHub rate limit exceeded. Please wait a few minutes and try again.',
+          };
+        }
+
+        return {
+          valid: false,
+          error: 'GitHub token does not have permission to list repositories. Ensure repo and read:user scopes are granted.',
+        };
+      }
+
+      if (error.response?.status === 404) {
+        return {
+          valid: false,
+          error: 'GitHub repositories endpoint was not found. Please verify your token and account access.',
+        };
+      }
+
+      if (error.code === 'ECONNABORTED') {
+        return {
+          valid: false,
+          error: 'GitHub request timed out while loading repositories. Please retry.',
+        };
+      }
+
+      if (['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(error.code)) {
+        return {
+          valid: false,
+          error: 'GitHub API is unreachable from this server right now.',
+        };
+      }
+
       return {
         valid: false,
         error: `Failed to get repositories: ${error.message}`,

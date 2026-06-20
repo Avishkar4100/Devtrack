@@ -9,6 +9,8 @@ const {
   updateAIConfigById,
   activateAIConfig,
   deleteAIConfig,
+  listAIUsageLogs,
+  getAIUsageSummary,
   testAIConfig,
   listUsers,
   createUser,
@@ -25,6 +27,8 @@ router.put('/ai-config', updateAIConfig);
 router.put('/ai-config/:id', updateAIConfigById);
 router.put('/ai-config/:id/activate', activateAIConfig);
 router.delete('/ai-config/:id', deleteAIConfig);
+router.get('/ai-usage-logs', listAIUsageLogs);
+router.get('/ai-usage-summary', getAIUsageSummary);
 router.post('/ai-config/test', testAIConfig);
 
 router.get('/users', listUsers);

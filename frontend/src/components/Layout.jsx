@@ -15,7 +15,6 @@ import {
 } from '@heroicons/react/24/outline'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '@/store/themeStore'
-import RequestTerminal from '@/components/RequestTerminal'
 
 // Click-outside detector hook
 function useClickOutside(ref, callback) {
@@ -95,12 +94,6 @@ export default function Layout() {
     queryFn: async () => (await api.get('/projects')).data.data || [],
   })
 
-  const { data: jiraProjects = [] } = useQuery({
-    queryKey: ['layout-jira-projects'],
-    enabled: Boolean(user?.jiraEmail && user?.jiraDomain),
-    queryFn: async () => (await api.get('/jira/server/projects')).data.data || [],
-  })
-
   useEffect(() => {
     if (!Array.isArray(fetchedProjectsData)) return
 
@@ -116,32 +109,51 @@ export default function Layout() {
     [projects, selectedProjectId]
   )
 
-  const jiraLinkedProject = useMemo(
-    () => projects.find((p) => p?.jiraProjectKey && p.jiraProjectKey === selectedJiraProjectKey) || null,
-    [projects, selectedJiraProjectKey]
-  )
-
   useEffect(() => {
-    if (!activeProject) return
+    if (!activeProject) {
+      if (selectedJiraProjectKey) {
+        setSelectedJiraProjectKey('')
+      }
+      return
+    }
+
     const connectedJiraKey = activeProject.jiraProjectKey || ''
-    if (connectedJiraKey && selectedJiraProjectKey !== connectedJiraKey) {
+    if (selectedJiraProjectKey !== connectedJiraKey) {
       setSelectedJiraProjectKey(connectedJiraKey)
     }
   }, [activeProject, selectedJiraProjectKey, setSelectedJiraProjectKey])
 
-  useEffect(() => {
-    if (!selectedJiraProjectKey) return
+  const selectableProjects = useMemo(
+    () => projects.filter((p) => Boolean(p?.jiraConnected && p?.jiraProjectKey && p?.githubConnected && p?.githubRepo)),
+    [projects]
+  )
 
-    if (!jiraLinkedProject?._id) return
-    if (selectedProjectId !== jiraLinkedProject._id) {
-      setSelectedProjectId(jiraLinkedProject._id)
+  useEffect(() => {
+    if (!selectedProjectId) return
+    const stillSelectable = selectableProjects.some((p) => p._id === selectedProjectId)
+    if (stillSelectable) return
+
+    const fallbackProject = selectableProjects[0] || null
+    const fallbackProjectId = fallbackProject?._id || ''
+    const fallbackJiraKey = fallbackProject?.jiraProjectKey || ''
+
+    if (fallbackProjectId) {
+      if (selectedProjectId !== fallbackProjectId) {
+        setSelectedProjectId(fallbackProjectId)
+      }
+      if (selectedJiraProjectKey !== fallbackJiraKey) {
+        setSelectedJiraProjectKey(fallbackJiraKey)
+      }
+      return
     }
-  }, [
-    jiraLinkedProject,
-    selectedJiraProjectKey,
-    selectedProjectId,
-    setSelectedProjectId,
-  ])
+
+    if (selectedProjectId) {
+      setSelectedProjectId('')
+    }
+    if (selectedJiraProjectKey) {
+      setSelectedJiraProjectKey('')
+    }
+  }, [selectedProjectId, selectableProjects, setSelectedProjectId, setSelectedJiraProjectKey])
 
   useEffect(() => {
     if (!notificationOpen) return
@@ -245,28 +257,18 @@ export default function Layout() {
                 onChange={(e) => setSelectedProjectId(e.target.value)}
                 aria-label="Select workspace project"
               >
-                <option value="">Select Workspace Project</option>
-                {projects.map((p) => (
+                <option value="">Select Linked Workspace Project</option>
+                {selectableProjects.map((p) => (
                   <option key={p._id} value={p._id}>{p.key} - {p.name}</option>
                 ))}
               </select>
-              <select
-                className="input"
-                value={selectedJiraProjectKey}
-                onChange={(e) => setSelectedJiraProjectKey(e.target.value)}
-                aria-label="Select Jira project"
-                disabled={!user?.jiraEmail || !user?.jiraDomain}
-              >
-                <option value="">{user?.jiraEmail && user?.jiraDomain ? 'Select Jira Project' : 'Configure Jira in Settings'}</option>
-                {jiraProjects.map((jp) => (
-                  <option key={jp.id || jp.key} value={jp.key}>{jp.key} - {jp.name}</option>
-                ))}
-              </select>
-              {jiraLinkedProject && (
-                <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  Linked workspace: {jiraLinkedProject.name}
-                </p>
-              )}
+              <div className="rounded-md border border-slate-700 bg-slate-900/50 px-2 py-1.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <p>Jira: {activeProject?.jiraProjectKey || 'Not linked'}</p>
+                <p>GitHub: {activeProject?.githubRepo || 'Not linked'}</p>
+              </div>
+              <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Only local projects linked with Jira and GitHub can be selected.
+              </p>
             </div>
           </div>
         </nav>
@@ -426,7 +428,6 @@ export default function Layout() {
           </motion.div>
         </main>
 
-        <RequestTerminal projectId={selectedProjectId || undefined} />
       </div>
 
       {/* Mobile overlay */}

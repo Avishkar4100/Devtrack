@@ -73,6 +73,7 @@ async def analyze_code(req: AnalyzeRequest):
                     "status": result["status"],
                     "evidence": result.get("evidence", []),
                     "reasoning": result.get("reasoning", ""),
+                    "meta": llm_service.get_last_call_meta(),
                 })
             except Exception as story_err:
                 logger.error("Code analysis failed for story %s: %s", story.id, story_err)

@@ -78,6 +78,16 @@ const getGitHubHeaders = async (userId) => {
   return { Authorization: `token ${user.githubToken}`, 'User-Agent': 'DevTrack-App' };
 };
 
+const getUserSelectedRepo = async (userId) => {
+  const user = await User.findById(userId).select('githubSelectedRepo');
+  return String(user?.githubSelectedRepo || '').trim();
+};
+
+const hasNextPageFromLinkHeader = (linkHeader = '') => {
+  const text = String(linkHeader || '');
+  return /rel="next"/.test(text);
+};
+
 const persistCommit = async ({ projectId, commit, filesChanged = 0 }) => {
   if (!commit?.sha) return;
 
@@ -137,23 +147,48 @@ const connectRepo = async (req, res) => {
 const getCommits = async (req, res) => {
   let project = await Project.findById(req.params.projectId);
   project = await ensureProjectGitHubLink(project, req.user.id);
-  if (!project?.githubConnected || !project.githubRepo) {
+  const selectedRepo = await getUserSelectedRepo(req.user.id);
+  const repoToUse = selectedRepo || project?.githubRepo || '';
+  const branchToUse = project?.githubBranch || 'main';
+  if (!repoToUse) {
     return res.status(200).json({ success: true, data: [], message: 'No repository linked yet for this project' });
   }
 
   const headers = await getGitHubHeaders(req.user.id);
-  const response = await axios.get(
-    `https://api.github.com/repos/${project.githubRepo}/commits?sha=${project.githubBranch}&per_page=20`,
-    { headers }
-  );
+  const fetchAll = String(req.query.fetchAll || 'false').toLowerCase() === 'true';
+  const perPage = fetchAll ? 100 : 20;
+  const maxPages = fetchAll ? Number(process.env.GITHUB_MAX_COMMIT_PAGES || 50) : 1;
+
+  const commits = [];
+  let pagesFetched = 0;
+  let complete = true;
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const response = await axios.get(
+      `https://api.github.com/repos/${repoToUse}/commits`,
+      { headers, params: { sha: branchToUse, per_page: perPage, page } }
+    );
+
+    pagesFetched += 1;
+    const rows = Array.isArray(response.data) ? response.data : [];
+    commits.push(...rows);
+    const hasNext = hasNextPageFromLinkHeader(response.headers?.link);
+
+    if (!fetchAll) break;
+    if (!hasNext || rows.length === 0) break;
+
+    if (page === maxPages && hasNext) {
+      complete = false;
+    }
+  }
 
   // Persist commit activity for insight generation.
   await Promise.all(
-    response.data.map(async (commit) => {
+    commits.slice(0, 50).map(async (commit) => {
       let filesChanged = 0;
       try {
         const detail = await axios.get(
-          `https://api.github.com/repos/${project.githubRepo}/commits/${commit.sha}`,
+          `https://api.github.com/repos/${repoToUse}/commits/${commit.sha}`,
           { headers }
         );
         filesChanged = detail.data?.files?.length || 0;
@@ -167,6 +202,43 @@ const getCommits = async (req, res) => {
         filesChanged,
       });
     })
+  );
+
+  res.status(200).json({
+    success: true,
+    data: commits,
+    meta: {
+      repo: repoToUse,
+      branch: branchToUse,
+      fetchedCount: commits.length,
+      pagesFetched,
+      perPage,
+      complete,
+    },
+  });
+};
+
+// @desc    Get commit detail (files + patch) by sha
+// @route   GET /api/github/commits/:projectId/:sha
+// @access  Private
+const getCommitDetail = async (req, res) => {
+  const { projectId, sha } = req.params;
+  if (!sha || !String(sha).trim()) {
+    return res.status(400).json({ success: false, message: 'Commit sha is required' });
+  }
+
+  let project = await Project.findById(projectId);
+  project = await ensureProjectGitHubLink(project, req.user.id);
+  const selectedRepo = await getUserSelectedRepo(req.user.id);
+  const repoToUse = selectedRepo || project?.githubRepo || '';
+  if (!repoToUse) {
+    return res.status(200).json({ success: true, data: null, message: 'No repository linked yet for this project' });
+  }
+
+  const headers = await getGitHubHeaders(req.user.id);
+  const response = await axios.get(
+    `https://api.github.com/repos/${repoToUse}/commits/${sha}`,
+    { headers }
   );
 
   res.status(200).json({ success: true, data: response.data });
@@ -408,7 +480,15 @@ const getRepositories = async (req, res) => {
     const token = headers.Authorization.replace('token ', '');
 
     const result = await GitHubValidator.getAccessibleRepositories(token, 30);
-    res.status(result.valid ? 200 : 400).json({ success: result.valid, data: result });
+    if (!result.valid) {
+      return res.status(400).json({
+        success: false,
+        message: result.error || 'Unable to fetch accessible repositories',
+        data: result,
+      });
+    }
+
+    res.status(200).json({ success: true, data: result });
   } catch (error) {
     logger.error('Get repositories error:', error);
     sendError(res, error, 'Unable to fetch accessible repositories');
@@ -466,6 +546,7 @@ const getHealth = async (req, res) => {
 module.exports = {
   connectRepo,
   getCommits,
+  getCommitDetail,
   triggerAnalysis,
   handleWebhook,
   validateToken,

@@ -6,8 +6,20 @@ import toast from 'react-hot-toast'
 const PROVIDER_LABELS = {
   openrouter: 'OpenRouter',
   deepseek_local: 'DeepSeek Local',
+  deepseek_api: 'DeepSeek Official',
   manual_bridge: 'Manual Bridge',
 }
+
+const DEEPSEEK_OFFICIAL_MODELS = [
+  { value: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
+  { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro' },
+  { value: 'deepseek-chat', label: 'deepseek-chat (deprecated 2026-07-24)' },
+  { value: 'deepseek-reasoner', label: 'deepseek-reasoner (deprecated 2026-07-24)' },
+]
+
+const normalizeDeepseekModels = (models) => (models || DEEPSEEK_OFFICIAL_MODELS).map((model) => (
+  typeof model === 'string' ? { value: model, label: model } : model
+))
 
 const defaultForm = {
   name: '',
@@ -15,7 +27,9 @@ const defaultForm = {
   openrouterKeyName: 'OPENROUTER_API_KEY',
   openrouterModel: '',
   deepseekUrl: '',
-  deepseekModel: 'deepseek-chat',
+  deepseekModel: 'deepseek-v4-flash',
+  deepseekThinking: true,
+  deepseekReasoningEffort: 'high',
   temperature: 0.2,
   maxTokens: 4096,
 }
@@ -26,7 +40,9 @@ const toForm = (cfg) => ({
   openrouterKeyName: cfg.openrouterKeyName || 'OPENROUTER_API_KEY',
   openrouterModel: cfg.openrouterModel || '',
   deepseekUrl: cfg.deepseekUrl || '',
-  deepseekModel: cfg.deepseekModel || 'deepseek-chat',
+  deepseekModel: cfg.deepseekModel || 'deepseek-v4-flash',
+  deepseekThinking: cfg.deepseekThinking ?? true,
+  deepseekReasoningEffort: cfg.deepseekReasoningEffort || 'high',
   temperature: cfg.temperature ?? 0.2,
   maxTokens: cfg.maxTokens ?? 4096,
 })
@@ -115,7 +131,13 @@ export default function AdminAIConfigPage() {
 
   const startCreate = () => {
     setSelectedId(null)
-    setAiForm({ ...defaultForm, openrouterModel: opts?.defaultOpenrouterModel || '' })
+    setAiForm({
+      ...defaultForm,
+      openrouterModel: opts?.defaultOpenrouterModel || '',
+      deepseekModel: opts?.deepseekDefaultModel || 'deepseek-v4-flash',
+      deepseekThinking: opts?.deepseekDefaultThinking ?? true,
+      deepseekReasoningEffort: 'high',
+    })
     setIsCreating(true)
   }
 
@@ -187,7 +209,7 @@ export default function AdminAIConfigPage() {
 
           <div className="grid md:grid-cols-2 gap-2">
             <select className="input" value={aiForm.provider} onChange={(e) => setAiForm((s) => ({ ...s, provider: e.target.value }))}>
-              {(opts?.providers || ['openrouter', 'deepseek_local']).map((p) => (
+              {(opts?.providers || ['openrouter', 'deepseek_local', 'deepseek_api', 'manual_bridge']).map((p) => (
                 <option key={p} value={p}>{PROVIDER_LABELS[p] || p}</option>
               ))}
             </select>
@@ -214,6 +236,42 @@ export default function AdminAIConfigPage() {
               <input className="input" placeholder="DeepSeek Model" value={aiForm.deepseekModel} onChange={(e) => setAiForm((s) => ({ ...s, deepseekModel: e.target.value }))} />
               <p className="text-xs text-slate-400 md:col-span-2">
                 DeepSeek Local uses your local/hosted endpoint URL and model name. OpenRouter key settings are hidden for this provider.
+              </p>
+            </div>
+          )}
+
+          {aiForm.provider === 'deepseek_api' && (
+            <div className="grid md:grid-cols-2 gap-2">
+              <select className="input" value={aiForm.deepseekModel} onChange={(e) => setAiForm((s) => ({ ...s, deepseekModel: e.target.value }))}>
+                {normalizeDeepseekModels(opts?.deepseekOfficialModels).map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <div className="text-xs text-slate-400 flex items-center px-1">
+                Uses `DEEPSEEK_API_KEY` from `ai-service/.env` and the official DeepSeek API endpoint.
+              </div>
+              <label className="flex items-center gap-2 text-xs text-slate-300 md:col-span-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(aiForm.deepseekThinking)}
+                  onChange={(e) => setAiForm((s) => ({ ...s, deepseekThinking: e.target.checked }))}
+                />
+                Thinking mode
+              </label>
+              <select
+                className="input md:col-span-2"
+                value={aiForm.deepseekReasoningEffort}
+                onChange={(e) => setAiForm((s) => ({ ...s, deepseekReasoningEffort: e.target.value }))}
+              >
+                {(opts?.deepseekReasoningEffortOptions || ['high', 'max']).map((v) => (
+                  <option key={v} value={v}>{v}</option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-400 md:col-span-2">
+                DeepSeek Official uses `https://api.deepseek.com/chat/completions`, `max_tokens`, `thinking`, and `reasoning_effort` from the official API.
+                Legacy models `deepseek-chat` and `deepseek-reasoner` are still accepted for compatibility, but DeepSeek marks them deprecated on 2026-07-24.
               </p>
             </div>
           )}

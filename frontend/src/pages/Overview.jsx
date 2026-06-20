@@ -1,6 +1,7 @@
-import { useEffect, useMemo } from 'react'
+import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
 import api from '@/lib/api'
 import { useProjectStore } from '@/store/projectStore'
 
@@ -13,7 +14,6 @@ const riskFromProgress = (progress = 0) => {
 export default function OverviewPage() {
   const {
     projects: storeProjects,
-    setProjects,
     selectedProjectId,
     setSelectedProjectId,
     setSelectedJiraProjectKey,
@@ -21,37 +21,17 @@ export default function OverviewPage() {
 
   const {
     data: overviewSummary,
-    isLoading,
+    isFetching,
     isError,
     error,
+    refetch: loadOverviewSummary,
   } = useQuery({
-    queryKey: ['overview-summary'],
+    queryKey: ['overview-summary-manual'],
     queryFn: async () => (await api.get('/dashboard/overview-summary')).data.data,
+    enabled: false,
   })
 
-  const projects = useMemo(() => overviewSummary?.projects || [], [overviewSummary?.projects])
-
-  useEffect(() => {
-    const sameLength = storeProjects.length === projects.length
-    const sameIds = sameLength && storeProjects.every((p, idx) => p?._id === projects[idx]?._id)
-    if (sameIds) return
-    setProjects(projects)
-  }, [projects, setProjects, storeProjects])
-
-  useEffect(() => {
-    if (!projects.length) return
-
-    const selectedExists = selectedProjectId && projects.some((p) => p._id === selectedProjectId)
-    if (selectedExists) return
-
-    const nextProjectId = overviewSummary?.selectedProjectId || projects[0]?._id || ''
-    const selectedProject = projects.find((p) => p._id === nextProjectId)
-
-    if (nextProjectId) {
-      setSelectedProjectId(nextProjectId)
-      setSelectedJiraProjectKey(selectedProject?.jiraProjectKey || '')
-    }
-  }, [projects, selectedProjectId, overviewSummary?.selectedProjectId, setSelectedJiraProjectKey, setSelectedProjectId])
+  const projects = useMemo(() => overviewSummary?.projects || storeProjects || [], [overviewSummary?.projects, storeProjects])
 
   const selectedProject = useMemo(
     () => projects.find((project) => project._id === selectedProjectId) || null,
@@ -75,7 +55,23 @@ export default function OverviewPage() {
     setSelectedJiraProjectKey(project.jiraProjectKey || '')
   }
 
-  if (isLoading) {
+  const handleLoadOverview = async () => {
+    try {
+      const result = await loadOverviewSummary()
+      if (result?.isError || result?.status === 'error') {
+        throw result?.error || new Error('Failed to load AI overview')
+      }
+      const snapshot = result?.data
+      if (snapshot?.selectedProjectId) {
+        setSelectedProjectId(snapshot.selectedProjectId)
+        setSelectedJiraProjectKey(snapshot.selectedJiraProjectKey || '')
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to load AI overview')
+    }
+  }
+
+  if (!projects.length && isFetching) {
     return (
       <div className="p-6 max-w-7xl mx-auto space-y-4">
         <div className="grid md:grid-cols-4 gap-3">
@@ -115,7 +111,17 @@ export default function OverviewPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-5">
-      <h1 className="text-2xl font-bold text-gray-100">Overview</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold text-gray-100">Overview</h1>
+        <button
+          type="button"
+          className="btn-primary btn-sm"
+          onClick={handleLoadOverview}
+          disabled={isFetching}
+        >
+          {isFetching ? 'Loading AI Overview...' : 'Load AI Overview'}
+        </button>
+      </div>
 
       <div className="grid md:grid-cols-4 gap-3">
         <MetricCard label="Total Projects" value={metrics.total} />
@@ -158,7 +164,7 @@ export default function OverviewPage() {
         <div className="card p-4 h-fit">
           <h2 className="text-base font-semibold text-gray-100 mb-2">Today Summary</h2>
           <p className="text-sm text-slate-300 leading-relaxed">
-            {todaySummary || 'No summary yet. Connect project activity to generate AI summary.'}
+            {todaySummary || 'Click "Load AI Overview" to generate the AI summary for this workspace.'}
           </p>
         </div>
       </div>

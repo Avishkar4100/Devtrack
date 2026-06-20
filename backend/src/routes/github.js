@@ -3,6 +3,7 @@ const router = express.Router();
 const {
   connectRepo,
   getCommits,
+  getCommitDetail,
   triggerAnalysis,
   handleWebhook,
   validateToken,
@@ -30,6 +31,7 @@ router.get('/health', getHealth);
 // Original endpoints
 router.post('/connect/:projectId', connectRepo);
 router.get('/commits/:projectId', getCommits);
+router.get('/commits/:projectId/:sha', getCommitDetail);
 router.post('/analyze/:projectId', triggerAnalysis);
 
 module.exports = router;

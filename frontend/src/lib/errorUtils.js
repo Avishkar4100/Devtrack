@@ -36,6 +36,26 @@ const fromErrorArray = (errors = []) => {
     .join(', ')
 }
 
+const fromNestedGitHubPayload = (payload) => {
+  if (!payload || typeof payload !== 'object') return ''
+
+  const nestedMessage = asText(payload.message || payload.error)
+  if (nestedMessage) return nestedMessage
+
+  const nestedErrors = fromErrorArray(payload.errors)
+  if (nestedErrors) return nestedErrors
+
+  const nestedDetail = payload.detail
+  if (typeof nestedDetail === 'string' && nestedDetail.trim()) return nestedDetail.trim()
+
+  if (Array.isArray(nestedDetail)) {
+    const detailText = fromDetailArray(nestedDetail)
+    if (detailText) return detailText
+  }
+
+  return ''
+}
+
 const sanitizeMessage = (message, fallback) => {
   const raw = asText(message)
   if (!raw) return fallback
@@ -78,6 +98,9 @@ export const extractApiErrorMessage = (error, fallback = 'Something went wrong')
 
   const detailFromArray = fromDetailArray(detail)
   if (detailFromArray) return withRequestId(detailFromArray)
+
+  const nestedData = fromNestedGitHubPayload(responseData.data)
+  if (nestedData) return withRequestId(nestedData)
 
   const message = asText(responseData.message || responseData.error || error?.userMessage || error?.message)
   return withRequestId(message)

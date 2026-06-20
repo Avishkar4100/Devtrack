@@ -6,6 +6,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="DevTrack — AI-Powered IT Project Management System" />
     <title>DevTrack — AI Project Management</title>
+    <script>
+      (() => {
+        const nativeMatchMedia = window.matchMedia?.bind(window)
+
+        window.matchMedia = (query) => {
+          if (nativeMatchMedia) {
+            const mql = nativeMatchMedia(query)
+            if (mql) {
+              if (!mql.addListener) mql.addListener = () => {}
+              if (!mql.removeListener) mql.removeListener = () => {}
+              if (!mql.addEventListener) mql.addEventListener = () => {}
+              if (!mql.removeEventListener) mql.removeEventListener = () => {}
+              return mql
+            }
+          }
+
+          return {
+            matches: false,
+            media: String(query || ''),
+            onchange: null,
+            addListener: () => {},
+            removeListener: () => {},
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            dispatchEvent: () => false,
+          }
+        }
+      })()
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />

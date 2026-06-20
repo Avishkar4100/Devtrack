@@ -123,6 +123,105 @@ const buildVectorlessContextGraph = async (projectId) => {
   };
 };
 
+const buildGenerateStoriesContext = async (projectId, moduleName, additionalContext = '', suggestContext = {}) => {
+  const project = await Project.findById(projectId);
+  if (!project) return { project: null };
+
+  const processedDoc = await Document.findOne({ project: project._id, status: 'processed', isActive: true })
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  const [totalStories, completedStories, activeSprint] = await Promise.all([
+    Story.countDocuments({ project: project._id, type: { $in: ['story', 'task'] } }),
+    Story.countDocuments({ project: project._id, type: { $in: ['story', 'task'] }, status: 'done' }),
+    Sprint.findOne({ project: project._id, status: 'active' }).sort({ updatedAt: -1 }),
+  ]);
+  const pendingStories = Math.max(totalStories - completedStories, 0);
+
+  const projectStateContext = [
+    'Current project state:',
+    `- Completed tasks: ${completedStories}`,
+    `- Pending: ${pendingStories}`,
+    `- Current sprint: ${activeSprint?.name || 'No active sprint'}`,
+  ].join('\n');
+
+  const contextGraph = await buildVectorlessContextGraph(project._id);
+  const graphContext = `\n\nVectorless project graph context:\n${JSON.stringify(contextGraph)}`;
+
+  const users = await User.find({
+    _id: {
+      $in: [project.owner, ...(project.members || []).map((m) => m.user).filter(Boolean)],
+    },
+  }).select('name').lean();
+  const userNameMap = new Map(users.map((u) => [String(u._id), u.name || 'Unknown']));
+  const teamMembers = [
+    {
+      id: String(project.owner),
+      name: userNameMap.get(String(project.owner)) || 'Project Owner',
+      role: 'Owner',
+    },
+    ...(project.members || []).map((m) => ({
+      id: String(m.user),
+      name: userNameMap.get(String(m.user)) || 'Team Member',
+      role: m.role || 'manager',
+    })),
+  ];
+
+  const planningWarnings = [];
+  let contextQuality = 'high';
+  if (!processedDoc) {
+    contextQuality = 'low';
+    planningWarnings.push('No processed SRS found. Generated backlog is using project graph fallback context.');
+  }
+
+  const discoveredRequirementIds = Array.isArray(suggestContext?.discoveredRequirementIds)
+    ? suggestContext.discoveredRequirementIds.slice(0, 12)
+    : [];
+  const fetchedChunkPreview = Array.isArray(suggestContext?.fetchedChunkPreview)
+    ? suggestContext.fetchedChunkPreview.slice(0, 4)
+    : [];
+
+  const requirementMapItems = Array.isArray(processedDoc?.requirementMap?.items)
+    ? processedDoc.requirementMap.items
+      .slice(0, 30)
+      .map((item) => ({
+        id: item?.id || '',
+        title: item?.title || '',
+        module: item?.module || '',
+        status: item?.status || 'draft',
+      }))
+    : [];
+
+  const suggestDiscoveryContext = [
+    'Suggest-discovery context:',
+    `- selected requirement IDs: ${discoveredRequirementIds.length ? discoveredRequirementIds.join(', ') : 'none'}`,
+    `- fetched chunk count: ${Number(suggestContext?.fetchedChunks || 0)}`,
+    fetchedChunkPreview.length
+      ? `- fetched chunk preview: ${fetchedChunkPreview.map((chunk) => String(chunk || '').replace(/\s+/g, ' ').slice(0, 220)).join(' || ')}`
+      : '- fetched chunk preview: none',
+    requirementMapItems.length
+      ? `- requirement map snapshot: ${JSON.stringify(requirementMapItems)}`
+      : '- requirement map snapshot: none',
+  ].join('\n');
+
+  const enhancedContext = [additionalContext, projectStateContext, suggestDiscoveryContext, graphContext].filter(Boolean).join('\n\n');
+
+  return {
+    project,
+    processedDoc,
+    teamMembers,
+    enhancedContext,
+    planningMeta: {
+      contextQuality,
+      usedProcessedSrs: Boolean(processedDoc),
+      processedDocumentId: processedDoc?._id || null,
+      discoveredRequirementIds,
+      fetchedChunks: Number(suggestContext?.fetchedChunks || 0),
+      warnings: planningWarnings,
+    },
+  };
+};
+
 // @desc    Get epics and stories for a project
 // @route   GET /api/stories/project/:projectId
 // @access  Private
@@ -180,13 +279,14 @@ const getEpics = async (req, res) => {
 // @route   POST /api/stories/generate/:projectId
 // @access  Private (Scrum Master)
 const generateStories = async (req, res) => {
-  const { moduleName, documentId, additionalContext } = req.body;
+  const { moduleName, documentId, additionalContext, suggestContext } = req.body;
 
   if (!moduleName) {
     return res.status(400).json({ success: false, message: 'Module name is required' });
   }
 
-  const project = await Project.findById(req.params.projectId);
+  const projectContext = await buildGenerateStoriesContext(req.params.projectId, moduleName, additionalContext, suggestContext);
+  const project = projectContext.project;
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
   const aiHealth = await aiService.checkHealth();
@@ -202,64 +302,15 @@ const generateStories = async (req, res) => {
     });
   }
 
-  const processedDoc = await Document.findOne({ project: project._id, status: 'processed', isActive: true })
-    .sort({ updatedAt: -1 })
-    .lean();
-
-  const [totalStories, completedStories, activeSprint] = await Promise.all([
-    Story.countDocuments({ project: project._id, type: { $in: ['story', 'task'] } }),
-    Story.countDocuments({ project: project._id, type: { $in: ['story', 'task'] }, status: 'done' }),
-    Sprint.findOne({ project: project._id, status: 'active' }).sort({ updatedAt: -1 }),
-  ]);
-  const pendingStories = Math.max(totalStories - completedStories, 0);
-
-  const projectStateContext = [
-    'Current project state:',
-    `- Completed tasks: ${completedStories}`,
-    `- Pending: ${pendingStories}`,
-    `- Current sprint: ${activeSprint?.name || 'No active sprint'}`,
-  ].join('\n');
-
-  const contextGraph = await buildVectorlessContextGraph(project._id);
-  const graphContext = `\n\nVectorless project graph context:\n${JSON.stringify(contextGraph)}`;
-
-  const users = await User.find({
-    _id: {
-      $in: [project.owner, ...(project.members || []).map((m) => m.user).filter(Boolean)],
-    },
-  }).select('name').lean();
-  const userNameMap = new Map(users.map((u) => [String(u._id), u.name || 'Unknown']));
-  const teamMembers = [
-    {
-      id: String(project.owner),
-      name: userNameMap.get(String(project.owner)) || 'Project Owner',
-      role: 'Owner',
-    },
-    ...(project.members || []).map((m) => ({
-      id: String(m.user),
-      name: userNameMap.get(String(m.user)) || 'Team Member',
-      role: m.role || 'manager',
-    })),
-  ];
-
-  const planningWarnings = [];
-  let contextQuality = 'high';
-  if (!processedDoc) {
-    contextQuality = 'low';
-    planningWarnings.push('No processed SRS found. Generated backlog is using project graph fallback context.');
-  }
-
-  const enhancedContext = [additionalContext, projectStateContext, graphContext].filter(Boolean).join('\n\n');
-
   const result = await aiService.generateStories({
     projectId: project._id.toString(),
     projectName: project.name,
     moduleName,
     documentId,
-    additionalContext: enhancedContext,
+    additionalContext: projectContext.enhancedContext,
     budget: project.budget,
     deadline: project.deadline,
-    teamMembers,
+    teamMembers: projectContext.teamMembers,
   });
 
   await AuditLog.create({
@@ -277,11 +328,39 @@ const generateStories = async (req, res) => {
     data: {
       ...result,
       planningMeta: {
-        contextQuality,
-        usedProcessedSrs: Boolean(processedDoc),
-        processedDocumentId: processedDoc?._id || null,
-        warnings: planningWarnings,
+          ...projectContext.planningMeta,
       },
+    },
+  });
+};
+
+const previewGenerateStories = async (req, res) => {
+  const { moduleName, documentId, additionalContext, suggestContext } = req.body;
+
+  if (!moduleName) {
+    return res.status(400).json({ success: false, message: 'Module name is required' });
+  }
+
+  const projectContext = await buildGenerateStoriesContext(req.params.projectId, moduleName, additionalContext, suggestContext);
+  const project = projectContext.project;
+  if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+
+  const preview = await aiService.previewGenerateStoriesPrompt({
+    projectId: project._id.toString(),
+    projectName: project.name,
+    moduleName,
+    documentId,
+    additionalContext: projectContext.enhancedContext,
+    budget: project.budget,
+    deadline: project.deadline,
+    teamMembers: projectContext.teamMembers,
+  });
+
+  res.status(200).json({
+    success: true,
+    data: {
+      promptPreview: preview?.prompt_preview || preview?.prompt || '',
+      planningMeta: projectContext.planningMeta,
     },
   });
 };
@@ -335,10 +414,11 @@ const suggestStories = async (req, res) => {
 
   logger.info(`Suggest request project=${project._id} module=${moduleName} phase=${phase} modules=${structuredContext.modules.length} fr=${structuredContext.functional.length} nfr=${structuredContext.nonFunctional.length} actors=${structuredContext.actors.length} userInputChars=${(userInput || '').length}`);
 
-  let requirementMap = latestProcessedDoc?.requirementMap || null;
-  if (!requirementMap || !Array.isArray(requirementMap.items) || !requirementMap.items.length) {
-    const generatedMap = await DocumentService.generateRequirementMap(project._id.toString(), { source: 'auto_on_suggest' });
-    requirementMap = generatedMap.requirementMap;
+  const requirementMap = latestProcessedDoc?.requirementMap || { items: [] };
+  const hasRequirementMap = Array.isArray(requirementMap.items) && requirementMap.items.length > 0;
+  const planningWarnings = [];
+  if (!hasRequirementMap) {
+    planningWarnings.push('No requirement map found. Use Generate Requirement Map or upload a map before Suggest for stronger results.');
   }
 
   const projectState = providedProjectState && typeof providedProjectState === 'object' && !Array.isArray(providedProjectState)
@@ -430,6 +510,7 @@ const suggestStories = async (req, res) => {
     id: String(action?.id || `sug-${idx + 1}`),
     title: String(action?.title || '').trim(),
     description: String(action?.description || '').trim(),
+    reason: String(action?.reason || action?.logic || action?.description || '').trim(),
     impact: String(action?.impact || 'medium').trim(),
     estimated_effort: String(action?.estimated_effort || 'medium').trim(),
     module: String(action?.module || moduleName).trim(),
@@ -438,8 +519,9 @@ const suggestStories = async (req, res) => {
 
   normalizedActions.forEach((action) => {
     const line = `${action.title}${action.reason ? ` - ${action.reason}` : ''}`;
-    if (action.type === 'integration' || action.type === 'epic') structuredSuggestions.epics.push(line);
-    else if (action.type === 'improvement' || action.type === 'task') structuredSuggestions.tasks.push(line);
+    const type = String(action.type || '').toLowerCase();
+    if (type === 'integration' || type === 'epic') structuredSuggestions.epics.push(line);
+    else if (type === 'improvement' || type === 'task' || type === 'subtask' || type === 'sub-task') structuredSuggestions.tasks.push(line);
     else structuredSuggestions.stories.push(line);
   });
 
@@ -470,9 +552,13 @@ const suggestStories = async (req, res) => {
         requirementMapItems: Array.isArray(requirementMap?.items) ? requirementMap.items.length : 0,
         discoveredRequirementIds,
         fetchedChunks: fetchedChunks.length,
-        warnings: latestProcessedDoc
-          ? []
-          : ['No processed SRS found. Suggestions are generated from project graph fallback context.'],
+        fetchedChunkPreview: fetchedChunks.slice(0, 3).map((chunk) => String(chunk || '').replace(/\s+/g, ' ').slice(0, 220)),
+        warnings: [
+          ...planningWarnings,
+          ...(latestProcessedDoc
+            ? []
+            : ['No processed SRS found. Suggestions are generated from project graph fallback context.']),
+        ],
       },
       contextSummary: {
         source: 'requirements_structured',
@@ -993,6 +1079,7 @@ module.exports = {
   getEpics,
   getProjectState,
   generateStories,
+  previewGenerateStories,
   suggestStories,
   saveGeneratedStories,
   createStory,

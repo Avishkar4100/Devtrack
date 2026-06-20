@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   UserCircleIcon, KeyIcon, CodeBracketIcon, LinkIcon,
@@ -128,7 +128,9 @@ export default function SettingsPage() {
   const { user, updateUser } = useAuthStore()
   const [profile, setProfile] = useState({ name: user?.name || '' })
   const [jira, setJira] = useState({ jiraEmail: user?.jiraEmail || '', jiraDomain: user?.jiraDomain || '', jiraApiToken: '' })
-  const [github, setGithub] = useState({ githubToken: '', githubUsername: user?.githubUsername || '' })
+  const [github, setGithub] = useState({ githubToken: '', githubUsername: user?.githubUsername || '', githubSelectedRepo: user?.githubSelectedRepo || '' })
+  const [githubTokenVerified, setGithubTokenVerified] = useState(false)
+  const [githubTokenPreview, setGithubTokenPreview] = useState(null)
   const [jiraTestStatus, setJiraTestStatus] = useState(null)
   const [jiraConnectedUser, setJiraConnectedUser] = useState(null)
   const [activeTab, setActiveTab] = useState('profile')
@@ -142,6 +144,65 @@ export default function SettingsPage() {
     mutationFn: (body) => api.put('/auth/integrations', body),
     onSuccess: ({ data }) => { updateUser(data.data); toast.success('Integration saved!') },
   })
+
+  const verifyGithubMutation = useMutation({
+    mutationFn: (token) => api.post('/github/validate-token', { token }),
+    onSuccess: ({ data }) => {
+      const result = data?.data || {}
+      if (!result.valid) {
+        setGithubTokenVerified(false)
+        setGithubTokenPreview(null)
+        toast.error(result.error || 'GitHub token verification failed')
+        return
+      }
+
+      setGithubTokenVerified(true)
+      setGithubTokenPreview(result)
+
+      if (result.user) {
+        setGithub((prev) => ({
+          ...prev,
+          githubUsername: prev.githubUsername?.trim() ? prev.githubUsername : result.user,
+        }))
+      }
+
+      toast.success('GitHub token verified')
+    },
+    onError: (err) => {
+      setGithubTokenVerified(false)
+      setGithubTokenPreview(null)
+      toast.error(err.response?.data?.message || 'GitHub token verification failed')
+    },
+  })
+
+  const {
+    data: githubRepos = [],
+    isLoading: isGithubReposLoading,
+    isError: isGithubReposError,
+    error: githubReposError,
+  } = useQuery({
+    queryKey: ['settings-github-repositories', user?.id, user?.hasGithubToken],
+    enabled: Boolean(activeTab === 'github' && user?.hasGithubToken),
+    queryFn: async () => {
+      const { data } = await api.get('/github/repositories')
+      return data?.data?.repositories || []
+    },
+    retry: false,
+    staleTime: 1000 * 60 * 5,
+  })
+
+  useEffect(() => {
+    setGithub((prev) => ({
+      ...prev,
+      githubUsername: user?.githubUsername || prev.githubUsername || '',
+      githubSelectedRepo: user?.githubSelectedRepo || prev.githubSelectedRepo || '',
+    }))
+  }, [user?.githubUsername, user?.githubSelectedRepo])
+
+  useEffect(() => {
+    setGithubTokenVerified(false)
+    setGithubTokenPreview(null)
+  }, [github.githubToken])
 
   const testJiraMutation = useMutation({
     mutationFn: () => api.get('/jira/test'),
@@ -161,9 +222,24 @@ export default function SettingsPage() {
   }
   const handleSaveGitHub = (e) => {
     e.preventDefault()
-    const payload = { githubUsername: github.githubUsername }
+    if (github.githubToken && !githubTokenVerified) {
+      toast.error('Verify your GitHub token before saving it.')
+      return
+    }
+
+    const payload = { githubUsername: github.githubUsername, githubSelectedRepo: github.githubSelectedRepo || '' }
     if (github.githubToken) payload.githubToken = github.githubToken
     integrationsMutation.mutate(payload)
+  }
+
+  const handleVerifyGitHub = () => {
+    const token = github.githubToken.trim()
+    if (!token) {
+      toast.error('Enter a GitHub token to verify')
+      return
+    }
+
+    verifyGithubMutation.mutate(token)
   }
 
   const tabs = [
@@ -315,17 +391,68 @@ export default function SettingsPage() {
                 <Field label="GitHub Username" hint="Your GitHub username">
                   <input type="text" value={github.githubUsername} onChange={e => setGithub({ ...github, githubUsername:e.target.value })} className="input" placeholder="octocat" />
                 </Field>
-                <Field label="Personal Access Token" hint="Needs repo and read:user scopes. Leave blank to keep existing.">
-                  <SecretInput value={github.githubToken} onChange={e => setGithub({ ...github, githubToken:e.target.value })} placeholder="ghp_..." name="githubToken" />
+              <Field label="Personal Access Token" hint="Needs repo and read:user scopes. Leave blank to keep existing.">
+                <SecretInput value={github.githubToken} onChange={e => setGithub({ ...github, githubToken:e.target.value })} placeholder="ghp_..." name="githubToken" />
+              </Field>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'10px', flexWrap:'wrap' }}>
+                <p style={{ fontSize:'11px', color:'var(--text-muted)' }}>
+                  Verify the token first. If it fails, do not save it.
+                </p>
+                <motion.button
+                  type="button"
+                  onClick={handleVerifyGitHub}
+                  disabled={verifyGithubMutation.isPending || !github.githubToken.trim()}
+                  className="btn-secondary"
+                  whileHover={{ scale:1.03 }}
+                  whileTap={{ scale:0.97 }}
+                >
+                  {verifyGithubMutation.isPending ? 'Verifying…' : 'Verify Token'}
+                </motion.button>
+              </div>
+              {githubTokenVerified && githubTokenPreview && (
+                <div style={{ display:'flex', flexDirection:'column', gap:'6px', padding:'12px 14px', borderRadius:'12px', background:'rgba(16,185,129,0.08)', border:'1px solid rgba(16,185,129,0.2)' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap' }}>
+                    <StatusChip status="success" />
+                    <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>
+                      Verified as @{githubTokenPreview.user || 'unknown'}
+                    </span>
+                  </div>
+                  {Array.isArray(githubTokenPreview.scopes) && githubTokenPreview.scopes.length > 0 && (
+                    <p style={{ fontSize:'11px', color:'var(--text-muted)' }}>
+                      Scopes: {githubTokenPreview.scopes.join(', ')}
+                    </p>
+                  )}
+                </div>
+              )}
+              <Field label="Current Repository" hint="This selected repository will be used in Workspace Development commit listing.">
+                <select
+                  value={github.githubSelectedRepo}
+                    onChange={(e) => setGithub({ ...github, githubSelectedRepo: e.target.value })}
+                    className="input"
+                    disabled={!user?.hasGithubToken}
+                  >
+                    <option value="">Auto-select (latest accessible repo)</option>
+                    {githubRepos.map((repo) => (
+                      <option key={repo.fullName} value={repo.fullName}>{repo.fullName}</option>
+                    ))}
+                  </select>
+                  {isGithubReposLoading && <p style={{ fontSize:'11px', color:'var(--text-muted)' }}>Loading repositories...</p>}
+                  {isGithubReposError && (
+                    <p style={{ fontSize:'11px', color:'#f87171', lineHeight:1.45 }}>
+                      Unable to load repositories: {githubReposError?.message || 'GitHub returned an unknown error'}
+                    </p>
+                  )}
                 </Field>
                 {user?.githubUsername && (
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
                     <StatusChip status="success" />
-                    <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>Connected as @{user.githubUsername}</span>
+                    <span style={{ fontSize:'12px', color:'var(--text-muted)' }}>
+                      Connected as @{user.githubUsername}{user?.githubSelectedRepo ? ` • Repo: ${user.githubSelectedRepo}` : ''}
+                    </span>
                   </div>
                 )}
                 <div style={{ display:'flex', justifyContent:'flex-end' }}>
-                  <motion.button type="submit" disabled={integrationsMutation.isPending} className="btn-primary"
+                  <motion.button type="submit" disabled={integrationsMutation.isPending || (github.githubToken && !githubTokenVerified)} className="btn-primary"
                     whileHover={{ scale:1.03 }} whileTap={{ scale:0.97 }}>
                     {integrationsMutation.isPending ? 'Saving…' : 'Save GitHub'}
                   </motion.button>

@@ -3,6 +3,9 @@ import logging
 from dotenv import load_dotenv
 load_dotenv()
 
+# Force-disable Chroma telemetry before any Chroma client import/initialization.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "FALSE")
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +15,9 @@ from routers import documents, stories, github_analysis, jira, manual_bridge
 from services.embeddings import EmbeddingService
 
 logger = logging.getLogger(__name__)
+logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
+logging.getLogger("chromadb.telemetry.product").setLevel(logging.CRITICAL)
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
 app = FastAPI(
     title="DevTrack AI Microservice",
@@ -52,7 +58,7 @@ async def health():
     """Basic health check with Chroma and embedding model verification."""
     health_status = {
         "status": "healthy",
-        "llm_model": os.getenv("LLM_MODEL", "deepseek-chat"),
+        "llm_model": os.getenv("LLM_MODEL", "deepseek-v4-flash"),
         "embedding_model": os.getenv("EMBEDDING_MODEL", "local-onnx"),
         "chroma_dir": os.getenv("CHROMA_PERSIST_DIR", "./chroma_store"),
     }
@@ -98,13 +104,17 @@ async def health_detailed():
     
     try:
         import chromadb
+        from chromadb.config import Settings
         persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./chroma_store")
         
         if not os.path.exists(persist_dir):
             os.makedirs(persist_dir, exist_ok=True)
             details["note"] = "Chroma directory created"
         
-        client = chromadb.PersistentClient(path=persist_dir)
+        client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=Settings(anonymized_telemetry=False),
+        )
         collections = client.list_collections()
         
         for col in collections:

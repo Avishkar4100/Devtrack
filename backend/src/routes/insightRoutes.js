@@ -1,11 +1,16 @@
 const express = require('express');
 const { protect } = require('../middleware/auth');
-const { generateInsightsController, generateGlobalInsightsController } = require('../controllers/insightController');
+const {
+	generateInsightsController,
+	generateGlobalInsightsController,
+	generateScrumMarkdownInsightsController,
+} = require('../controllers/insightController');
 
 const router = express.Router();
 
 router.use(protect);
 router.get('/global', generateGlobalInsightsController);
+router.get('/:projectId/scrum-markdown', generateScrumMarkdownInsightsController);
 router.get('/:projectId', generateInsightsController);
 
 module.exports = router;

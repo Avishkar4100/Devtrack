@@ -29,6 +29,7 @@ const toSafeUserPayload = (user) => ({
   jiraEmail: user.jiraEmail,
   jiraDomain: user.jiraDomain,
   githubUsername: user.githubUsername,
+  githubSelectedRepo: user.githubSelectedRepo,
   hasJiraToken: Boolean(user.jiraApiToken),
   hasGithubToken: Boolean(user.githubToken),
   jiraTokenPreview: maskSecret(user.jiraApiToken || ''),
@@ -318,7 +319,7 @@ const updateProfile = async (req, res) => {
 // @route   PUT /api/auth/integrations
 // @access  Private
 const updateIntegrations = async (req, res) => {
-  const { jiraApiToken, jiraEmail, jiraDomain, githubToken, githubUsername } = req.body;
+  const { jiraApiToken, jiraEmail, jiraDomain, githubToken, githubUsername, githubSelectedRepo } = req.body;
 
   const user = await User.findById(req.user.id).select('+jiraApiToken +githubToken');
   const normalizeDomain = (value = '') =>
@@ -332,6 +333,7 @@ const updateIntegrations = async (req, res) => {
   if (jiraDomain !== undefined) user.jiraDomain = normalizeDomain(jiraDomain);
   if (githubToken !== undefined) user.githubToken = githubToken;
   if (githubUsername !== undefined) user.githubUsername = githubUsername;
+  if (githubSelectedRepo !== undefined) user.githubSelectedRepo = String(githubSelectedRepo || '').trim();
 
   await user.save({ validateBeforeSave: false });
 
