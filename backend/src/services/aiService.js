@@ -137,7 +137,20 @@ const ingestDocument = async ({ documentId, filePath, fileType, namespace, proje
 /**
  * Generate stories from a module description using RAG
  */
-const generateStories = async ({ projectId, projectName, moduleName, documentId, additionalContext, budget, deadline, teamMembers }) => {
+const generateStories = async ({
+  projectId,
+  projectName,
+  moduleName,
+  documentId,
+  additionalContext,
+  budget,
+  deadline,
+  teamMembers,
+  selectedPath,
+  selectedRequirements,
+  chunkRefs,
+  sectionRefs,
+}) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
     const requestSummary = buildUsageRequestSummary('generateStories', [
@@ -155,6 +168,10 @@ const generateStories = async ({ projectId, projectName, moduleName, documentId,
       budget,
       deadline: deadline ? new Date(deadline).toISOString() : null,
       team_members: Array.isArray(teamMembers) ? teamMembers : [],
+      selected_path: selectedPath || {},
+      selected_requirements: Array.isArray(selectedRequirements) ? selectedRequirements : [],
+      chunk_refs: Array.isArray(chunkRefs) ? chunkRefs : [],
+      section_refs: Array.isArray(sectionRefs) ? sectionRefs : [],
       ai_config: aiConfig,
     }, { timeout: 0 });
     await recordUsageIfPresent({
@@ -191,7 +208,20 @@ const generateStories = async ({ projectId, projectName, moduleName, documentId,
   }
 };
 
-const previewGenerateStoriesPrompt = async ({ projectId, projectName, moduleName, documentId, additionalContext, budget, deadline, teamMembers }) => {
+const previewGenerateStoriesPrompt = async ({
+  projectId,
+  projectName,
+  moduleName,
+  documentId,
+  additionalContext,
+  budget,
+  deadline,
+  teamMembers,
+  selectedPath,
+  selectedRequirements,
+  chunkRefs,
+  sectionRefs,
+}) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
     const response = await aiClient.post('/stories/generate-prompt-preview', {
@@ -203,6 +233,10 @@ const previewGenerateStoriesPrompt = async ({ projectId, projectName, moduleName
       budget,
       deadline: deadline ? new Date(deadline).toISOString() : null,
       team_members: Array.isArray(teamMembers) ? teamMembers : [],
+      selected_path: selectedPath || {},
+      selected_requirements: Array.isArray(selectedRequirements) ? selectedRequirements : [],
+      chunk_refs: Array.isArray(chunkRefs) ? chunkRefs : [],
+      section_refs: Array.isArray(sectionRefs) ? sectionRefs : [],
       ai_config: aiConfig,
     }, { timeout: 0 });
     return response.data;
@@ -283,7 +317,7 @@ const suggestStories = async ({ projectId, projectName, moduleName, userInput, c
       aiConfig,
       requestSummary,
       responseData: response.data,
-      responseSummary: summarizeText(JSON.stringify(response.data?.suggestions || response.data || {}), 500),
+      responseSummary: summarizeText(JSON.stringify(response.data?.paths || response.data || {}), 500),
     });
     return response.data;
   } catch (error) {
@@ -322,7 +356,7 @@ const discoverGaps = async ({ projectId, moduleName, userInput, requirementMap, 
       aiConfig,
       requestSummary,
       responseData: response.data,
-      responseSummary: summarizeText(JSON.stringify(response.data?.requirement_ids || response.data || {}), 500),
+      responseSummary: summarizeText(JSON.stringify(response.data?.paths || response.data || {}), 500),
     });
     return response.data;
   } catch (error) {
@@ -346,6 +380,22 @@ const getChunksByIds = async ({ projectId, requirementIds, topKPerId = 2 }) => {
     logger.error(`AI Service - getChunksByIds error: ${error.message}`);
     if (isServiceUnavailableError(error)) {
       throw asServiceUnavailable('retrieve targeted SRS chunks', error);
+    }
+    throw error;
+  }
+};
+
+const getChunksByRefs = async ({ projectId, chunkRefs }) => {
+  try {
+    const response = await postWithRetry('/stories/chunks-by-refs', {
+      project_id: projectId,
+      chunk_refs: chunkRefs || [],
+    }, {}, 2);
+    return response.data;
+  } catch (error) {
+    logger.error(`AI Service - getChunksByRefs error: ${error.message}`);
+    if (isServiceUnavailableError(error)) {
+      throw asServiceUnavailable('retrieve exact SRS chunks', error);
     }
     throw error;
   }
@@ -592,6 +642,7 @@ module.exports = {
   suggestStories,
   discoverGaps,
   getChunksByIds,
+  getChunksByRefs,
   extractRequirements,
   testLLM,
   checkHealth,

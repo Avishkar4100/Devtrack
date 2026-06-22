@@ -29,6 +29,10 @@ class GenerateStoriesRequest(BaseModel):
     budget: Optional[float] = None
     deadline: Optional[str] = None
     team_members: Optional[List[Dict[str, Any]]] = None
+    selected_path: Optional[Dict[str, Any]] = None
+    selected_requirements: Optional[List[Dict[str, Any]]] = None
+    chunk_refs: Optional[List[Dict[str, Any]]] = None
+    section_refs: Optional[List[Dict[str, Any]]] = None
     ai_config: Optional[Dict[str, Any]] = None
 
 
@@ -61,6 +65,11 @@ class ChunksByIdsRequest(BaseModel):
     project_id: str
     requirement_ids: List[str]
     top_k_per_id: Optional[int] = 2
+
+
+class ChunksByRefsRequest(BaseModel):
+    project_id: str
+    chunk_refs: List[Dict[str, Any]]
 
 
 class ExtractRequirementsRequest(BaseModel):
@@ -237,12 +246,31 @@ Generated Jira JSON:
 async def generate_stories(req: GenerateStoriesRequest):
     """RAG-based story generation: retrieve context from KB → LLM → structured JSON."""
     try:
-        # Retrieve relevant chunks from vector store
-        context_chunks = rag_service.retrieve(
-            query=req.module_name,
-            project_id=req.project_id,
-            top_k=int(__import__('os').getenv('TOP_K_RETRIEVAL', 5)),
-        )
+        context_chunks = []
+        if req.chunk_refs:
+            context_chunks = rag_service.get_chunks_by_refs(
+                project_id=req.project_id,
+                chunk_refs=req.chunk_refs,
+            )
+        elif req.selected_requirements:
+            requirement_ids = []
+            for item in req.selected_requirements:
+                if isinstance(item, dict):
+                    requirement_ids.extend(item.get("requirements") or item.get("requirement_ids") or [])
+                else:
+                    requirement_ids.append(str(item))
+            context_chunks = rag_service.get_chunks_by_ids(
+                project_id=req.project_id,
+                requirement_ids=requirement_ids,
+                top_k_per_id=int(__import__('os').getenv('TOP_K_RETRIEVAL_PER_ID', 2)),
+            )
+        else:
+            # Fallback to similarity retrieval only when no exact references exist.
+            context_chunks = rag_service.retrieve(
+                query=req.module_name,
+                project_id=req.project_id,
+                top_k=int(__import__('os').getenv('TOP_K_RETRIEVAL', 5)),
+            )
 
         context_text = "\n\n".join(context_chunks) if context_chunks else ""
 
@@ -259,6 +287,10 @@ async def generate_stories(req: GenerateStoriesRequest):
             additional_context=req.additional_context or "",
             constraints=constraints,
             team_members_json=json.dumps(req.team_members or [], ensure_ascii=False),
+            selected_path_json=json.dumps(req.selected_path or {}, ensure_ascii=False),
+            selected_requirements_json=json.dumps(req.selected_requirements or [], ensure_ascii=False),
+            chunk_refs_json=json.dumps(req.chunk_refs or [], ensure_ascii=False),
+            section_refs_json=json.dumps(req.section_refs or [], ensure_ascii=False),
             ai_config=req.ai_config,
         )
         meta = llm_service.get_last_call_meta()
@@ -272,11 +304,30 @@ async def generate_stories(req: GenerateStoriesRequest):
 @router.post("/generate-prompt-preview")
 async def generate_prompt_preview(req: GeneratePromptPreviewRequest):
     try:
-        context_chunks = rag_service.retrieve(
-            query=req.module_name,
-            project_id=req.project_id,
-            top_k=int(__import__('os').getenv('TOP_K_RETRIEVAL', 5)),
-        )
+        context_chunks = []
+        if req.chunk_refs:
+            context_chunks = rag_service.get_chunks_by_refs(
+                project_id=req.project_id,
+                chunk_refs=req.chunk_refs,
+            )
+        elif req.selected_requirements:
+            requirement_ids = []
+            for item in req.selected_requirements:
+                if isinstance(item, dict):
+                    requirement_ids.extend(item.get("requirements") or item.get("requirement_ids") or [])
+                else:
+                    requirement_ids.append(str(item))
+            context_chunks = rag_service.get_chunks_by_ids(
+                project_id=req.project_id,
+                requirement_ids=requirement_ids,
+                top_k_per_id=int(__import__('os').getenv('TOP_K_RETRIEVAL_PER_ID', 2)),
+            )
+        else:
+            context_chunks = rag_service.retrieve(
+                query=req.module_name,
+                project_id=req.project_id,
+                top_k=int(__import__('os').getenv('TOP_K_RETRIEVAL', 5)),
+            )
 
         context_text = "\n\n".join(context_chunks) if context_chunks else ""
 
@@ -291,6 +342,10 @@ async def generate_prompt_preview(req: GeneratePromptPreviewRequest):
             additional_context=req.additional_context or "",
             constraints=constraints,
             team_members_json=json.dumps(req.team_members or [], ensure_ascii=False),
+            selected_path_json=json.dumps(req.selected_path or {}, ensure_ascii=False),
+            selected_requirements_json=json.dumps(req.selected_requirements or [], ensure_ascii=False),
+            chunk_refs_json=json.dumps(req.chunk_refs or [], ensure_ascii=False),
+            section_refs_json=json.dumps(req.section_refs or [], ensure_ascii=False),
         )
 
         return {"success": True, "prompt_preview": prompt}
@@ -356,25 +411,18 @@ async def extract_requirements(req: ExtractRequirementsRequest):
 @router.post("/suggest")
 async def suggest_stories(req: SuggestStoriesRequest):
     try:
-        suggestions = llm_service.suggest_phase_actions(
+        suggestions = llm_service.suggest_planner_prompts(
             project_name=req.project_name,
             module_name=req.module_name,
             user_input=req.user_input or "",
-            phase=req.context_graph.get("phase", "start"),
-            modules=req.context_graph.get("modules", []),
-            functional_requirements=req.context_graph.get("functional", []),
-            non_functional_requirements=req.context_graph.get("nonFunctional", []),
-            actors=req.context_graph.get("actors", []),
-            existing_work=req.context_graph.get("existingStories", []),
-            fetched_chunks=req.fetched_chunks or [],
-            project_state=req.project_state or {},
+            context_graph=req.context_graph or {},
             ai_config=req.ai_config,
         )
         meta = llm_service.get_last_call_meta()
     except Exception as err:
         raise HTTPException(status_code=502, detail=f"Suggest generation failed: {_safe_error_text(err, 'LLM suggest failed')}")
 
-    return {"success": True, "suggestions": suggestions, "meta": meta}
+    return {"success": True, **suggestions, "meta": meta}
 
 
 @router.post("/discover-gaps")
@@ -392,7 +440,7 @@ async def discover_gaps(req: DiscoverGapsRequest):
     except Exception as err:
         raise HTTPException(status_code=502, detail=f"Gap discovery failed: {_safe_error_text(err, 'LLM gap discovery failed')}")
 
-    return {"success": True, "requirement_ids": requirement_ids, "meta": meta}
+    return {"success": True, **requirement_ids, "meta": meta}
 
 
 @router.post("/chunks-by-ids")
@@ -405,6 +453,19 @@ async def chunks_by_ids(req: ChunksByIdsRequest):
         )
     except Exception as err:
         raise HTTPException(status_code=502, detail=f"Targeted retrieval failed: {_safe_error_text(err, 'RAG targeted retrieval failed')}")
+
+    return {"success": True, "chunks": chunks}
+
+
+@router.post("/chunks-by-refs")
+async def chunks_by_refs(req: ChunksByRefsRequest):
+    try:
+        chunks = rag_service.get_chunks_by_refs(
+            project_id=req.project_id,
+            chunk_refs=req.chunk_refs,
+        )
+    except Exception as err:
+        raise HTTPException(status_code=502, detail=f"Exact retrieval failed: {_safe_error_text(err, 'RAG exact retrieval failed')}")
 
     return {"success": True, "chunks": chunks}
 

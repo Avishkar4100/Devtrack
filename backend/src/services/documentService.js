@@ -38,6 +38,7 @@ class DocumentService {
     const nonFunctional = response.data.non_functional_requirements || [];
     const modules = response.data.modules || [];
     const actors = response.data.actors || [];
+    const extractionMeta = response.data.meta || null;
 
     await Requirement.findOneAndUpdate(
       { project: projectId },
@@ -53,7 +54,7 @@ class DocumentService {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    return { functional, nonFunctional, modules, actors };
+    return { functional, nonFunctional, modules, actors, meta: extractionMeta };
   }
 
   static _extractReqIdAndTitle(line = '', fallbackPrefix = 'FR') {
@@ -191,6 +192,10 @@ class DocumentService {
     }
 
     let requirement = await Requirement.findOne({ project: projectId }).lean();
+    let extractionMeta = null;
+    const existingGraphItems = Array.isArray(latestDoc.requirementGraph?.items)
+      ? latestDoc.requirementGraph.items
+      : [];
 
     if (!requirement && latestDoc.requirementMap?.items?.length) {
       const items = Array.isArray(latestDoc.requirementMap.items) ? latestDoc.requirementMap.items : [];
@@ -214,25 +219,45 @@ class DocumentService {
         (Array.isArray(requirement.nonFunctional) && requirement.nonFunctional.length > 0));
 
     if (forceExtract || !hasAnyRequirements) {
-      await DocumentService._extractRequirementsViaAI({
+      const extractionResult = await DocumentService._extractRequirementsViaAI({
         projectId,
         documentId: latestDoc._id.toString(),
         filePath: latestDoc.filePath,
         fileType: latestDoc.fileType,
       });
+      extractionMeta = extractionResult?.meta || null;
       requirement = await Requirement.findOne({ project: projectId }).lean();
     }
 
     const items = DocumentService._buildMapItemsFromRequirement(requirement);
+    const graphItems = items.map((item) => {
+      const matched = existingGraphItems.find((graphItem) => String(graphItem?.requirement_id || '').toUpperCase() === String(item.id || '').toUpperCase());
+      return {
+        requirement_id: item.id,
+        title: item.title,
+        module: item.module,
+        type: String(item.id || '').toUpperCase().startsWith('NFR') ? 'non_functional' : 'functional',
+        dependencies: Array.isArray(matched?.dependencies) ? matched.dependencies : [],
+        chunk_refs: Array.isArray(matched?.chunk_refs) ? matched.chunk_refs : [],
+        section_refs: Array.isArray(matched?.section_refs) ? matched.section_refs : [],
+      };
+    });
     const requirementMap = {
       items,
       source,
       generatedAt: new Date(),
       version: 1,
     };
+    const requirementGraph = {
+      items: graphItems,
+      source: latestDoc.requirementGraph?.source || 'ingestion',
+      generatedAt: new Date(),
+      version: (latestDoc.requirementGraph?.version || 0) + 1,
+    };
 
     if (latestDoc) {
       latestDoc.requirementMap = requirementMap;
+      latestDoc.requirementGraph = requirementGraph;
       await latestDoc.save();
     }
 
@@ -240,6 +265,8 @@ class DocumentService {
       projectId,
       documentId: latestDoc?._id || null,
       requirementMap,
+      requirementGraph,
+      extractionMeta,
     };
   }
 
@@ -280,6 +307,7 @@ class DocumentService {
         embeddings,
         processingTime,
         parseMetadata,
+        requirement_graph,
       } = ingestResponse.data;
 
       logger.info(
@@ -315,6 +343,7 @@ class DocumentService {
             actorCount: 0,
           },
         },
+        requirementGraph: Array.isArray(requirement_graph) ? requirement_graph : [],
         totalTime,
       };
 

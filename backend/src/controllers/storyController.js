@@ -123,7 +123,16 @@ const buildVectorlessContextGraph = async (projectId) => {
   };
 };
 
-const buildGenerateStoriesContext = async (projectId, moduleName, additionalContext = '', suggestContext = {}) => {
+const buildGenerateStoriesContext = async (
+  projectId,
+  moduleName,
+  additionalContext = '',
+  suggestContext = {},
+  selectedPath = null,
+  selectedRequirements = [],
+  chunkRefs = [],
+  sectionRefs = []
+) => {
   const project = await Project.findById(projectId);
   if (!project) return { project: null };
 
@@ -147,6 +156,7 @@ const buildGenerateStoriesContext = async (projectId, moduleName, additionalCont
 
   const contextGraph = await buildVectorlessContextGraph(project._id);
   const graphContext = `\n\nVectorless project graph context:\n${JSON.stringify(contextGraph)}`;
+  const projectStateSnapshot = await buildProjectStateSnapshot(project._id.toString());
 
   const users = await User.find({
     _id: {
@@ -191,6 +201,60 @@ const buildGenerateStoriesContext = async (projectId, moduleName, additionalCont
         status: item?.status || 'draft',
       }))
     : [];
+  const requirementGraphItems = Array.isArray(processedDoc?.requirementGraph?.items)
+    ? processedDoc.requirementGraph.items
+      .slice(0, 50)
+      .map((item) => ({
+        requirement_id: item?.requirement_id || '',
+        title: item?.title || '',
+        module: item?.module || '',
+        type: item?.type || '',
+        dependencies: Array.isArray(item?.dependencies) ? item.dependencies : [],
+        chunk_refs: Array.isArray(item?.chunk_refs) ? item.chunk_refs : [],
+        section_refs: Array.isArray(item?.section_refs) ? item.section_refs : [],
+      }))
+    : [];
+
+  const structuredPlanningContext = {
+    project: {
+      id: project._id.toString(),
+      name: project.name,
+      key: project.key,
+      budget: project.budget ?? null,
+      deadline: project.deadline ?? null,
+      status: project.status,
+    },
+    processedDocument: processedDoc
+      ? {
+          id: processedDoc._id?.toString?.() || String(processedDoc._id || ''),
+          name: processedDoc.name || '',
+          fileType: processedDoc.fileType || '',
+          status: processedDoc.status || '',
+          requirementMapItems,
+          requirementGraphItems,
+        }
+      : null,
+    requirementMapItems,
+    requirementGraphItems,
+    projectStateSnapshot,
+    teamMembers,
+    suggestContext: {
+      discoveredRequirementIds,
+      fetchedChunks: Number(suggestContext?.fetchedChunks || 0),
+      fetchedChunkPreview,
+    },
+    selectedPlanningPath: selectedPath,
+    selectedRequirements,
+    selectedChunkRefs: chunkRefs,
+    selectedSectionRefs: sectionRefs,
+    planningMeta: {
+      contextQuality,
+      usedProcessedSrs: Boolean(processedDoc),
+      processedDocumentId: processedDoc?._id || null,
+      warnings: planningWarnings,
+    },
+  };
+  const structuredPlanningContextText = `Structured planning context JSON:\n${JSON.stringify(structuredPlanningContext, null, 2)}`;
 
   const suggestDiscoveryContext = [
     'Suggest-discovery context:',
@@ -204,7 +268,7 @@ const buildGenerateStoriesContext = async (projectId, moduleName, additionalCont
       : '- requirement map snapshot: none',
   ].join('\n');
 
-  const enhancedContext = [additionalContext, projectStateContext, suggestDiscoveryContext, graphContext].filter(Boolean).join('\n\n');
+  const enhancedContext = [additionalContext, projectStateContext, suggestDiscoveryContext, structuredPlanningContextText, graphContext].filter(Boolean).join('\n\n');
 
   return {
     project,
@@ -279,13 +343,22 @@ const getEpics = async (req, res) => {
 // @route   POST /api/stories/generate/:projectId
 // @access  Private (Scrum Master)
 const generateStories = async (req, res) => {
-  const { moduleName, documentId, additionalContext, suggestContext } = req.body;
+  const { moduleName, documentId, additionalContext, suggestContext, selectedPath, selectedRequirements, chunkRefs, sectionRefs } = req.body;
 
   if (!moduleName) {
     return res.status(400).json({ success: false, message: 'Module name is required' });
   }
 
-  const projectContext = await buildGenerateStoriesContext(req.params.projectId, moduleName, additionalContext, suggestContext);
+  const projectContext = await buildGenerateStoriesContext(
+    req.params.projectId,
+    moduleName,
+    additionalContext,
+    suggestContext,
+    selectedPath || null,
+    selectedRequirements || [],
+    chunkRefs || [],
+    sectionRefs || []
+  );
   const project = projectContext.project;
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
@@ -311,6 +384,10 @@ const generateStories = async (req, res) => {
     budget: project.budget,
     deadline: project.deadline,
     teamMembers: projectContext.teamMembers,
+    selectedPath: selectedPath || null,
+    selectedRequirements: selectedRequirements || [],
+    chunkRefs: chunkRefs || [],
+    sectionRefs: sectionRefs || [],
   });
 
   await AuditLog.create({
@@ -335,13 +412,22 @@ const generateStories = async (req, res) => {
 };
 
 const previewGenerateStories = async (req, res) => {
-  const { moduleName, documentId, additionalContext, suggestContext } = req.body;
+  const { moduleName, documentId, additionalContext, suggestContext, selectedPath, selectedRequirements, chunkRefs, sectionRefs } = req.body;
 
   if (!moduleName) {
     return res.status(400).json({ success: false, message: 'Module name is required' });
   }
 
-  const projectContext = await buildGenerateStoriesContext(req.params.projectId, moduleName, additionalContext, suggestContext);
+  const projectContext = await buildGenerateStoriesContext(
+    req.params.projectId,
+    moduleName,
+    additionalContext,
+    suggestContext,
+    selectedPath || null,
+    selectedRequirements || [],
+    chunkRefs || [],
+    sectionRefs || []
+  );
   const project = projectContext.project;
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
 
@@ -354,6 +440,10 @@ const previewGenerateStories = async (req, res) => {
     budget: project.budget,
     deadline: project.deadline,
     teamMembers: projectContext.teamMembers,
+    selectedPath: selectedPath || null,
+    selectedRequirements: selectedRequirements || [],
+    chunkRefs: chunkRefs || [],
+    sectionRefs: sectionRefs || [],
   });
 
   res.status(200).json({
@@ -427,6 +517,8 @@ const suggestStories = async (req, res) => {
   const completedJiraIds = Array.isArray(projectState.completedJiraIds) ? projectState.completedJiraIds : [];
 
   let discoveredRequirementIds = [];
+  let discoveredPaths = [];
+  let discoveryMeta = null;
   try {
     const discovery = await aiService.discoverGaps({
       projectId: project._id.toString(),
@@ -436,23 +528,47 @@ const suggestStories = async (req, res) => {
       projectState,
       completedJiraIds,
     });
-    discoveredRequirementIds = Array.isArray(discovery?.requirement_ids) ? discovery.requirement_ids : [];
+    discoveredPaths = Array.isArray(discovery?.paths) ? discovery.paths : [];
+    discoveredRequirementIds = Array.isArray(discovery?.requirement_ids)
+      ? discovery.requirement_ids
+      : discoveredPaths.flatMap((path) => Array.isArray(path?.requirements) ? path.requirements : []);
+    discoveryMeta = discovery?.meta || null;
   } catch (err) {
     logger.warn(`Suggest discovery failed project=${project._id}: ${err.message}`);
   }
 
-  if (!discoveredRequirementIds.length && Array.isArray(requirementMap?.items)) {
-    discoveredRequirementIds = requirementMap.items.slice(0, 8).map((x) => x.id).filter(Boolean);
+  if (!discoveredPaths.length && Array.isArray(requirementMap?.items)) {
+    discoveredPaths = requirementMap.items.slice(0, 4).map((item, idx) => ({
+      id: `path-${idx + 1}`,
+      name: item.title || item.id || `Path ${idx + 1}`,
+      reason: 'Derived from requirement map fallback',
+      requirements: [item.id].filter(Boolean),
+      priority: 'medium',
+      dependency_notes: '',
+    }));
+    discoveredRequirementIds = discoveredPaths.flatMap((path) => Array.isArray(path.requirements) ? path.requirements : []);
   }
 
   let fetchedChunks = [];
   if (discoveredRequirementIds.length) {
     try {
-      const fetchResult = await aiService.getChunksByIds({
-        projectId: project._id.toString(),
-        requirementIds: discoveredRequirementIds,
-        topKPerId: 2,
+      const requirementGraph = Array.isArray(latestProcessedDoc?.requirementGraph?.items) ? latestProcessedDoc.requirementGraph.items : [];
+      const exactRefs = discoveredPaths.flatMap((path) => {
+        return (path.requirements || []).flatMap((reqId) => {
+          const graphItem = requirementGraph.find((item) => String(item?.requirement_id || '').toUpperCase() === String(reqId || '').toUpperCase());
+          return Array.isArray(graphItem?.chunk_refs) ? graphItem.chunk_refs : [];
+        });
       });
+      const fetchResult = exactRefs.length
+        ? await aiService.getChunksByRefs({
+          projectId: project._id.toString(),
+          chunkRefs: exactRefs,
+        })
+        : await aiService.getChunksByIds({
+          projectId: project._id.toString(),
+          requirementIds: discoveredRequirementIds,
+          topKPerId: 2,
+        });
       fetchedChunks = Array.isArray(fetchResult?.chunks) ? fetchResult.chunks : [];
     } catch (err) {
       logger.warn(`Suggest targeted fetch failed project=${project._id}: ${err.message}`);
@@ -470,6 +586,7 @@ const suggestStories = async (req, res) => {
         ...structuredContext,
         fetchedChunks,
         projectState,
+        requirementGraph: Array.isArray(latestProcessedDoc?.requirementGraph?.items) ? latestProcessedDoc.requirementGraph.items : [],
       },
     });
   } catch (error) {
@@ -504,52 +621,38 @@ const suggestStories = async (req, res) => {
     });
   }
 
-  const structuredSuggestions = { epics: [], stories: [], tasks: [] };
-  const rawActions = Array.isArray(result?.suggestions) ? result.suggestions : [];
-  const normalizedActions = rawActions.slice(0, 7).map((action, idx) => ({
-    id: String(action?.id || `sug-${idx + 1}`),
-    title: String(action?.title || '').trim(),
-    description: String(action?.description || '').trim(),
-    reason: String(action?.reason || action?.logic || action?.description || '').trim(),
-    impact: String(action?.impact || 'medium').trim(),
-    estimated_effort: String(action?.estimated_effort || 'medium').trim(),
-    module: String(action?.module || moduleName).trim(),
-    type: String(action?.type || 'story').trim(),
-  })).filter((action) => Boolean(action.title));
+  const rawPaths = Array.isArray(result?.paths) ? result.paths : [];
+  const normalizedPaths = rawPaths.slice(0, 7).map((path, idx) => ({
+    id: String(path?.id || `path-${idx + 1}`).trim(),
+    name: String(path?.name || '').trim(),
+    reason: String(path?.reason || '').trim(),
+    requirements: Array.isArray(path?.requirements) ? path.requirements.map((rid) => String(rid || '').trim().toUpperCase()).filter(Boolean) : [],
+    priority: String(path?.priority || 'medium').trim().toLowerCase(),
+    dependency_notes: String(path?.dependency_notes || '').trim(),
+  })).filter((path) => Boolean(path.name));
 
-  normalizedActions.forEach((action) => {
-    const line = `${action.title}${action.reason ? ` - ${action.reason}` : ''}`;
-    const type = String(action.type || '').toLowerCase();
-    if (type === 'integration' || type === 'epic') structuredSuggestions.epics.push(line);
-    else if (type === 'improvement' || type === 'task' || type === 'subtask' || type === 'sub-task') structuredSuggestions.tasks.push(line);
-    else structuredSuggestions.stories.push(line);
-  });
-
-  if (!normalizedActions.length) {
+  if (!normalizedPaths.length) {
     return res.status(502).json({
       success: false,
-      message: 'AI returned no actionable suggestions for the current discovery request. Please retry with a narrower prompt.',
+      message: 'AI returned no actionable planning paths for the current discovery request. Please retry with a narrower prompt.',
     });
   }
 
-  logger.info(`Suggest AI response project=${project._id} actions=${normalizedActions.length} epics=${structuredSuggestions.epics.length} stories=${structuredSuggestions.stories.length} tasks=${structuredSuggestions.tasks.length}`);
-
-  const flatSuggestions = [
-    ...structuredSuggestions.epics.map((s) => `EPIC: ${s}`),
-    ...structuredSuggestions.stories.map((s) => `STORY: ${s}`),
-    ...structuredSuggestions.tasks.map((s) => `TASK: ${s}`),
-  ];
+  logger.info(`Suggest AI response project=${project._id} paths=${normalizedPaths.length}`);
 
   res.status(200).json({
     success: true,
     data: {
-      suggestions: flatSuggestions,
-      structuredSuggestions,
+      paths: normalizedPaths,
+      suggestions: normalizedPaths.map((path) => `${path.name} :: ${path.reason}`.trim()),
+      meta: result?.meta || null,
+      discoveryMeta,
       planningMeta: {
         contextQuality: latestProcessedDoc ? 'high' : 'low',
         usedProcessedSrs: Boolean(latestProcessedDoc),
         processedDocumentId: latestProcessedDoc?._id || null,
         requirementMapItems: Array.isArray(requirementMap?.items) ? requirementMap.items.length : 0,
+        requirementGraphItems: Array.isArray(latestProcessedDoc?.requirementGraph?.items) ? latestProcessedDoc.requirementGraph.items.length : 0,
         discoveredRequirementIds,
         fetchedChunks: fetchedChunks.length,
         fetchedChunkPreview: fetchedChunks.slice(0, 3).map((chunk) => String(chunk || '').replace(/\s+/g, ' ').slice(0, 220)),

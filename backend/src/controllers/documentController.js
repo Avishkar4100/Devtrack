@@ -214,6 +214,15 @@ const ingestDocument = async (doc, project, io) => {
       'ingestionStatus.warnings': result.ingestionStatus.warnings,
     };
 
+    if (Array.isArray(result.requirementGraph)) {
+      updateData.requirementGraph = {
+        items: result.requirementGraph,
+        source: 'ingestion',
+        generatedAt: new Date(),
+        version: 1,
+      };
+    }
+
     // Store extracted requirements
     if (result.extractedRequirements) {
       updateData['extractedRequirements.functional'] = result.extractedRequirements.functional;

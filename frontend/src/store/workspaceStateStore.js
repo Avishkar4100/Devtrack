@@ -9,6 +9,7 @@ const EMPTY_AI_PLANNER = {
   suggestions: { epics: [], stories: [], tasks: [] },
   backlogDraft: { epics: [], stories: [], tasks: [], subtasks: [] },
   lastSrsLabel: '',
+  plannerResetAt: null,
   plannerChat: [
     {
       role: 'assistant',

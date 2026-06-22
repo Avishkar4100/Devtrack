@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Dict, Any
 from services.embeddings import EmbeddingService
 
 
@@ -105,4 +105,63 @@ class RAGService:
 
         except Exception as e:
             print(f"RAG targeted retrieval error: {e}")
+            return []
+
+    def get_chunks_by_refs(self, project_id: str, chunk_refs: List[Dict[str, Any]]) -> List[str]:
+        """Fetch exact chunks by stored chunk refs for a given project."""
+        if not chunk_refs:
+            return []
+
+        try:
+            persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./chroma_store")
+            client = _get_chroma_client(persist_dir)
+
+            all_collections = client.list_collections()
+            project_collections = [
+                c for c in all_collections
+                if project_id.replace("-", "_") in c.name
+            ]
+            if not project_collections:
+                return []
+
+            collected = []
+            for collection_info in project_collections:
+                collection = self.embedding_service._get_chroma_collection(collection_info.name)
+                count = collection.count()
+                if count == 0:
+                    continue
+
+                ids = []
+                for ref in chunk_refs:
+                    chunk_id = str(ref.get("chunk_id") or "").strip()
+                    if chunk_id:
+                        ids.append(chunk_id)
+
+                if not ids:
+                    continue
+
+                result = collection.get(ids=ids)
+                docs = result.get("documents", [])
+                if docs and isinstance(docs[0], list):
+                    for doc_list in docs:
+                        for doc in doc_list or []:
+                            if doc:
+                                collected.append(doc)
+                else:
+                    for doc in docs or []:
+                        if doc:
+                            collected.append(doc)
+
+            seen = set()
+            unique = []
+            for chunk in collected:
+                key = chunk.strip()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                unique.append(chunk)
+            return unique
+
+        except Exception as e:
+            print(f"RAG exact ref retrieval error: {e}")
             return []

@@ -32,6 +32,7 @@ class IngestResponse(BaseModel):
     embeddings: int
     processingTime: int
     parseMetadata: dict
+    requirement_graph: list = []
 
 
 @router.post("/ingest")
@@ -96,6 +97,7 @@ async def ingest_document(req: IngestRequest) -> IngestResponse:
         "chunks": result["chunks"],
         "embeddings": result["embeddings"],
         "processingTime": elapsed,
+        "requirement_graph": result.get("requirement_graph", []),
         "parseMetadata": {
             "detectedType": parse_result.metadata.get("detected_type"),
             "detectionMethod": parse_result.metadata.get("detection_method"),

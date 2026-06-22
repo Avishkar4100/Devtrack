@@ -11,14 +11,23 @@ _LAST_CALL_META: ContextVar[Dict[str, Any] | None] = ContextVar("_LAST_CALL_META
 
 
 STORY_GENERATION_PROMPT = """### [CONTEXT_CACHE_START]
-# SRS DOCUMENT:
+# EXACT REQUIREMENT CHUNKS:
 {full_srs_text}
 ### [CONTEXT_CACHE_END]
 
-You are a Senior Technical Architect. Convert the SELECTED PATH into a Jira-ready JSON payload.
+You are a Senior Technical Architect. Convert the selected requirements into the best Jira-ready hierarchy for implementation.
 
-# SELECTED PATH:
-{selected_suggestion_details}
+# SELECTED PATH JSON:
+{selected_path_json}
+
+# SELECTED REQUIREMENTS JSON:
+{selected_requirements_json}
+
+# CHUNK REFERENCES JSON:
+{chunk_refs_json}
+
+# SECTION REFERENCES JSON:
+{section_refs_json}
 
 # TEAM DIRECTORY:
 {team_members_json}
@@ -28,16 +37,22 @@ You are a Senior Technical Architect. Convert the SELECTED PATH into a Jira-read
 {active_jira_state}
 
 # TASK:
-1. Generate 1 Epic and 3-5 specific Stories/Tasks to fulfill the Selected Path.
-2. ASSIGNMENT: Map tasks to team members based on their Roles.
-3. LINKING: Search the Project State. If a new task depends on an existing Jira ID, add a "blocks" or "is blocked by" relationship.
-4. SPECIFICITY: Use exact terms from the SRS (e.g., if the SRS mentions "AES-256", the task description must include "AES-256").
-5. TRACEABILITY: Every generated Story/Task description must include source requirement IDs using format source_requirement: FR-XXX-001.
+1. Generate the most appropriate hierarchy required to implement the selected requirements.
+2. Decide hierarchy depth dynamically using the selected requirements, exact chunks, project state, and user instructions.
+3. Use as many epics, stories, tasks, and subtasks as necessary. Do not use fixed counts.
+4. Map work items to team members by role, expertise, and likely ownership.
+5. If a new item depends on existing work or Jira IDs, add explicit dependency links.
+6. Use exact terms from the selected requirements, exact chunks, project state, and user instructions. Preserve domain terminology.
+7. Preserve requirement traceability. Every issue must map back to one or more source requirements when relevant.
+8. Write long, implementation-ready descriptions and rich, testable acceptance criteria.
+9. Place items in a sensible sprint or backlog position based on current progress, dependencies, and urgency.
+10. Preserve parent-child relationships explicitly and do not flatten nested work.
 
 # OUTPUT RULES:
 - Return ONLY a JSON object.
 - Include "Acceptance Criteria" as a checklist for QA.
-- Ensure "summary" is concise and "description" is technical.
+- Ensure "summary" is concise and "description" is technical, detailed, and specific.
+- Do not optimize for brevity; optimize for complete coverage of the selected scope.
 
 # JSON STRUCTURE:
 {{
@@ -57,6 +72,25 @@ You are a Senior Technical Architect. Convert the SELECTED PATH into a Jira-read
             "summary": "...",
             "description": "...",
             "assignee": "USER-ID",
+            "acceptance_criteria": ["..."]
+        }},
+        {{
+            "type": "Task",
+            "parent_temp_id": "story-1",
+            "summary": "...",
+            "description": "...",
+            "assignee": "USER-ID",
+            "priority": "High",
+            "links": [{{ "type": "blocks", "outwardIssue": "PROJ-10" }}],
+            "acceptance_criteria": ["..."]
+        }},
+        {{
+            "type": "Subtask",
+            "parent_temp_id": "task-1",
+            "summary": "...",
+            "description": "...",
+            "assignee": "USER-ID",
+            "priority": "Medium",
             "acceptance_criteria": ["..."]
         }}
     ]
@@ -118,7 +152,7 @@ Rules:
 
 PLANNER_SUGGEST_PROMPT = """You are an Elite Agile Product Manager running a discovery phase.
 
-Requirement Map (Master Index JSON):
+Requirement Graph (Master Index JSON):
 {requirement_map_json}
 
 Current Project State JSON:
@@ -128,26 +162,35 @@ Module Focus: {module_name}
 User Instruction: {user_input}
 
 Task:
-1. Compare the requirement map against current project state.
-2. Identify 5-8 requirement IDs that are highest-value gaps to explore next.
-3. Prefer IDs with clear dependency order and active business impact.
+1. Compare the requirement graph against current project state.
+2. Identify the highest-value planning paths to explore next.
+3. Prefer paths with clear dependency order and active business impact.
+4. Return planning paths only. Do not generate backlog items.
 
 Output rules:
 - Return ONLY valid JSON.
-- Return IDs exactly as provided in the map.
+- Return requirement IDs exactly as provided in the graph.
 - No markdown, no commentary.
 
 JSON shape:
 {{
-    "requirement_ids": ["FR-AUTH-001", "NFR-SEC-002"],
-    "reason": "One short sentence explaining selection strategy"
+    "paths": [
+        {{
+            "id": "auth-foundation",
+            "name": "Authentication Foundation",
+            "reason": "One short sentence explaining selection strategy",
+            "requirements": ["FR-AUTH-001", "FR-AUTH-002"],
+            "priority": "high",
+            "dependency_notes": "Why this path should be worked next"
+        }}
+    ]
 }}
 """
 
 
 DISCOVERY_GAPS_PROMPT = """You are a requirements discovery analyst.
 
-Requirement Map (Master Index JSON):
+Requirement Graph (Master Index JSON):
 {requirement_map_json}
 
 Completed Jira IDs JSON:
@@ -160,21 +203,30 @@ Module Focus: {module_name}
 User Instruction: {user_input}
 
 Task:
-1. Compare the requirement map against completed Jira IDs and current project state.
-2. Select a dynamic set of requirement IDs to explore next (typically 3-8, never fixed).
-3. If project state is mostly empty/early, prioritize foundational major requirements first.
-4. If major requirements are complete, prioritize remaining major gaps, blocked dependencies, and high-value minor items.
-5. Prefer IDs with visible dependency impact and sequencing value.
+1. Compare the requirement graph against completed Jira IDs and current project state.
+2. Determine completed, partially completed, blocked, and missing requirements.
+3. Output planning paths that explain what should be worked on next.
+4. If project state is mostly empty/early, prioritize foundational major requirements first.
+5. If major requirements are complete, prioritize remaining major gaps, blocked dependencies, and high-value minor items.
+6. Prefer paths with visible dependency impact and sequencing value.
 
 Output rules:
 - Return ONLY valid JSON.
-- Return IDs exactly as provided in the map.
+- Return requirement IDs exactly as provided in the graph.
 - No markdown, no commentary.
 
 JSON shape:
 {{
-    "requirement_ids": ["FR-AUTH-001", "NFR-SEC-002"],
-    "reason": "One short sentence explaining selection strategy based on state and map"
+    "paths": [
+        {{
+            "id": "auth-foundation",
+            "name": "Authentication Foundation",
+            "reason": "One short sentence explaining selection strategy based on state and graph",
+            "requirements": ["FR-AUTH-001", "NFR-SEC-002"],
+            "priority": "high",
+            "dependency_notes": "Blocked by missing auth infrastructure"
+        }}
+    ]
 }}
 """
 
@@ -213,27 +265,29 @@ User Instruction:
 {user_custom_instruction}
 
 Task:
-Generate 6 to 7 precise, no-fluff backlog suggestions grounded in the targeted SRS chunks and current project state.
+Determine the highest-value planning paths based on the requirement graph, project state, completed work, and dependencies.
 
 Rules:
-- Use mixed types across: epic, story, task, subtask.
-- Every suggestion must reference at least one requirement ID (FR/NFR) in title or description.
+- Do not generate backlog items.
+- Do not generate stories.
+- Do not generate tasks.
+- Use mixed planning-path coverage across major areas of the product.
+- Every path must reference relevant requirement IDs.
 - Explain why now using project-state dependency/progress signals when possible.
-- Keep each suggestion specific and implementation-ready.
+- Keep each path specific and actionable.
+- Include enough detail for the next generation step to expand the work without guessing.
 - Avoid generic wording unless explicitly requested by the user instruction.
 
 Return ONLY valid JSON:
 {{
-    "suggestions": [
+    "paths": [
         {{
-            "id": "sug-1",
-            "type": "story",
-            "title": "Implement MFA verification flow (FR-AUTH-002)",
-            "description": "Build TOTP enrollment and recovery codes; this depends on completed registration flow PROJ-10.",
-            "logic": "Missing high-value auth flow and depends on identity base already in-progress.",
-            "impact": "High",
-            "estimated_effort": "Medium",
-            "module": "Auth"
+            "id": "auth-foundation",
+            "name": "Authentication Foundation",
+            "reason": "High-value auth gaps remain and depend on identity infrastructure already in progress.",
+            "requirements": ["FR-AUTH-001", "FR-AUTH-002"],
+            "priority": "high",
+            "dependency_notes": "Blocks login, session, and security work"
         }}
     ]
 }}
@@ -619,6 +673,10 @@ class LLMService:
         additional_context: str,
         constraints: str,
         team_members_json: str = "[]",
+        selected_path_json: str = "{}",
+        selected_requirements_json: str = "[]",
+        chunk_refs_json: str = "[]",
+        section_refs_json: str = "[]",
     ) -> str:
         ctx_budget = 11000
         add_budget = 13000
@@ -637,7 +695,10 @@ class LLMService:
 
             prompt = STORY_GENERATION_PROMPT.format(
                 full_srs_text=compact_context or "No SRS document ingested yet.",
-                selected_suggestion_details=selected_path or "No selected path provided.",
+                selected_path_json=self._trim_text(selected_path_json or "{}", 12000),
+                selected_requirements_json=self._trim_text(selected_requirements_json or "[]", 12000),
+                chunk_refs_json=self._trim_text(chunk_refs_json or "[]", 12000),
+                section_refs_json=self._trim_text(section_refs_json or "[]", 12000),
                 team_members_json=team_members_json or "[]",
                 active_jira_state=compact_additional or "[]",
             )
@@ -663,7 +724,10 @@ class LLMService:
         )
         return STORY_GENERATION_PROMPT.format(
             full_srs_text=compact_context or "No SRS document ingested yet.",
-            selected_suggestion_details=selected_path or "No selected path provided.",
+            selected_path_json=self._trim_text(selected_path_json or "{}", 12000),
+            selected_requirements_json=self._trim_text(selected_requirements_json or "[]", 12000),
+            chunk_refs_json=self._trim_text(chunk_refs_json or "[]", 12000),
+            section_refs_json=self._trim_text(section_refs_json or "[]", 12000),
             team_members_json=team_members_json or "[]",
             active_jira_state=compact_additional or "[]",
         )
@@ -676,6 +740,10 @@ class LLMService:
         additional_context: str = "",
         constraints: str = "",
         team_members_json: str = "[]",
+        selected_path_json: str = "{}",
+        selected_requirements_json: str = "[]",
+        chunk_refs_json: str = "[]",
+        section_refs_json: str = "[]",
     ) -> str:
         return self._build_generate_prompt_with_budget(
             project_name=project_name,
@@ -684,6 +752,10 @@ class LLMService:
             additional_context=additional_context or "",
             constraints=constraints or "",
             team_members_json=team_members_json or "[]",
+            selected_path_json=selected_path_json or "{}",
+            selected_requirements_json=selected_requirements_json or "[]",
+            chunk_refs_json=chunk_refs_json or "[]",
+            section_refs_json=section_refs_json or "[]",
         )
 
     @staticmethod
@@ -897,6 +969,10 @@ class LLMService:
         additional_context: str = "",
         constraints: str = "",
         team_members_json: str = "[]",
+        selected_path_json: str = "{}",
+        selected_requirements_json: str = "[]",
+        chunk_refs_json: str = "[]",
+        section_refs_json: str = "[]",
         ai_config: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         prompt = self._build_generate_prompt_with_budget(
@@ -906,6 +982,10 @@ class LLMService:
             additional_context=additional_context or "",
             constraints=constraints or "",
             team_members_json=team_members_json or "[]",
+            selected_path_json=selected_path_json or "{}",
+            selected_requirements_json=selected_requirements_json or "[]",
+            chunk_refs_json=chunk_refs_json or "[]",
+            section_refs_json=section_refs_json or "[]",
         )
 
         raw = self._call_llm(prompt, temperature=0.4, ai_config=ai_config, operation="generate_stories")
@@ -1178,7 +1258,7 @@ class LLMService:
         except json.JSONDecodeError:
             return {"status": "not_started", "reasoning": "Analysis failed", "evidence": []}
 
-    def suggest_planner_prompts(self, project_name: str, module_name: str, user_input: str, context_graph: Dict[str, Any], ai_config: Dict[str, Any] = None) -> Dict[str, List[str]]:
+    def suggest_planner_prompts(self, project_name: str, module_name: str, user_input: str, context_graph: Dict[str, Any], ai_config: Dict[str, Any] = None) -> Dict[str, Any]:
         compact_graph = self._compact_context_graph_for_prompt(context_graph)
         requirement_map = {
             "project": project_name,
@@ -1226,25 +1306,32 @@ class LLMService:
 
         try:
             parsed = json.loads(raw)
-            target_ids = parsed.get("requirement_ids", [])
+            paths = parsed.get("paths", [])
+            if not isinstance(paths, list):
+                raise ValueError("LLM returned JSON with invalid planning path keys")
 
-            # Backward compatibility with older prompt responses.
-            if not isinstance(target_ids, list):
-                legacy = parsed.get("suggestions", [])
-                if isinstance(legacy, list):
-                    logger.info("suggest_planner_prompts using legacy suggestions array format")
-                    return {
-                        "epics": [str(s).strip() for s in legacy[:2] if str(s).strip()],
-                        "stories": [str(s).strip() for s in legacy[2:6] if str(s).strip()],
-                        "tasks": [str(s).strip() for s in legacy[6:10] if str(s).strip()],
-                    }
-                logger.warning("suggest_planner_prompts parsed JSON but keys were invalid")
-                raise ValueError("LLM returned JSON with invalid suggestion keys")
+            normalized = []
+            for idx, path in enumerate(paths):
+                if not isinstance(path, dict):
+                    continue
+                reqs = path.get("requirements") or path.get("requirement_ids") or []
+                if not isinstance(reqs, list):
+                    reqs = [reqs]
+                normalized.append({
+                    "id": str(path.get("id") or f"path-{idx + 1}").strip(),
+                    "name": str(path.get("name") or f"Path {idx + 1}").strip(),
+                    "reason": str(path.get("reason") or "").strip(),
+                    "requirements": [str(r).strip().upper() for r in reqs if str(r).strip()],
+                    "priority": str(path.get("priority") or "medium").strip().lower(),
+                    "dependency_notes": str(path.get("dependency_notes") or "").strip(),
+                })
+
+            if not normalized:
+                raise ValueError("LLM returned no planning paths")
 
             return {
-                "epics": [f"Target requirement {str(r).strip()}" for r in target_ids[:2] if str(r).strip()],
-                "stories": [f"Explore requirement {str(r).strip()}" for r in target_ids[2:6] if str(r).strip()],
-                "tasks": [f"Fetch context for {str(r).strip()}" for r in target_ids[6:10] if str(r).strip()],
+                "paths": normalized[:7],
+                "meta": parsed.get("meta", {}) if isinstance(parsed, dict) else {},
             }
         except Exception as parse_err:
             logger.warning("suggest_planner_prompts JSON parse failed: %s | raw_head=%s", str(parse_err), raw[:240])
@@ -1282,7 +1369,7 @@ class LLMService:
         project_state_json: str,
         completed_jira_ids_json: str = "[]",
         ai_config: Dict[str, Any] = None,
-    ) -> List[str]:
+    ) -> Dict[str, Any]:
         prompt = DISCOVERY_GAPS_PROMPT.format(
             requirement_map_json=self._trim_text(requirement_map_json or "{}", 18000),
             project_state_json=self._trim_text(project_state_json or "{}", 18000),
@@ -1299,18 +1386,41 @@ class LLMService:
 
         try:
             parsed = json.loads(raw)
-            ids = parsed.get("requirement_ids") if isinstance(parsed, dict) else []
-            if not isinstance(ids, list):
-                raise ValueError("Invalid requirement_ids format")
-            normalized = []
+            paths = parsed.get("paths") if isinstance(parsed, dict) else []
+            if not isinstance(paths, list):
+                raise ValueError("Invalid paths format")
+
+            normalized_paths = []
+            requirement_ids = []
             seen = set()
-            for rid in ids:
-                val = str(rid or "").strip().upper()
-                if not val or val in seen:
+            for idx, path in enumerate(paths):
+                if not isinstance(path, dict):
                     continue
-                seen.add(val)
-                normalized.append(val)
-            return normalized[:10]
+                reqs = path.get("requirements") or path.get("requirement_ids") or []
+                if not isinstance(reqs, list):
+                    reqs = [reqs]
+                normalized_reqs = []
+                for rid in reqs:
+                    val = str(rid or "").strip().upper()
+                    if not val:
+                        continue
+                    normalized_reqs.append(val)
+                    if val not in seen:
+                        seen.add(val)
+                        requirement_ids.append(val)
+                normalized_paths.append({
+                    "id": str(path.get("id") or f"path-{idx + 1}").strip(),
+                    "name": str(path.get("name") or f"Path {idx + 1}").strip(),
+                    "reason": str(path.get("reason") or "").strip(),
+                    "requirements": normalized_reqs,
+                    "priority": str(path.get("priority") or "medium").strip().lower(),
+                    "dependency_notes": str(path.get("dependency_notes") or "").strip(),
+                })
+            return {
+                "paths": normalized_paths[:7],
+                "requirement_ids": requirement_ids[:12],
+                "meta": parsed.get("meta", {}) if isinstance(parsed, dict) else {},
+            }
         except Exception as parse_err:
             logger.warning("extract_target_requirement_ids JSON parse failed: %s | raw_head=%s", str(parse_err), raw[:260])
             raise ValueError("LLM returned invalid JSON for requirement ID discovery")

@@ -95,6 +95,34 @@ const DocumentSchema = new mongoose.Schema(
       generatedAt: { type: Date },
       version: { type: Number, default: 1 },
     },
+    requirementGraph: {
+      items: [
+        {
+          requirement_id: { type: String, trim: true },
+          title: { type: String, trim: true },
+          module: { type: String, trim: true },
+          type: { type: String, enum: ['functional', 'non_functional'], default: 'functional' },
+          dependencies: [{ type: String, trim: true }],
+          chunk_refs: [
+            {
+              chunk_id: { type: String, trim: true },
+              chunk_index: { type: Number },
+              namespace: { type: String, trim: true },
+            },
+          ],
+          section_refs: [
+            {
+              section_name: { type: String, trim: true },
+              chunk_index: { type: Number },
+              chunk_id: { type: String, trim: true },
+            },
+          ],
+        },
+      ],
+      source: { type: String, default: 'ingestion' },
+      generatedAt: { type: Date },
+      version: { type: Number, default: 1 },
+    },
   },
   {
     timestamps: true,

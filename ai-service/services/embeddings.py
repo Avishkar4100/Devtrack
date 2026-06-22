@@ -84,6 +84,72 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[Dict
     return chunks
 
 
+def _infer_requirement_title(chunk_text: str, requirement_id: str, heading: str) -> str:
+    """Best-effort title extraction for requirement graph nodes."""
+    text = (chunk_text or "").strip()
+    if not text:
+        return requirement_id or heading or "Untitled requirement"
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines[:5]:
+        if requirement_id and requirement_id.lower() in line.lower():
+            cleaned = re.sub(re.escape(requirement_id), "", line, flags=re.IGNORECASE).strip(" :-\t")
+            if cleaned:
+                return cleaned[:240]
+    first_line = lines[0] if lines else text
+    if heading and first_line.lower() == heading.lower() and len(lines) > 1:
+        first_line = lines[1]
+    return first_line[:240] if first_line else (requirement_id or heading or "Untitled requirement")
+
+
+def build_requirement_graph(chunks: List[Dict[str, Any]], namespace: str) -> List[Dict[str, Any]]:
+    """Build a traceable requirement graph from chunk metadata."""
+    nodes: Dict[str, Dict[str, Any]] = {}
+
+    for chunk_index, chunk in enumerate(chunks):
+        chunk_text_value = str(chunk.get("text", "") or "").strip()
+        heading = str(chunk.get("heading", "") or "Document").strip() or "Document"
+        req_ids = chunk.get("requirement_ids") or []
+        if not req_ids:
+            continue
+
+        base_chunk_id = f"{namespace}-{chunk_index}"
+        for ridx, requirement_id in enumerate(req_ids):
+            rid = str(requirement_id or "").strip().upper()
+            if not rid:
+                continue
+
+            chunk_id = f"{namespace}-{chunk_index}-rid-{ridx}"
+            node = nodes.get(rid)
+            if not node:
+                node = {
+                    "requirement_id": rid,
+                    "title": _infer_requirement_title(chunk_text_value, rid, heading),
+                    "module": "General",
+                    "type": "functional" if rid.startswith("FR") else "non_functional",
+                    "dependencies": [],
+                    "chunk_refs": [],
+                    "section_refs": [],
+                }
+                nodes[rid] = node
+
+            node["chunk_refs"].append({
+                "chunk_id": chunk_id,
+                "chunk_index": chunk_index,
+                "namespace": namespace,
+            })
+
+            section_ref = {
+                "section_name": heading,
+                "chunk_index": chunk_index,
+                "chunk_id": base_chunk_id,
+            }
+            if section_ref not in node["section_refs"]:
+                node["section_refs"].append(section_ref)
+
+    return list(nodes.values())
+
+
 class EmbeddingService:
     """
     Uses ChromaDB's built-in local ONNX embedding model (all-MiniLM-L6-v2).
@@ -141,7 +207,7 @@ class EmbeddingService:
 
         chunks = chunk_text(text, chunk_size, chunk_overlap)
         if not chunks:
-            return {"chunks": 0, "embeddings": 0}
+            return {"chunks": 0, "embeddings": 0, "requirement_graph": []}
 
         collection = self._get_chroma_collection(namespace)
 
@@ -190,7 +256,11 @@ class EmbeddingService:
             metadatas=metadatas,
         )
 
-        return {"chunks": len(chunks), "embeddings": len(docs)}
+        return {
+            "chunks": len(chunks),
+            "embeddings": len(docs),
+            "requirement_graph": build_requirement_graph(chunks, namespace),
+        }
 
     def query(self, query_text: str, namespace: str, top_k: int = 5) -> List[str]:
         """Retrieve top-k relevant chunks for a query using local embeddings."""

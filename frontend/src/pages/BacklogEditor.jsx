@@ -599,9 +599,28 @@ export default function BacklogEditorPage() {
                     updateItem('subtask', selected.tempId, 'parentId', e.target.value)
                     if (parentTask?.epicTempId) updateItem('subtask', selected.tempId, 'epicTempId', parentTask.epicTempId)
                   }}
-                >
+                  >
                   {(draft.tasks || []).map((t) => <option key={t.tempId} value={t.tempId}>Parent Task: {t.title}</option>)}
                 </select>
+              )}
+
+              {Array.isArray(selectedItem.acceptanceCriteria) && selectedItem.acceptanceCriteria.length > 0 && (
+                <div className="rounded-md border border-slate-700 p-3 bg-slate-900/40">
+                  <p className="text-xs uppercase tracking-wide text-slate-400 mb-2">Acceptance Criteria</p>
+                  <ul className="space-y-1 text-sm text-slate-200">
+                    {selectedItem.acceptanceCriteria.map((ac, idx) => (
+                      <li key={`${selectedItem.tempId}-ac-${idx}`}>- {typeof ac === 'string' ? ac : ac?.criterion}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {(selectedItem.epicTempId || selectedItem.parentTempId) && (
+                <div className="rounded-md border border-slate-700 p-3 bg-slate-900/40">
+                  <p className="text-xs uppercase tracking-wide text-slate-400 mb-2">Hierarchy</p>
+                  <p className="text-sm text-slate-200">Epic: {selectedItem.epicTempId || 'none'}</p>
+                  <p className="text-sm text-slate-200">Parent: {selectedItem.parentTempId || 'none'}</p>
+                </div>
               )}
             </>
           )}

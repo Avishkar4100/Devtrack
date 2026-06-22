@@ -48,12 +48,14 @@ const validateBacklogItems = ({ epics, stories, tasks, subtasks }) => {
 }
 
 const DEFAULT_SUGGESTIONS = { epics: [], stories: [], tasks: [] }
+const DEFAULT_PLANNING_PATHS = []
 const DEFAULT_BACKLOG_DRAFT = { epics: [], stories: [], tasks: [], subtasks: [] }
 const DEFAULT_SUGGEST_CONTEXT = {
   discoveredRequirementIds: [],
   fetchedChunks: 0,
   fetchedChunkPreview: [],
 }
+const DEFAULT_PLANNER_LOGS = []
 const DEFAULT_PLANNER_CHAT = [
   {
     role: 'assistant',
@@ -63,6 +65,36 @@ const DEFAULT_PLANNER_CHAT = [
 
 const plannerTabButtonClass = (active) =>
   `px-4 py-1.5 text-[14px] font-semibold rounded-[10px] border transition-colors ${active ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-900/50 border-slate-700 text-slate-300'}`
+
+const truncateLogValue = (value, maxChars = 1800) => {
+  if (value === null || value === undefined) return ''
+  const text = typeof value === 'string' ? value : (() => {
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value)
+    }
+  })()
+  if (text.length <= maxChars) return text
+  return `${text.slice(0, maxChars)}\n...[truncated]`
+}
+
+const plannerLogTone = (kind = 'info', level = 'info') => {
+  const palette = {
+    system: { border: '#38bdf8', text: '#7dd3fc', glow: 'rgba(56, 189, 248, 0.18)' },
+    request: { border: '#a78bfa', text: '#ddd6fe', glow: 'rgba(167, 139, 250, 0.18)' },
+    response: { border: '#34d399', text: '#a7f3d0', glow: 'rgba(52, 211, 153, 0.18)' },
+    ai: { border: '#f59e0b', text: '#fde68a', glow: 'rgba(245, 158, 11, 0.18)' },
+    prompt: { border: '#c084fc', text: '#e9d5ff', glow: 'rgba(192, 132, 252, 0.18)' },
+    error: { border: '#f87171', text: '#fecaca', glow: 'rgba(248, 113, 113, 0.18)' },
+    status: { border: '#60a5fa', text: '#bfdbfe', glow: 'rgba(96, 165, 250, 0.18)' },
+    map: { border: '#22c55e', text: '#86efac', glow: 'rgba(34, 197, 94, 0.18)' },
+    upload: { border: '#f97316', text: '#fdba74', glow: 'rgba(249, 115, 22, 0.18)' },
+  }
+
+  if (level === 'error') return palette.error
+  return palette[kind] || palette.system
+}
 
 export default function AIPlannerPage() {
   const qc = useQueryClient()
@@ -77,6 +109,7 @@ export default function AIPlannerPage() {
   const plannerHydrated = useWorkspaceStateStore((state) => state.hydrated)
   const persistedAIPlanner = useWorkspaceStateStore((state) => state.aiPlannerByProject[plannerStorageKey])
   const setAIPlannerState = useWorkspaceStateStore((state) => state.setAIPlannerState)
+  const clearAIPlannerState = useWorkspaceStateStore((state) => state.clearAIPlannerState)
 
   const [planningPrompt, setPlanningPrompt] = useState('')
   const [srsFile, setSrsFile] = useState(null)
@@ -84,14 +117,18 @@ export default function AIPlannerPage() {
   const [selectedSuggestionChips, setSelectedSuggestionChips] = useState([])
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [aiPlannerTab, setAiPlannerTab] = useState('planner')
-  const [suggestions, setSuggestions] = useState(DEFAULT_SUGGESTIONS)
+  const [planningPaths, setPlanningPaths] = useState(DEFAULT_PLANNING_PATHS)
+  const [selectedPlanningPath, setSelectedPlanningPath] = useState(null)
   const [suggestContext, setSuggestContext] = useState(DEFAULT_SUGGEST_CONTEXT)
   const [backlogDraft, setBacklogDraft] = useState(DEFAULT_BACKLOG_DRAFT)
   const [promptPreview, setPromptPreview] = useState('')
   const [latestDocumentStatus, setLatestDocumentStatus] = useState(null)
   const [lastSrsLabel, setLastSrsLabel] = useState('')
+  const [plannerResetAt, setPlannerResetAt] = useState(null)
   const [plannerChat, setPlannerChat] = useState(DEFAULT_PLANNER_CHAT)
+  const [plannerLogs, setPlannerLogs] = useState(DEFAULT_PLANNER_LOGS)
   const [selectedItem, setSelectedItem] = useState(null)
+  const [debugPanelOpen, setDebugPanelOpen] = useState(true)
 
   const filePickerRef = useRef(null)
   const mapPickerRef = useRef(null)
@@ -110,12 +147,15 @@ export default function AIPlannerPage() {
     setAiPlannerTab(snapshot.aiPlannerTab || 'planner')
     setSelectedSuggestionChips(Array.isArray(snapshot.selectedSuggestionChips) ? snapshot.selectedSuggestionChips : [])
     setSuggestionsOpen(Boolean(snapshot.suggestionsOpen))
-    setSuggestions(snapshot.suggestions || DEFAULT_SUGGESTIONS)
+    setPlanningPaths(Array.isArray(snapshot.planningPaths) ? snapshot.planningPaths : DEFAULT_PLANNING_PATHS)
+    setSelectedPlanningPath(snapshot.selectedPlanningPath || null)
     setSuggestContext(snapshot.suggestContext || DEFAULT_SUGGEST_CONTEXT)
     setBacklogDraft(snapshot.backlogDraft || DEFAULT_BACKLOG_DRAFT)
     setPromptPreview(snapshot.promptPreview || '')
     setLastSrsLabel(snapshot.lastSrsLabel || '')
+    setPlannerResetAt(snapshot.plannerResetAt || null)
     setPlannerChat(Array.isArray(snapshot.plannerChat) && snapshot.plannerChat.length ? snapshot.plannerChat : DEFAULT_PLANNER_CHAT)
+    setPlannerLogs(Array.isArray(snapshot.plannerLogs) ? snapshot.plannerLogs : DEFAULT_PLANNER_LOGS)
   }, [plannerHydrated, plannerStorageKey, persistedAIPlanner])
 
   useEffect(() => {
@@ -127,12 +167,15 @@ export default function AIPlannerPage() {
       aiPlannerTab,
       selectedSuggestionChips,
       suggestionsOpen,
-      suggestions,
+      planningPaths,
+      selectedPlanningPath,
       suggestContext,
       backlogDraft,
       promptPreview,
       lastSrsLabel,
+      plannerResetAt,
       plannerChat,
+      plannerLogs,
     })
   }, [
     plannerHydrated,
@@ -141,12 +184,15 @@ export default function AIPlannerPage() {
     aiPlannerTab,
     selectedSuggestionChips,
     suggestionsOpen,
-    suggestions,
+    planningPaths,
+    selectedPlanningPath,
     suggestContext,
     backlogDraft,
     promptPreview,
     lastSrsLabel,
+    plannerResetAt,
     plannerChat,
+    plannerLogs,
     setAIPlannerState,
   ])
 
@@ -219,6 +265,55 @@ export default function AIPlannerPage() {
     }
   }
 
+  const appendPlannerLog = (entry) => {
+    const now = new Date().toISOString()
+    const nextEntry = {
+      id: makeId('log'),
+      ts: now,
+      kind: entry.kind || 'system',
+      level: entry.level || 'info',
+      step: entry.step || 'planner',
+      title: entry.title || 'Planner event',
+      summary: entry.summary || '',
+      request: entry.request ?? null,
+      response: entry.response ?? null,
+      raw: entry.raw ?? null,
+      prompt: entry.prompt ?? null,
+      meta: entry.meta ?? null,
+    }
+
+    setPlannerLogs((prev) => [nextEntry, ...prev].slice(0, 120))
+  }
+
+  const resetPlannerWorkspace = () => {
+    const now = new Date().toISOString()
+    clearAIPlannerState(plannerStorageKey)
+    setPlannerResetAt(now)
+    setPlanningPrompt('')
+    setSrsFile(null)
+    setMapFile(null)
+    setSelectedSuggestionChips([])
+    setSuggestionsOpen(false)
+    setPlanningPaths(DEFAULT_PLANNING_PATHS)
+    setSelectedPlanningPath(null)
+    setSuggestContext(DEFAULT_SUGGEST_CONTEXT)
+    setBacklogDraft(DEFAULT_BACKLOG_DRAFT)
+    setPromptPreview('')
+    setLatestDocumentStatus(null)
+    setLastSrsLabel('')
+    setPlannerChat(DEFAULT_PLANNER_CHAT)
+    setPlannerLogs(DEFAULT_PLANNER_LOGS)
+    setSelectedItem(null)
+    toast.success('AI Planner reset. Upload a fresh SRS to start a new planning session.')
+    appendPlannerLog({
+      kind: 'system',
+      step: 'planner_reset',
+      title: 'Planner reset',
+      summary: 'Cleared cached SRS, requirement map, suggestions, timeline, and execution logs.',
+      response: { resetAt: now },
+    })
+  }
+
   const resolveProjectId = async () => selectedProjectId || ''
 
   useEffect(() => {
@@ -269,6 +364,19 @@ export default function AIPlannerPage() {
 
         if (current.status === 'processed') {
           setPlannerChat((prev) => [...prev, { role: 'assistant', text: `SRS ingestion completed for ${documentName || current.name}.` }])
+          appendPlannerLog({
+            kind: 'upload',
+            step: 'srs_processed',
+            title: 'SRS processing completed',
+            summary: `${documentName || current.name} reached processed status.`,
+            response: {
+              documentId: current._id,
+              name: current.name,
+              status: current.status,
+              ingestionStatus: current.ingestionStatus,
+              requirementMap: current.requirementMap || null,
+            },
+          })
           toast.success('SRS embedding completed')
           qc.invalidateQueries({ queryKey: ['ai-planner-documents', projectId] })
           return
@@ -293,6 +401,21 @@ export default function AIPlannerPage() {
           setPlannerChat((prev) => [...prev, { role: 'assistant', text: `SRS ingestion failed for ${documentName || current.name}.` }])
           const stage = current.ingestionStatus?.errorStage || 'unknown'
           const errorMessage = current.ingestionStatus?.errorMessage || 'SRS processing failed'
+          appendPlannerLog({
+            kind: 'error',
+            level: 'error',
+            step: 'srs_failed',
+            title: 'SRS processing failed',
+            summary: `${documentName || current.name} failed at ${stage}.`,
+            response: {
+              documentId: current._id,
+              name: current.name,
+              status: current.status,
+              stage,
+              errorMessage,
+              ingestionStatus: current.ingestionStatus,
+            },
+          })
           toast.error(`SRS processing failed at ${stage}: ${errorMessage}`, { duration: 9000 })
           qc.invalidateQueries({ queryKey: ['ai-planner-documents', projectId] })
           return
@@ -345,18 +468,34 @@ export default function AIPlannerPage() {
       return
     }
 
+    if (plannerResetAt) {
+      setLatestDocumentStatus(null)
+      return
+    }
+
     const topDoc = documents[0]
     setLatestDocumentStatus(topDoc)
 
     if ((topDoc.status === 'uploaded' || topDoc.status === 'embedding' || topDoc.status === 'processing') && !monitorInFlightRef.current) {
       monitorDocumentIngestion(topDoc._id, topDoc.name)
     }
-  }, [documents, selectedProjectId])
+  }, [documents, selectedProjectId, plannerResetAt])
 
   const uploadSrs = useMutation({
     onMutate: () => {
       if (srsFile) {
         setLatestDocumentStatus({ name: srsFile.name, status: 'uploading' })
+        appendPlannerLog({
+          kind: 'upload',
+          step: 'upload_started',
+          title: 'SRS upload started',
+          summary: `Uploading ${srsFile.name} (${Math.max(1, Math.round(srsFile.size / 1024))} KB).`,
+          request: {
+            fileName: srsFile.name,
+            fileSizeBytes: srsFile.size,
+            fileType: srsFile.type,
+          },
+        })
       }
     },
     mutationFn: async () => {
@@ -378,21 +517,52 @@ export default function AIPlannerPage() {
         headers: { 'Content-Type': 'multipart/form-data' },
       })).data
 
+      appendPlannerLog({
+        kind: 'upload',
+        step: 'upload_response',
+        title: 'SRS upload API response',
+        summary: 'Document created and background processing started.',
+        response: {
+          success: result?.success,
+          data: result?.data || null,
+        },
+      })
       return { result, resolvedProjectId }
     },
     onSuccess: ({ result, resolvedProjectId }) => {
       qc.invalidateQueries({ queryKey: ['ai-planner-documents', resolvedProjectId] })
       const uploadedDoc = result?.data
+      setPlannerResetAt(null)
       setLatestDocumentStatus(uploadedDoc || null)
       setLastSrsLabel(`${uploadedDoc?.name || 'document'} - ${uploadedDoc?.status || 'uploaded'}`)
       setPlannerChat((prev) => [...prev, { role: 'assistant', text: `SRS uploaded (${uploadedDoc?.name || 'document'}). Embedding started in background.` }])
       setSrsFile(null)
       toast.success('SRS uploaded. Embedding started.')
+      appendPlannerLog({
+        kind: 'upload',
+        step: 'upload_success',
+        title: 'SRS upload accepted',
+        summary: `${uploadedDoc?.name || 'document'} uploaded; background embedding started.`,
+        response: {
+          documentId: uploadedDoc?._id || null,
+          document: uploadedDoc || null,
+        },
+      })
       if (uploadedDoc?._id) {
         monitorDocumentIngestion(uploadedDoc._id, uploadedDoc.name, resolvedProjectId)
       }
     },
-    onError: (error) => toast.error(error?.message || 'Failed to upload SRS'),
+    onError: (error) => {
+      appendPlannerLog({
+        kind: 'error',
+        level: 'error',
+        step: 'upload_failed',
+        title: 'SRS upload failed',
+        summary: error?.message || 'Failed to upload SRS',
+        response: error?.response?.data || null,
+      })
+      toast.error(error?.message || 'Failed to upload SRS')
+    },
   })
 
   const generateRequirementMap = useMutation({
@@ -401,6 +571,15 @@ export default function AIPlannerPage() {
       if (!resolvedProjectId) {
         throw new Error('No workspace project available. Create or select a project, then try again.')
       }
+      appendPlannerLog({
+        kind: 'map',
+        step: 'map_request',
+        title: 'Requirement map generation requested',
+        summary: `Generating requirement map for project ${resolvedProjectId}.`,
+        request: {
+          projectId: resolvedProjectId,
+        },
+      })
       const response = await api.post(`/documents/project/${resolvedProjectId}/generate-map`, {}, {
         timeout: 0,
       })
@@ -409,10 +588,32 @@ export default function AIPlannerPage() {
     onSuccess: ({ resolvedProjectId, result }) => {
       const itemCount = result?.data?.requirementMap?.items?.length || 0
       toast.success(`Requirement map generated (${itemCount} items)`)
+      setPlannerResetAt(null)
       setPlannerChat((prev) => [...prev, { role: 'assistant', text: `Requirement map generated with ${itemCount} entries.` }])
+      appendPlannerLog({
+        kind: 'map',
+        step: 'map_response',
+        title: 'Requirement map generated',
+        summary: `Generated ${itemCount} requirement map items.`,
+        response: {
+          projectId: resolvedProjectId,
+          requirementMap: result?.data?.requirementMap || null,
+          extractionMeta: result?.data?.extractionMeta || null,
+        },
+      })
       qc.invalidateQueries({ queryKey: ['ai-planner-documents', resolvedProjectId] })
     },
-    onError: (error) => toast.error(error?.response?.data?.message || error?.message || 'Failed to generate requirement map'),
+    onError: (error) => {
+      appendPlannerLog({
+        kind: 'error',
+        level: 'error',
+        step: 'map_failed',
+        title: 'Requirement map generation failed',
+        summary: error?.response?.data?.message || error?.message || 'Failed to generate requirement map',
+        response: error?.response?.data || null,
+      })
+      toast.error(error?.response?.data?.message || error?.message || 'Failed to generate requirement map')
+    },
   })
 
   const uploadRequirementMap = useMutation({
@@ -428,6 +629,17 @@ export default function AIPlannerPage() {
       const formData = new FormData()
       formData.append('map', mapFile)
 
+      appendPlannerLog({
+        kind: 'map',
+        step: 'map_upload_request',
+        title: 'Requirement map upload started',
+        summary: `Uploading ${mapFile.name}.`,
+        request: {
+          fileName: mapFile.name,
+          fileSizeBytes: mapFile.size,
+        },
+      })
+
       const response = await api.post(`/documents/project/${resolvedProjectId}/upload-map`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
@@ -436,15 +648,36 @@ export default function AIPlannerPage() {
     onSuccess: ({ resolvedProjectId, result }) => {
       const itemCount = result?.data?.requirementMap?.items?.length || 0
       toast.success(`Requirement map uploaded (${itemCount} items)`)
+      setPlannerResetAt(null)
       setPlannerChat((prev) => [...prev, { role: 'assistant', text: `Requirement map uploaded from JSON with ${itemCount} entries.` }])
       setLatestDocumentStatus((prev) => (prev ? {
         ...prev,
         requirementMap: result?.data?.requirementMap || prev.requirementMap,
       } : prev))
       setMapFile(null)
+      appendPlannerLog({
+        kind: 'map',
+        step: 'map_upload_response',
+        title: 'Requirement map uploaded',
+        summary: `Uploaded map with ${itemCount} items.`,
+        response: {
+          projectId: resolvedProjectId,
+          requirementMap: result?.data?.requirementMap || null,
+        },
+      })
       qc.invalidateQueries({ queryKey: ['ai-planner-documents', resolvedProjectId] })
     },
-    onError: (error) => toast.error(error?.response?.data?.message || error?.message || 'Failed to upload requirement map'),
+    onError: (error) => {
+      appendPlannerLog({
+        kind: 'error',
+        level: 'error',
+        step: 'map_upload_failed',
+        title: 'Requirement map upload failed',
+        summary: error?.response?.data?.message || error?.message || 'Failed to upload requirement map',
+        response: error?.response?.data || null,
+      })
+      toast.error(error?.response?.data?.message || error?.message || 'Failed to upload requirement map')
+    },
   })
 
   const fetchSuggestions = useMutation({
@@ -456,6 +689,13 @@ export default function AIPlannerPage() {
       const projectStateResponse = await api.get(`/stories/project-state/${resolvedProjectId}`)
       const projectState = projectStateResponse?.data?.data || {}
 
+      const requestPayload = {
+        projectId: resolvedProjectId,
+        moduleName,
+        userInput: inputText,
+        projectState,
+      }
+
       appLogger.info('AI Planner suggest request', {
         projectId: resolvedProjectId,
         moduleName,
@@ -463,20 +703,22 @@ export default function AIPlannerPage() {
         projectStateKeys: Object.keys(projectState || {}).length,
       })
 
-      const response = await api.post(`/stories/suggest/${resolvedProjectId}`, {
-        moduleName,
-        userInput: inputText,
-        projectState,
-      }, {
-        timeout: 0,
+      appendPlannerLog({
+        kind: 'request',
+        step: 'suggest_request',
+        title: 'Suggest request prepared',
+        summary: `Sending project state and user instruction to /stories/suggest/${resolvedProjectId}.`,
+        request: requestPayload,
+        meta: {
+          projectStateKeys: Object.keys(projectState || {}),
+        },
       })
-      return response.data.data || { suggestions: [] }
+
+      const response = await api.post(`/stories/suggest/${resolvedProjectId}`, requestPayload, { timeout: 0 })
+      return response.data.data || { paths: [] }
     },
     onSuccess: (data) => {
-      const structured = data?.structuredSuggestions || {}
-      const epics = Array.isArray(structured.epics) ? structured.epics : []
-      const stories = Array.isArray(structured.stories) ? structured.stories : []
-      const tasks = Array.isArray(structured.tasks) ? structured.tasks : []
+      const paths = Array.isArray(data?.paths) ? data.paths : []
       const planningWarnings = data?.planningMeta?.warnings || []
       const isLowConfidence = data?.planningMeta?.contextQuality === 'low'
       const nextSuggestContext = {
@@ -488,26 +730,37 @@ export default function AIPlannerPage() {
           ? data.planningMeta.fetchedChunkPreview
           : [],
       }
-      setSuggestions({
-        epics,
-        stories,
-        tasks,
-      })
+      setPlanningPaths(paths)
+      if (paths.length && !selectedPlanningPath) {
+        setSelectedPlanningPath(paths[0])
+      }
       setSuggestContext(nextSuggestContext)
-      const hasAny = epics.length + stories.length + tasks.length > 0
+      const hasAny = paths.length > 0
       setSuggestionsOpen(hasAny)
 
       appLogger.info('AI Planner suggest response', {
         hasAny,
-        epics: epics.length,
-        stories: stories.length,
-        tasks: tasks.length,
+        paths: paths.length,
         message: data?.message || null,
         contextSummary: data?.contextSummary || null,
       })
 
+      appendPlannerLog({
+        kind: 'response',
+        step: 'suggest_response',
+        title: 'Suggest response received',
+        summary: `Planning paths: ${paths.length}.`,
+        response: {
+          paths,
+          suggestions: data?.suggestions || [],
+          planningMeta: data?.planningMeta || null,
+          meta: data?.meta || null,
+          discoveryMeta: data?.discoveryMeta || null,
+        },
+      })
+
       if (!hasAny) {
-        toast.error('No suggestions generated. Upload/process SRS or try a clearer prompt.')
+        toast.error('No planning paths generated. Upload/process SRS or try a clearer prompt.')
       } else if (data?.message) {
         toast.success(data.message)
       }
@@ -528,55 +781,91 @@ export default function AIPlannerPage() {
         status: error?.response?.status,
         details: error?.response?.data || null,
       })
+      appendPlannerLog({
+        kind: 'error',
+        level: 'error',
+        step: 'suggest_failed',
+        title: 'Suggest request failed',
+        summary: error?.response?.data?.message || error?.message || 'Failed to fetch suggestions',
+        response: error?.response?.data || null,
+      })
       toast.error(error?.response?.data?.message || error?.message || 'Failed to fetch suggestions')
     },
   })
 
-  const hasSuggestions = (suggestions.epics?.length || 0) + (suggestions.stories?.length || 0) + (suggestions.tasks?.length || 0) > 0
+  const hasPlanningPaths = planningPaths.length > 0
 
-  const renderSuggestionGroup = (title, prefix, items = []) => {
-    if (!items.length) return null
-    return (
-      <div className="space-y-1">
-        <p className="text-[11px] uppercase tracking-wide px-1" style={{ color: 'var(--text-muted)' }}>{title}</p>
-        {items.map((s, idx) => {
-          const value = `${prefix}: ${s}`
-          return (
-            <button
-              key={`${prefix}-${idx}-${s}`}
-              className="w-full text-left px-3 py-2 rounded-[10px] text-sm font-semibold border"
-              style={{ background: 'var(--bg-input)', color: 'var(--text-primary)', borderColor: 'var(--border-input)' }}
-              onClick={() => addSuggestionChip(value)}
-            >
-              {value}
-            </button>
-          )
-        })}
-      </div>
-    )
+  const selectPlanningPath = (path) => {
+    setSelectedPlanningPath(path)
+    appendPlannerLog({
+      kind: 'system',
+      step: 'planning_path_selected',
+      title: 'Planning path selected',
+      summary: path?.name || path?.id || 'Selected planning path',
+      response: path || null,
+    })
   }
 
   const buildCombinedPlanningContext = () => {
-    const suggestionContext = [
-      suggestions.epics.length > 0 && `Suggested Epics:\n${suggestions.epics.map((e) => `- ${e}`).join('\n')}`,
-      suggestions.stories.length > 0 && `Suggested Stories:\n${suggestions.stories.map((s) => `- ${s}`).join('\n')}`,
-      suggestions.tasks.length > 0 && `Suggested Tasks:\n${suggestions.tasks.map((t) => `- ${t}`).join('\n')}`,
-    ].filter(Boolean).join('\n\n')
-
     const chatContext = plannerChat
       .filter((m) => m.role === 'user')
       .map((m) => m.text)
       .join('\n')
 
-    const selectedContext = selectedSuggestionChips.length > 0 ? `Selected Planning Chips:\n${selectedSuggestionChips.map((s) => `- ${s}`).join('\n')}` : ''
+    const currentPath = selectedPlanningPath || planningPaths[0] || null
+    const selectedPathRequirements = currentSelectedRequirements
+    const selectedPathContext = currentPath ? JSON.stringify(currentPath, null, 2) : '{}'
+    const selectedRequirementContext = JSON.stringify(selectedPathRequirements, null, 2)
+    const selectedChunkRefs = currentSelectedChunkRefs
+    const selectedSectionRefs = currentSelectedSectionRefs
+    const structuredPlannerContext = JSON.stringify({
+      planningPrompt,
+      selectedSuggestionChips,
+      planningPaths,
+      selectedPlanningPath: currentPath,
+      selectedRequirements: selectedRequirementContext,
+      selectedChunkRefs,
+      selectedSectionRefs,
+      backlogDraft,
+      latestDocumentStatus,
+      lastSrsLabel,
+    }, null, 2)
 
     return [
       chatContext,
-      selectedContext,
       planningPrompt && `Planning Prompt:\n${planningPrompt}`,
-      suggestionContext,
+      `Selected Path JSON:\n${selectedPathContext}`,
+      `Selected Requirements JSON:\n${selectedRequirementContext}`,
+      `Selected Chunk Refs JSON:\n${JSON.stringify(selectedChunkRefs, null, 2)}`,
+      `Selected Section Refs JSON:\n${JSON.stringify(selectedSectionRefs, null, 2)}`,
+      `Current Planner Context JSON:\n${structuredPlannerContext}`,
     ].filter(Boolean).join('\n\n')
   }
+
+  const currentSelectedPath = selectedPlanningPath || planningPaths[0] || null
+  const currentRequirementGraphItems = Array.isArray(latestDocumentStatus?.requirementGraph?.items)
+    ? latestDocumentStatus.requirementGraph.items
+    : []
+  const currentSelectedRequirements = Array.isArray(currentSelectedPath?.requirements)
+    ? currentSelectedPath.requirements.map((reqId) => {
+      const graphItem = currentRequirementGraphItems.find((item) => String(item?.requirement_id || '').toUpperCase() === String(reqId || '').toUpperCase())
+      return {
+        requirement_id: reqId,
+        title: graphItem?.title || reqId,
+        module: graphItem?.module || '',
+        type: graphItem?.type || '',
+        dependencies: Array.isArray(graphItem?.dependencies) ? graphItem.dependencies : [],
+        chunk_refs: Array.isArray(graphItem?.chunk_refs) ? graphItem.chunk_refs : [],
+        section_refs: Array.isArray(graphItem?.section_refs) ? graphItem.section_refs : [],
+      }
+    })
+    : []
+  const currentSelectedChunkRefs = Array.isArray(currentSelectedPath?.chunk_refs)
+    ? currentSelectedPath.chunk_refs
+    : currentSelectedRequirements.flatMap((item) => Array.isArray(item.chunk_refs) ? item.chunk_refs : [])
+  const currentSelectedSectionRefs = Array.isArray(currentSelectedPath?.section_refs)
+    ? currentSelectedPath.section_refs
+    : currentSelectedRequirements.flatMap((item) => Array.isArray(item.section_refs) ? item.section_refs : [])
 
   const previewBacklogPrompt = useMutation({
     mutationFn: async () => {
@@ -584,11 +873,30 @@ export default function AIPlannerPage() {
       if (!resolvedProjectId) throw new Error('No project available. Please create one first.')
 
       const combinedContext = buildCombinedPlanningContext()
+      appendPlannerLog({
+        kind: 'prompt',
+        step: 'preview_request',
+        title: 'Backlog prompt preview requested',
+        summary: `Preparing exact backlog prompt preview for project ${resolvedProjectId}.`,
+        request: {
+          moduleName,
+          additionalContext: combinedContext,
+          suggestContext,
+          selectedPath: currentSelectedPath,
+          selectedRequirements: currentSelectedRequirements,
+          chunkRefs: currentSelectedChunkRefs,
+          sectionRefs: currentSelectedSectionRefs,
+        },
+      })
 
       const response = await api.post(`/stories/generate-preview/${resolvedProjectId}`, {
         moduleName,
         additionalContext: combinedContext,
         suggestContext,
+        selectedPath: currentSelectedPath,
+        selectedRequirements: currentSelectedRequirements,
+        chunkRefs: currentSelectedChunkRefs,
+        sectionRefs: currentSelectedSectionRefs,
       }, {
         timeout: 0,
       })
@@ -598,9 +906,29 @@ export default function AIPlannerPage() {
       setPromptPreview(data?.promptPreview || '')
       const previewLength = String(data?.promptPreview || '').length
       setPlannerChat((prev) => [...prev, { role: 'assistant', text: `Backlog prompt preview ready (${previewLength} characters).` }])
+      appendPlannerLog({
+        kind: 'prompt',
+        step: 'preview_response',
+        title: 'Backlog prompt preview received',
+        summary: `Exact prompt payload returned (${previewLength} characters).`,
+        response: {
+          promptPreview: data?.promptPreview || '',
+          planningMeta: data?.planningMeta || null,
+        },
+      })
       toast.success('Prompt preview loaded')
     },
-    onError: (error) => toast.error(error?.message || 'Failed to load prompt preview'),
+    onError: (error) => {
+      appendPlannerLog({
+        kind: 'error',
+        level: 'error',
+        step: 'preview_failed',
+        title: 'Backlog prompt preview failed',
+        summary: error?.message || 'Failed to load prompt preview',
+        response: error?.response?.data || null,
+      })
+      toast.error(error?.message || 'Failed to load prompt preview')
+    },
   })
 
   const generateBacklog = useMutation({
@@ -609,16 +937,72 @@ export default function AIPlannerPage() {
       if (!resolvedProjectId) throw new Error('No project available. Please create one first.')
       const combinedContext = buildCombinedPlanningContext()
 
+      appendPlannerLog({
+        kind: 'request',
+        step: 'generate_preview_before_backlog',
+        title: 'Preparing final backlog generation',
+        summary: 'Fetching exact prompt preview before calling backlog generation.',
+        request: {
+          moduleName,
+          additionalContext: combinedContext,
+          suggestContext,
+          selectedPath: currentSelectedPath,
+          selectedRequirements: currentSelectedRequirements,
+          chunkRefs: currentSelectedChunkRefs,
+          sectionRefs: currentSelectedSectionRefs,
+        },
+      })
+
+      let promptPreviewText = ''
+      try {
+        const previewResponse = await api.post(`/stories/generate-preview/${resolvedProjectId}`, {
+          moduleName,
+          additionalContext: combinedContext,
+          suggestContext,
+          selectedPath: currentSelectedPath,
+          selectedRequirements: currentSelectedRequirements,
+          chunkRefs: currentSelectedChunkRefs,
+          sectionRefs: currentSelectedSectionRefs,
+        }, {
+          timeout: 0,
+        })
+
+        promptPreviewText = previewResponse?.data?.data?.promptPreview || ''
+        appendPlannerLog({
+          kind: 'prompt',
+          step: 'generate_prompt_preview',
+          title: 'Exact backlog prompt captured',
+          summary: `Prompt preview captured (${String(promptPreviewText || '').length} characters).`,
+          response: {
+            promptPreview: promptPreviewText,
+            planningMeta: previewResponse?.data?.data?.planningMeta || null,
+          },
+        })
+      } catch (previewError) {
+        appendPlannerLog({
+          kind: 'error',
+          level: 'error',
+          step: 'generate_prompt_preview_failed',
+          title: 'Prompt preview capture failed',
+          summary: previewError?.response?.data?.message || previewError?.message || 'Prompt preview request failed',
+          response: previewError?.response?.data || null,
+        })
+      }
+
       const response = await api.post(`/stories/generate/${resolvedProjectId}`, {
         moduleName,
         additionalContext: combinedContext,
         suggestContext,
+        selectedPath: currentSelectedPath,
+        selectedRequirements: currentSelectedRequirements,
+        chunkRefs: currentSelectedChunkRefs,
+        sectionRefs: currentSelectedSectionRefs,
       }, {
         timeout: 0,
       })
-      return { data: response.data.data, resolvedProjectId }
+      return { data: response.data.data, resolvedProjectId, promptPreviewText }
     },
-    onSuccess: ({ data, resolvedProjectId }) => {
+    onSuccess: ({ data, resolvedProjectId, promptPreviewText }) => {
       const normalized = {
         epics: normalizeGeneratedItems(data?.epics || [], 'epic'),
         stories: normalizeGeneratedItems(data?.stories || [], 'story'),
@@ -631,6 +1015,24 @@ export default function AIPlannerPage() {
 
       const planningWarnings = data?.planningMeta?.warnings || []
       const isLowConfidence = data?.planningMeta?.contextQuality === 'low'
+
+      appendPlannerLog({
+        kind: 'response',
+        step: 'generate_response',
+        title: 'Final backlog generation response',
+        summary: `Received ${normalized.epics.length} epics, ${normalized.stories.length} stories, ${normalized.tasks.length} tasks, ${normalized.subtasks.length} subtasks.`,
+        prompt: promptPreviewText || promptPreview || '',
+        response: {
+          selectedPath: currentSelectedPath || null,
+          selectedRequirements: currentSelectedRequirements,
+          chunkRefs: currentSelectedChunkRefs,
+          sectionRefs: currentSelectedSectionRefs,
+          backlog: data || null,
+          meta: data?.meta || null,
+          planningMeta: data?.planningMeta || null,
+          normalizedBacklog: normalized,
+        },
+      })
 
       setPlannerChat((prev) => {
         const next = [...prev, { role: 'assistant', text: `Backlog generated with ${normalized.epics.length} epics, ${normalized.stories.length} stories, ${normalized.tasks.length} tasks. Review on Backlog tab, then confirm push to Jira.` }]
@@ -648,7 +1050,17 @@ export default function AIPlannerPage() {
       // Auto-switch to backlog tab so user sees the generated content
       setAiPlannerTab('backlog')
     },
-    onError: (error) => toast.error(error?.message || 'Failed to generate backlog'),
+    onError: (error) => {
+      appendPlannerLog({
+        kind: 'error',
+        level: 'error',
+        step: 'generate_failed',
+        title: 'Backlog generation failed',
+        summary: error?.message || 'Failed to generate backlog',
+        response: error?.response?.data || null,
+      })
+      toast.error(error?.message || 'Failed to generate backlog')
+    },
   })
 
   const llmActionLocked = fetchSuggestions.isPending || generateBacklog.isPending || generateRequirementMap.isPending
@@ -720,6 +1132,25 @@ export default function AIPlannerPage() {
         throw error
       }
 
+      const jiraKey = selectedJiraProjectKey || project?.jiraProjectKey
+      if (!jiraKey) {
+        throw new Error('Select Jira project in sidebar first')
+      }
+
+      appendPlannerLog({
+        kind: 'request',
+        step: 'save_push_request',
+        title: 'Save and push requested',
+        summary: 'Submitting selected backlog draft to save and Jira push.',
+        request: {
+          epics: selectedEpics,
+          stories: selectedStories,
+          tasks: selectedTasks,
+          subtasks: selectedSubtasks,
+          jiraKey,
+        },
+      })
+
       await api.post(`/stories/save/${resolvedProjectId}`, {
         epics: selectedEpics,
         stories: selectedStories,
@@ -730,16 +1161,23 @@ export default function AIPlannerPage() {
       const freshEpics = (await api.get(`/stories/epics/${resolvedProjectId}`)).data.data || []
       const freshStories = (await api.get(`/stories/project/${resolvedProjectId}`)).data.data || []
 
-      const jiraKey = selectedJiraProjectKey || project?.jiraProjectKey
-      if (!jiraKey) {
-        throw new Error('Select Jira project in sidebar first')
-      }
-
       await api.post(`/jira/connect/${resolvedProjectId}`, { jiraProjectKey: jiraKey })
 
       await api.post(`/jira/push/${resolvedProjectId}`, {
         epicIds: freshEpics.map((e) => e._id),
         storyIds: freshStories.filter((s) => s.type !== 'subtask').map((s) => s._id),
+      })
+
+      appendPlannerLog({
+        kind: 'response',
+        step: 'save_push_response',
+        title: 'Backlog saved and pushed',
+        summary: 'Backlog persisted and synced to Jira.',
+        response: {
+          epicCount: freshEpics.length,
+          storyCount: freshStories.filter((s) => s.type !== 'subtask').length,
+          jiraProjectKey: jiraKey,
+        },
       })
     },
     onSuccess: () => {
@@ -815,7 +1253,7 @@ export default function AIPlannerPage() {
     setSelectedSuggestionChips((prev) => [...prev, value])
   }
 
-  const latestDoc = latestDocumentStatus || documents[0] || null
+  const latestDoc = plannerResetAt ? null : (latestDocumentStatus || documents[0] || null)
   const hasRequirementMap = useMemo(() => Boolean(latestDoc?.requirementMap?.items?.length), [latestDoc])
 
   const getCollectionFromType = (type) => {
@@ -871,31 +1309,59 @@ export default function AIPlannerPage() {
   const storiesByEpic = useMemo(() => {
     const map = new Map()
     
-    // Ensure backlogDraft has required properties
     const stories = Array.isArray(backlogDraft?.stories) ? backlogDraft.stories : []
-    const tasks = Array.isArray(backlogDraft?.tasks) ? backlogDraft.tasks : []
-    
-    // Group stories by epic
+
     stories.forEach((story) => {
       const key = story.epicTempId || 'ungrouped'
       const arr = map.get(key) || []
-      arr.push({ ...story, type: 'story' })
+      arr.push(story)
       map.set(key, arr)
     })
-    
-    // Group tasks (only direct tasks, not under stories)
-    tasks.forEach((task) => {
-      if (!task.parentTempId) {
-        // Only orphan tasks get grouped by epic directly
-        const key = task.epicTempId || 'ungrouped'
-        const arr = map.get(key) || []
-        arr.push({ ...task, type: 'task' })
-        map.set(key, arr)
-      }
-    })
-    
+
     return map
   }, [backlogDraft?.stories, backlogDraft?.tasks])
+
+  const tasksByStory = useMemo(() => {
+    const map = new Map()
+    const tasks = Array.isArray(backlogDraft?.tasks) ? backlogDraft.tasks : []
+
+    tasks.forEach((task) => {
+      if (!task.parentTempId) return
+      const rows = map.get(task.parentTempId) || []
+      rows.push(task)
+      map.set(task.parentTempId, rows)
+    })
+
+    return map
+  }, [backlogDraft?.tasks])
+
+  const orphanTasksByEpic = useMemo(() => {
+    const map = new Map()
+    const tasks = Array.isArray(backlogDraft?.tasks) ? backlogDraft.tasks : []
+
+    tasks.forEach((task) => {
+      if (task.parentTempId) return
+      const key = task.epicTempId || 'ungrouped'
+      const rows = map.get(key) || []
+      rows.push(task)
+      map.set(key, rows)
+    })
+
+    return map
+  }, [backlogDraft?.tasks])
+
+  const subtasksByTask = useMemo(() => {
+    const map = new Map()
+    const subtasks = Array.isArray(backlogDraft?.subtasks) ? backlogDraft.subtasks : []
+
+    subtasks.forEach((subtask) => {
+      const rows = map.get(subtask.parentTempId) || []
+      rows.push(subtask)
+      map.set(subtask.parentTempId, rows)
+    })
+
+    return map
+  }, [backlogDraft?.subtasks])
 
   const srsStatusLabel = latestDoc
     ? `${latestDoc.name} - ${latestDoc.status}`
@@ -957,9 +1423,36 @@ export default function AIPlannerPage() {
                 <h3 className="text-[30px] font-bold">SRS Ingestion</h3>
                 <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Upload - Process - Suggest - Generate</p>
               </div>
-              <span className={`px-3 py-1 rounded-full text-[12px] font-bold border ${latestDoc?.status === 'processed' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30' : 'bg-amber-500/15 text-amber-300 border-amber-400/30'}`}>
-                {(latestDoc?.status || 'not uploaded').toUpperCase()}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className={`px-3 py-1 rounded-full text-[12px] font-bold border ${latestDoc?.status === 'processed' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30' : 'bg-amber-500/15 text-amber-300 border-amber-400/30'}`}>
+                  {(latestDoc?.status || 'not uploaded').toUpperCase()}
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm inline-flex items-center gap-2"
+                  onClick={resetPlannerWorkspace}
+                  title="Reset AI Planner"
+                  aria-label="Reset AI Planner"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+                    <path
+                      d="M4 12a8 8 0 1 1 2.34 5.66"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M4 7v5h5"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Reset
+                </button>
+              </div>
             </div>
 
             <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>Current SRS: {srsStatusLabel}</p>
@@ -1056,8 +1549,68 @@ export default function AIPlannerPage() {
                   : 'Generate Backlog'}
               </button>
             </div>
+          </div>
 
-            <div className="mt-4">
+          <div className="card p-4">
+            <h3 className="text-[30px] font-bold">Planning Paths</h3>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Suggest now returns navigation paths, not backlog items. Pick one path to drive Generate.</p>
+
+            <div className="mt-3 space-y-2">
+              {planningPaths.map((path) => {
+                const isSelected = (selectedPlanningPath?.id || planningPaths[0]?.id) === path.id
+                return (
+                  <button
+                    key={path.id}
+                    className="w-full text-left rounded-xl border px-3 py-3 transition-colors"
+                    style={{
+                      borderColor: isSelected ? 'rgba(96,165,250,0.8)' : 'var(--border-input)',
+                      background: isSelected ? 'rgba(30,41,59,0.88)' : 'var(--bg-input)',
+                    }}
+                    onClick={() => selectPlanningPath(path)}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{path.name || path.id}</p>
+                        <p className="text-[11px] uppercase tracking-wide mt-1" style={{ color: 'var(--text-muted)' }}>
+                          {path.priority || 'medium'} priority
+                        </p>
+                      </div>
+                      <span className="text-[11px] px-2 py-1 rounded-full border" style={{ borderColor: isSelected ? '#38bdf8' : 'rgba(148,163,184,0.35)', color: isSelected ? '#7dd3fc' : '#94a3b8' }}>
+                        {path.requirements?.length || 0} reqs
+                      </span>
+                    </div>
+                    <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)' }}>{path.reason || 'No reason provided.'}</p>
+                    {path.dependency_notes && (
+                      <p className="text-[11px] mt-2" style={{ color: '#fca5a5' }}>Dependencies: {path.dependency_notes}</p>
+                    )}
+                    {Array.isArray(path.requirements) && path.requirements.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {path.requirements.map((reqId) => (
+                          <span key={`${path.id}-${reqId}`} className="text-[11px] px-2 py-0.5 rounded-full border" style={{ borderColor: 'rgba(99,102,241,0.35)', color: '#c7d2fe', background: 'rgba(99,102,241,0.16)' }}>
+                            {reqId}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </button>
+                )
+              })}
+              {!hasPlanningPaths && <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Click Suggest to generate planning paths.</p>}
+            </div>
+
+            {currentSelectedPath && (
+              <div className="mt-3 rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-input)' }}>
+                <p className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>Selected Path</p>
+                <p className="text-sm mt-1 font-semibold" style={{ color: 'var(--text-primary)' }}>{currentSelectedPath.name || currentSelectedPath.id}</p>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{currentSelectedPath.reason || 'No reason provided.'}</p>
+              </div>
+            )}
+
+            {planningPaths.length === 0 && !selectedPlanningPath && (
+              <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>No planning paths loaded yet.</p>
+            )}
+
+            <div className="mt-3">
               <p className="text-sm font-semibold">Selected Suggestion Chips</p>
               {!selectedSuggestionChips.length ? (
                 <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>No chips selected.</p>
@@ -1070,18 +1623,6 @@ export default function AIPlannerPage() {
                   ))}
                 </div>
               )}
-            </div>
-          </div>
-
-          <div className="card p-4">
-            <h3 className="text-[30px] font-bold">Suggested Structure</h3>
-            <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Based on project module, phase, requirements, and commit history context</p>
-
-            <div className="mt-3 space-y-2">
-              {renderSuggestionGroup('Epics', 'EPIC', suggestions.epics)}
-              {renderSuggestionGroup('Stories', 'STORY', suggestions.stories)}
-              {renderSuggestionGroup('Tasks', 'TASK', suggestions.tasks)}
-              {!hasSuggestions && <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Click Suggest to generate dynamic recommendations.</p>}
             </div>
 
             {(suggestContext.discoveredRequirementIds.length > 0 || suggestContext.fetchedChunks > 0) && (
@@ -1181,6 +1722,86 @@ export default function AIPlannerPage() {
                 })}
               </div>
             </div>
+
+            <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--border)' }}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-[20px] font-bold">Developer Debug Panel</h4>
+                  <button className="btn-secondary btn-sm" onClick={() => setDebugPanelOpen((value) => !value)}>
+                    {debugPanelOpen ? 'Collapse' : 'Expand'}
+                  </button>
+                </div>
+                <button
+                  className="btn-secondary btn-sm"
+                  onClick={() => setPlannerLogs([])}
+                  disabled={!plannerLogs.length}
+                >
+                  Clear Logs
+                </button>
+              </div>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                Raw request, response, prompt preview, AI meta, prompt payload, chunk traces, selected path, and status data for every planner step.
+              </p>
+              {debugPanelOpen && (
+              <div
+                className="mt-3 space-y-3 max-h-[420px] overflow-auto rounded-md border p-3"
+                style={{
+                  borderColor: '#111827',
+                  background: '#020617',
+                  boxShadow: 'inset 0 0 0 1px rgba(148, 163, 184, 0.08)',
+                }}
+              >
+                {!plannerLogs.length && (
+                  <p className="text-xs" style={{ color: '#64748b', fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace" }}>
+                    No execution logs yet. Upload an SRS or run Suggest / Generate to see raw traces.
+                  </p>
+                )}
+
+                {plannerLogs.map((log) => {
+                  const tone = plannerLogTone(log.kind, log.level)
+                  const logBody = {
+                    request: log.request,
+                    response: log.response,
+                    raw: log.raw,
+                    prompt: log.prompt,
+                    meta: log.meta,
+                  }
+
+                  return (
+                    <div
+                      key={log.id}
+                      className="rounded-md border px-3 py-2"
+                      style={{
+                        borderColor: tone.border,
+                        background: 'rgba(2, 6, 23, 0.96)',
+                        color: tone.text,
+                        boxShadow: `0 0 0 1px ${tone.glow}`,
+                        fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-2 text-[11px] uppercase tracking-wide">
+                        <span style={{ color: tone.border }}>
+                          {log.kind} • {log.step}
+                        </span>
+                        <span style={{ color: '#64748b' }}>{log.ts}</span>
+                      </div>
+                      <p className="mt-1 text-sm font-semibold" style={{ color: tone.text }}>
+                        {log.title}
+                      </p>
+                      {log.summary && (
+                        <p className="mt-1 text-xs" style={{ color: '#cbd5e1' }}>
+                          {log.summary}
+                        </p>
+                      )}
+                      <pre className="mt-2 text-[11px] leading-5 whitespace-pre-wrap break-words overflow-x-auto" style={{ color: '#e2e8f0' }}>
+                        {truncateLogValue(logBody, 16000) || '{}'}
+                      </pre>
+                    </div>
+                  )
+                })}
+              </div>
+              )}
+            </div>
           </div>
         </div>
       ) : (
@@ -1215,25 +1836,51 @@ export default function AIPlannerPage() {
                               {item.type === 'task' ? 'TASK' : 'STORY'}: {item.title}
                             </button>
                             <div className="flex items-center gap-2">
-                              {item.type !== 'task' ? (
-                                <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('task', item.tempId)}>+ Task</button>
-                              ) : (
-                                <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('subtask', item.tempId)}>+ Subtask</button>
-                              )}
+                              <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('task', item.tempId)}>+ Task</button>
                               <button className="btn-danger btn-sm" onClick={() => removeByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId)}>Delete</button>
                             </div>
                           </div>
 
-                          {(backlogDraft.subtasks || []).filter((st) => st.parentTempId === item.tempId).map((st) => (
-                            <div key={st.tempId} className="ml-4 mt-2 rounded-lg border p-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-card)' }}>
-                              <div className="flex items-center justify-between gap-2">
-                                <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'subtask', tempId: st.tempId })}>
-                                  SUBTASK: {st.title}
-                                </button>
-                                <button className="btn-danger btn-sm" onClick={() => removeByTempId('subtasks', st.tempId)}>Delete</button>
+                          <div className="ml-4 mt-2 space-y-2">
+                            {(tasksByStory.get(item.tempId) || []).map((task) => (
+                              <div key={task.tempId} className="rounded-lg border p-2" style={{ borderColor: 'rgba(148,163,184,0.2)', background: 'rgba(15,23,42,0.65)' }}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'task', tempId: task.tempId })}>
+                                    TASK: {task.title}
+                                  </button>
+                                  <div className="flex items-center gap-2">
+                                    <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('subtask', task.tempId)}>+ Subtask</button>
+                                    <button className="btn-danger btn-sm" onClick={() => removeByTempId('tasks', task.tempId)}>Delete</button>
+                                  </div>
+                                </div>
+
+                                {(subtasksByTask.get(task.tempId) || []).map((st) => (
+                                  <div key={st.tempId} className="ml-4 mt-2 rounded-lg border p-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-card)' }}>
+                                    <div className="flex items-center justify-between gap-2">
+                                      <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'subtask', tempId: st.tempId })}>
+                                        SUBTASK: {st.title}
+                                      </button>
+                                      <button className="btn-danger btn-sm" onClick={() => removeByTempId('subtasks', st.tempId)}>Delete</button>
+                                    </div>
+                                  </div>
+                                ))}
                               </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+
+                      {(orphanTasksByEpic.get(epic.tempId) || []).map((task) => (
+                        <div key={task.tempId} className="rounded-lg border p-2" style={{ borderColor: 'rgba(148,163,184,0.2)', background: 'rgba(15,23,42,0.65)' }}>
+                          <div className="flex items-center justify-between gap-2">
+                            <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'task', tempId: task.tempId })}>
+                              TASK: {task.title}
+                            </button>
+                            <div className="flex items-center gap-2">
+                              <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('subtask', task.tempId)}>+ Subtask</button>
+                              <button className="btn-danger btn-sm" onClick={() => removeByTempId('tasks', task.tempId)}>Delete</button>
                             </div>
-                          ))}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1297,6 +1944,31 @@ export default function AIPlannerPage() {
                     />
                     Include this item in save/push
                   </label>
+
+                  {Array.isArray(selectedBacklogItem.acceptanceCriteria) && selectedBacklogItem.acceptanceCriteria.length > 0 && (
+                    <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-input)', background: 'rgba(15,23,42,0.65)' }}>
+                      <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>Acceptance Criteria</p>
+                      <div className="mt-2 space-y-1">
+                        {selectedBacklogItem.acceptanceCriteria.map((criterion, idx) => (
+                          <p key={`${selectedBacklogItem.tempId}-ac-${idx}`} className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                            - {typeof criterion === 'string' ? criterion : criterion?.criterion}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {(selectedBacklogItem.epicTempId || selectedBacklogItem.parentTempId) && (
+                    <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-input)', background: 'rgba(15,23,42,0.65)' }}>
+                      <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>Hierarchy</p>
+                      <p className="text-sm mt-1" style={{ color: 'var(--text-primary)' }}>
+                        Epic: {selectedBacklogItem.epicTempId || 'none'}
+                      </p>
+                      <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                        Parent: {selectedBacklogItem.parentTempId || 'none'}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
