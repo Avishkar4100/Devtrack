@@ -16,6 +16,7 @@ const AuditLogSchema = new mongoose.Schema(
       enum: [
         'document_uploaded',
         'document_ingested',
+        'document_ingestion_failed',
         'stories_generated',
         'story_approved',
         'story_edited',

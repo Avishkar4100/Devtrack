@@ -147,12 +147,15 @@ const generateStories = async ({
   deadline,
   teamMembers,
   selectedPath,
+  selectedPlanningPaths,
   selectedRequirements,
   chunkRefs,
   sectionRefs,
 }) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
+    // FIX #4: Support both selectedPath (legacy) and selectedPlanningPaths (new)
+    const paths = selectedPlanningPaths || (selectedPath ? [selectedPath] : []);
     const requestSummary = buildUsageRequestSummary('generateStories', [
       `project=${projectName || projectId || 'unknown'}`,
       `module=${moduleName || 'unknown'}`,
@@ -168,7 +171,8 @@ const generateStories = async ({
       budget,
       deadline: deadline ? new Date(deadline).toISOString() : null,
       team_members: Array.isArray(teamMembers) ? teamMembers : [],
-      selected_path: selectedPath || {},
+      selected_path: paths[0] || {},
+      selected_paths: Array.isArray(paths) ? paths : [],
       selected_requirements: Array.isArray(selectedRequirements) ? selectedRequirements : [],
       chunk_refs: Array.isArray(chunkRefs) ? chunkRefs : [],
       section_refs: Array.isArray(sectionRefs) ? sectionRefs : [],
@@ -193,18 +197,16 @@ const generateStories = async ({
     }
 
     const status = Number(error?.response?.status || 0);
-    if (status >= 500) {
-      logger.warn('AI generation failed with upstream 5xx. Returning fallback generated backlog.');
-      const fallback = getMockStories(moduleName, projectName);
-      return {
-        ...fallback,
-        mock: true,
-        message: 'AI generation service returned an internal error. Showing fallback backlog so planning can continue.',
-        upstreamStatus: status,
-      };
-    }
-
-    throw error;
+    const errorDetail = error?.response?.data?.detail || error?.response?.data?.message || error?.message || 'Unknown error';
+    
+    // FIX #1: DO NOT SILENTLY FALL BACK - Report actual error
+    logger.error(`AI generation failed with status ${status}: ${errorDetail}`);
+    
+    const err = new Error(`Story generation failed: ${errorDetail}`);
+    err.code = 'AI_GENERATION_FAILED';
+    err.statusCode = status || 502;
+    err.cause = error;
+    throw err;
   }
 };
 
@@ -218,12 +220,15 @@ const previewGenerateStoriesPrompt = async ({
   deadline,
   teamMembers,
   selectedPath,
+  selectedPlanningPaths,
   selectedRequirements,
   chunkRefs,
   sectionRefs,
 }) => {
   try {
     const aiConfig = await getActiveAIConfigPayload();
+    // FIX #4: Support both selectedPath (legacy) and selectedPlanningPaths (new)
+    const paths = selectedPlanningPaths || (selectedPath ? [selectedPath] : []);
     const response = await aiClient.post('/stories/generate-prompt-preview', {
       project_id: projectId,
       project_name: projectName,
@@ -233,7 +238,8 @@ const previewGenerateStoriesPrompt = async ({
       budget,
       deadline: deadline ? new Date(deadline).toISOString() : null,
       team_members: Array.isArray(teamMembers) ? teamMembers : [],
-      selected_path: selectedPath || {},
+      selected_path: paths[0] || {},
+      selected_paths: Array.isArray(paths) ? paths : [],
       selected_requirements: Array.isArray(selectedRequirements) ? selectedRequirements : [],
       chunk_refs: Array.isArray(chunkRefs) ? chunkRefs : [],
       section_refs: Array.isArray(sectionRefs) ? sectionRefs : [],

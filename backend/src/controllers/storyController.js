@@ -343,18 +343,21 @@ const getEpics = async (req, res) => {
 // @route   POST /api/stories/generate/:projectId
 // @access  Private (Scrum Master)
 const generateStories = async (req, res) => {
-  const { moduleName, documentId, additionalContext, suggestContext, selectedPath, selectedRequirements, chunkRefs, sectionRefs } = req.body;
+  const { moduleName, documentId, additionalContext, suggestContext, selectedPath, selectedPlanningPaths, selectedRequirements, chunkRefs, sectionRefs } = req.body;
 
   if (!moduleName) {
     return res.status(400).json({ success: false, message: 'Module name is required' });
   }
+
+  // FIX #4: Support both selectedPath (legacy) and selectedPlanningPaths (new multi-select)
+  const paths = selectedPlanningPaths || (selectedPath ? [selectedPath] : []);
 
   const projectContext = await buildGenerateStoriesContext(
     req.params.projectId,
     moduleName,
     additionalContext,
     suggestContext,
-    selectedPath || null,
+    paths.length > 0 ? paths : [selectedPath || null],
     selectedRequirements || [],
     chunkRefs || [],
     sectionRefs || []
@@ -384,7 +387,7 @@ const generateStories = async (req, res) => {
     budget: project.budget,
     deadline: project.deadline,
     teamMembers: projectContext.teamMembers,
-    selectedPath: selectedPath || null,
+    selectedPlanningPaths: paths,
     selectedRequirements: selectedRequirements || [],
     chunkRefs: chunkRefs || [],
     sectionRefs: sectionRefs || [],
@@ -412,18 +415,21 @@ const generateStories = async (req, res) => {
 };
 
 const previewGenerateStories = async (req, res) => {
-  const { moduleName, documentId, additionalContext, suggestContext, selectedPath, selectedRequirements, chunkRefs, sectionRefs } = req.body;
+  const { moduleName, documentId, additionalContext, suggestContext, selectedPath, selectedPlanningPaths, selectedRequirements, chunkRefs, sectionRefs } = req.body;
 
   if (!moduleName) {
     return res.status(400).json({ success: false, message: 'Module name is required' });
   }
+
+  // FIX #4: Support both selectedPath (legacy) and selectedPlanningPaths (new multi-select)
+  const paths = selectedPlanningPaths || (selectedPath ? [selectedPath] : []);
 
   const projectContext = await buildGenerateStoriesContext(
     req.params.projectId,
     moduleName,
     additionalContext,
     suggestContext,
-    selectedPath || null,
+    paths.length > 0 ? paths : [selectedPath || null],
     selectedRequirements || [],
     chunkRefs || [],
     sectionRefs || []
@@ -440,7 +446,7 @@ const previewGenerateStories = async (req, res) => {
     budget: project.budget,
     deadline: project.deadline,
     teamMembers: projectContext.teamMembers,
-    selectedPath: selectedPath || null,
+    selectedPlanningPaths: paths,
     selectedRequirements: selectedRequirements || [],
     chunkRefs: chunkRefs || [],
     sectionRefs: sectionRefs || [],

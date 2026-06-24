@@ -309,17 +309,21 @@ const ingestDocument = async (doc, project, io) => {
       });
     }
 
-    await AuditLog.create({
-      project: project._id,
-      user: doc.uploadedBy,
-      action: 'document_ingestion_failed',
-      entity: 'document',
-      entityId: doc._id,
-      details: {
-        error: error.error || error.message,
-        stage: error.stage,
-      },
-    });
+    try {
+      await AuditLog.create({
+        project: project._id,
+        user: doc.uploadedBy,
+        action: 'document_ingestion_failed',
+        entity: 'document',
+        entityId: doc._id,
+        details: {
+          error: error.error || error.message,
+          stage: error.stage,
+        },
+      });
+    } catch (auditError) {
+      logger.warn(`Failed to write document ingestion failure audit log for ${doc._id}: ${auditError.message}`);
+    }
   }
 };
 

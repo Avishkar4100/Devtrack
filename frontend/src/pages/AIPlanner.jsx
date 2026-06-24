@@ -118,7 +118,7 @@ export default function AIPlannerPage() {
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [aiPlannerTab, setAiPlannerTab] = useState('planner')
   const [planningPaths, setPlanningPaths] = useState(DEFAULT_PLANNING_PATHS)
-  const [selectedPlanningPath, setSelectedPlanningPath] = useState(null)
+  const [selectedPlanningPaths, setSelectedPlanningPaths] = useState([])
   const [suggestContext, setSuggestContext] = useState(DEFAULT_SUGGEST_CONTEXT)
   const [backlogDraft, setBacklogDraft] = useState(DEFAULT_BACKLOG_DRAFT)
   const [promptPreview, setPromptPreview] = useState('')
@@ -148,7 +148,7 @@ export default function AIPlannerPage() {
     setSelectedSuggestionChips(Array.isArray(snapshot.selectedSuggestionChips) ? snapshot.selectedSuggestionChips : [])
     setSuggestionsOpen(Boolean(snapshot.suggestionsOpen))
     setPlanningPaths(Array.isArray(snapshot.planningPaths) ? snapshot.planningPaths : DEFAULT_PLANNING_PATHS)
-    setSelectedPlanningPath(snapshot.selectedPlanningPath || null)
+    setSelectedPlanningPaths(Array.isArray(snapshot.selectedPlanningPaths) ? snapshot.selectedPlanningPaths : [])
     setSuggestContext(snapshot.suggestContext || DEFAULT_SUGGEST_CONTEXT)
     setBacklogDraft(snapshot.backlogDraft || DEFAULT_BACKLOG_DRAFT)
     setPromptPreview(snapshot.promptPreview || '')
@@ -168,7 +168,7 @@ export default function AIPlannerPage() {
       selectedSuggestionChips,
       suggestionsOpen,
       planningPaths,
-      selectedPlanningPath,
+      selectedPlanningPaths,
       suggestContext,
       backlogDraft,
       promptPreview,
@@ -185,7 +185,7 @@ export default function AIPlannerPage() {
     selectedSuggestionChips,
     suggestionsOpen,
     planningPaths,
-    selectedPlanningPath,
+    selectedPlanningPaths,
     suggestContext,
     backlogDraft,
     promptPreview,
@@ -295,7 +295,7 @@ export default function AIPlannerPage() {
     setSelectedSuggestionChips([])
     setSuggestionsOpen(false)
     setPlanningPaths(DEFAULT_PLANNING_PATHS)
-    setSelectedPlanningPath(null)
+    setSelectedPlanningPaths([])
     setSuggestContext(DEFAULT_SUGGEST_CONTEXT)
     setBacklogDraft(DEFAULT_BACKLOG_DRAFT)
     setPromptPreview('')
@@ -731,8 +731,8 @@ export default function AIPlannerPage() {
           : [],
       }
       setPlanningPaths(paths)
-      if (paths.length && !selectedPlanningPath) {
-        setSelectedPlanningPath(paths[0])
+      if (paths.length && selectedPlanningPaths.length === 0) {
+        setSelectedPlanningPaths([paths[0]])
       }
       setSuggestContext(nextSuggestContext)
       const hasAny = paths.length > 0
@@ -795,14 +795,20 @@ export default function AIPlannerPage() {
 
   const hasPlanningPaths = planningPaths.length > 0
 
-  const selectPlanningPath = (path) => {
-    setSelectedPlanningPath(path)
-    appendPlannerLog({
-      kind: 'system',
-      step: 'planning_path_selected',
-      title: 'Planning path selected',
-      summary: path?.name || path?.id || 'Selected planning path',
-      response: path || null,
+  const togglePlanningPath = (path) => {
+    setSelectedPlanningPaths((prev) => {
+      const isSelected = prev.some((p) => p.id === path.id)
+      const next = isSelected
+        ? prev.filter((p) => p.id !== path.id)
+        : [...prev, path]
+      appendPlannerLog({
+        kind: 'system',
+        step: 'planning_path_toggled',
+        title: isSelected ? 'Planning path deselected' : 'Planning path selected',
+        summary: `${next.length} path(s) selected: ${next.map((p) => p.name || p.id).join(', ')}`,
+        response: next,
+      })
+      return next
     })
   }
 
@@ -812,17 +818,15 @@ export default function AIPlannerPage() {
       .map((m) => m.text)
       .join('\n')
 
-    const currentPath = selectedPlanningPath || planningPaths[0] || null
-    const selectedPathRequirements = currentSelectedRequirements
-    const selectedPathContext = currentPath ? JSON.stringify(currentPath, null, 2) : '{}'
-    const selectedRequirementContext = JSON.stringify(selectedPathRequirements, null, 2)
+    const selectedPathsJson = JSON.stringify(currentSelectedPaths, null, 2)
+    const selectedRequirementContext = JSON.stringify(currentSelectedRequirements, null, 2)
     const selectedChunkRefs = currentSelectedChunkRefs
     const selectedSectionRefs = currentSelectedSectionRefs
     const structuredPlannerContext = JSON.stringify({
       planningPrompt,
       selectedSuggestionChips,
       planningPaths,
-      selectedPlanningPath: currentPath,
+      selectedPlanningPaths: currentSelectedPaths,
       selectedRequirements: selectedRequirementContext,
       selectedChunkRefs,
       selectedSectionRefs,
@@ -834,7 +838,7 @@ export default function AIPlannerPage() {
     return [
       chatContext,
       planningPrompt && `Planning Prompt:\n${planningPrompt}`,
-      `Selected Path JSON:\n${selectedPathContext}`,
+      `Selected Paths JSON:\n${selectedPathsJson}`,
       `Selected Requirements JSON:\n${selectedRequirementContext}`,
       `Selected Chunk Refs JSON:\n${JSON.stringify(selectedChunkRefs, null, 2)}`,
       `Selected Section Refs JSON:\n${JSON.stringify(selectedSectionRefs, null, 2)}`,
@@ -842,12 +846,15 @@ export default function AIPlannerPage() {
     ].filter(Boolean).join('\n\n')
   }
 
-  const currentSelectedPath = selectedPlanningPath || planningPaths[0] || null
+  const currentSelectedPaths = selectedPlanningPaths.length > 0 ? selectedPlanningPaths : (planningPaths.length > 0 ? [planningPaths[0]] : [])
   const currentRequirementGraphItems = Array.isArray(latestDocumentStatus?.requirementGraph?.items)
     ? latestDocumentStatus.requirementGraph.items
     : []
-  const currentSelectedRequirements = Array.isArray(currentSelectedPath?.requirements)
-    ? currentSelectedPath.requirements.map((reqId) => {
+  // Aggregate requirements from all selected paths
+  const currentSelectedRequirements = currentSelectedPaths
+    .flatMap((path) => Array.isArray(path?.requirements) ? path.requirements : [])
+    .filter((v, i, a) => a.indexOf(v) === i) // dedup
+    .map((reqId) => {
       const graphItem = currentRequirementGraphItems.find((item) => String(item?.requirement_id || '').toUpperCase() === String(reqId || '').toUpperCase())
       return {
         requirement_id: reqId,
@@ -859,12 +866,12 @@ export default function AIPlannerPage() {
         section_refs: Array.isArray(graphItem?.section_refs) ? graphItem.section_refs : [],
       }
     })
-    : []
-  const currentSelectedChunkRefs = Array.isArray(currentSelectedPath?.chunk_refs)
-    ? currentSelectedPath.chunk_refs
+  // Aggregate chunk and section refs from all selected paths and their requirements
+  const currentSelectedChunkRefs = Array.isArray(currentSelectedPaths[0]?.chunk_refs)
+    ? currentSelectedPaths[0].chunk_refs
     : currentSelectedRequirements.flatMap((item) => Array.isArray(item.chunk_refs) ? item.chunk_refs : [])
-  const currentSelectedSectionRefs = Array.isArray(currentSelectedPath?.section_refs)
-    ? currentSelectedPath.section_refs
+  const currentSelectedSectionRefs = Array.isArray(currentSelectedPaths[0]?.section_refs)
+    ? currentSelectedPaths[0].section_refs
     : currentSelectedRequirements.flatMap((item) => Array.isArray(item.section_refs) ? item.section_refs : [])
 
   const previewBacklogPrompt = useMutation({
@@ -882,7 +889,7 @@ export default function AIPlannerPage() {
           moduleName,
           additionalContext: combinedContext,
           suggestContext,
-          selectedPath: currentSelectedPath,
+          selectedPlanningPaths: currentSelectedPaths,
           selectedRequirements: currentSelectedRequirements,
           chunkRefs: currentSelectedChunkRefs,
           sectionRefs: currentSelectedSectionRefs,
@@ -893,7 +900,7 @@ export default function AIPlannerPage() {
         moduleName,
         additionalContext: combinedContext,
         suggestContext,
-        selectedPath: currentSelectedPath,
+        selectedPlanningPaths: currentSelectedPaths,
         selectedRequirements: currentSelectedRequirements,
         chunkRefs: currentSelectedChunkRefs,
         sectionRefs: currentSelectedSectionRefs,
@@ -946,7 +953,7 @@ export default function AIPlannerPage() {
           moduleName,
           additionalContext: combinedContext,
           suggestContext,
-          selectedPath: currentSelectedPath,
+          selectedPlanningPaths: currentSelectedPaths,
           selectedRequirements: currentSelectedRequirements,
           chunkRefs: currentSelectedChunkRefs,
           sectionRefs: currentSelectedSectionRefs,
@@ -959,7 +966,7 @@ export default function AIPlannerPage() {
           moduleName,
           additionalContext: combinedContext,
           suggestContext,
-          selectedPath: currentSelectedPath,
+          selectedPlanningPaths: currentSelectedPaths,
           selectedRequirements: currentSelectedRequirements,
           chunkRefs: currentSelectedChunkRefs,
           sectionRefs: currentSelectedSectionRefs,
@@ -993,7 +1000,7 @@ export default function AIPlannerPage() {
         moduleName,
         additionalContext: combinedContext,
         suggestContext,
-        selectedPath: currentSelectedPath,
+        selectedPlanningPaths: currentSelectedPaths,
         selectedRequirements: currentSelectedRequirements,
         chunkRefs: currentSelectedChunkRefs,
         sectionRefs: currentSelectedSectionRefs,
@@ -1023,7 +1030,7 @@ export default function AIPlannerPage() {
         summary: `Received ${normalized.epics.length} epics, ${normalized.stories.length} stories, ${normalized.tasks.length} tasks, ${normalized.subtasks.length} subtasks.`,
         prompt: promptPreviewText || promptPreview || '',
         response: {
-          selectedPath: currentSelectedPath || null,
+          selectedPlanningPaths: currentSelectedPaths || [],
           selectedRequirements: currentSelectedRequirements,
           chunkRefs: currentSelectedChunkRefs,
           sectionRefs: currentSelectedSectionRefs,
@@ -1553,11 +1560,11 @@ export default function AIPlannerPage() {
 
           <div className="card p-4">
             <h3 className="text-[30px] font-bold">Planning Paths</h3>
-            <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Suggest now returns navigation paths, not backlog items. Pick one path to drive Generate.</p>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Suggest now returns navigation paths. Select multiple paths to generate a complete backlog that combines all selected requirements.</p>
 
             <div className="mt-3 space-y-2">
               {planningPaths.map((path) => {
-                const isSelected = (selectedPlanningPath?.id || planningPaths[0]?.id) === path.id
+                const isSelected = selectedPlanningPaths.some((p) => p.id === path.id)
                 return (
                   <button
                     key={path.id}
@@ -1566,14 +1573,25 @@ export default function AIPlannerPage() {
                       borderColor: isSelected ? 'rgba(96,165,250,0.8)' : 'var(--border-input)',
                       background: isSelected ? 'rgba(30,41,59,0.88)' : 'var(--bg-input)',
                     }}
-                    onClick={() => selectPlanningPath(path)}
+                    onClick={() => togglePlanningPath(path)}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{path.name || path.id}</p>
-                        <p className="text-[11px] uppercase tracking-wide mt-1" style={{ color: 'var(--text-muted)' }}>
-                          {path.priority || 'medium'} priority
-                        </p>
+                      <div className="flex items-center gap-2 flex-1">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => togglePlanningPath(path)}
+                          className="w-4 h-4 rounded"
+                          style={{
+                            accentColor: '#60a5fa',
+                          }}
+                        />
+                        <div>
+                          <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{path.name || path.id}</p>
+                          <p className="text-[11px] uppercase tracking-wide mt-1" style={{ color: 'var(--text-muted)' }}>
+                            {path.priority || 'medium'} priority
+                          </p>
+                        </div>
                       </div>
                       <span className="text-[11px] px-2 py-1 rounded-full border" style={{ borderColor: isSelected ? '#38bdf8' : 'rgba(148,163,184,0.35)', color: isSelected ? '#7dd3fc' : '#94a3b8' }}>
                         {path.requirements?.length || 0} reqs
@@ -1596,17 +1614,28 @@ export default function AIPlannerPage() {
                 )
               })}
               {!hasPlanningPaths && <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Click Suggest to generate planning paths.</p>}
+              {selectedPlanningPaths.length > 0 && (
+                <p className="text-[12px] mt-3 px-3 py-2 rounded-lg" style={{ color: '#fde68a', background: 'rgba(245,158,11,0.15)', borderLeft: '2px solid #f59e0b' }}>
+                  ✓ {selectedPlanningPaths.length} path(s) selected • {currentSelectedRequirements.length} requirement(s) • Generate will combine all
+                </p>
+              )}
             </div>
 
-            {currentSelectedPath && (
+            {currentSelectedPaths.length > 0 && currentSelectedPaths[0] && (
               <div className="mt-3 rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-input)' }}>
-                <p className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>Selected Path</p>
-                <p className="text-sm mt-1 font-semibold" style={{ color: 'var(--text-primary)' }}>{currentSelectedPath.name || currentSelectedPath.id}</p>
-                <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{currentSelectedPath.reason || 'No reason provided.'}</p>
+                <p className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>Selected Paths ({currentSelectedPaths.length})</p>
+                <div className="mt-2 space-y-2">
+                  {currentSelectedPaths.map((path) => (
+                    <div key={path.id} className="text-sm">
+                      <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>{path.name || path.id}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{path.reason || 'No reason provided.'}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
-            {planningPaths.length === 0 && !selectedPlanningPath && (
+            {planningPaths.length === 0 && selectedPlanningPaths.length === 0 && (
               <p className="text-sm mt-2" style={{ color: 'var(--text-muted)' }}>No planning paths loaded yet.</p>
             )}
 
