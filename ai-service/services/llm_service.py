@@ -20,6 +20,9 @@ You are a Senior Technical Architect. Convert the selected requirements into the
 # SELECTED PATH JSON:
 {selected_path_json}
 
+# SELECTED PATHS JSON:
+{selected_paths_json}
+
 # SELECTED REQUIREMENTS JSON:
 {selected_requirements_json}
 
@@ -674,6 +677,7 @@ class LLMService:
         constraints: str,
         team_members_json: str = "[]",
         selected_path_json: str = "{}",
+        selected_paths_json: str = "[]",
         selected_requirements_json: str = "[]",
         chunk_refs_json: str = "[]",
         section_refs_json: str = "[]",
@@ -696,6 +700,7 @@ class LLMService:
             prompt = STORY_GENERATION_PROMPT.format(
                 full_srs_text=compact_context or "No SRS document ingested yet.",
                 selected_path_json=self._trim_text(selected_path_json or "{}", 12000),
+                selected_paths_json=self._trim_text(selected_paths_json or "[]", 12000),
                 selected_requirements_json=self._trim_text(selected_requirements_json or "[]", 12000),
                 chunk_refs_json=self._trim_text(chunk_refs_json or "[]", 12000),
                 section_refs_json=self._trim_text(section_refs_json or "[]", 12000),
@@ -741,6 +746,7 @@ class LLMService:
         constraints: str = "",
         team_members_json: str = "[]",
         selected_path_json: str = "{}",
+        selected_paths_json: str = "[]",
         selected_requirements_json: str = "[]",
         chunk_refs_json: str = "[]",
         section_refs_json: str = "[]",
@@ -753,6 +759,7 @@ class LLMService:
             constraints=constraints or "",
             team_members_json=team_members_json or "[]",
             selected_path_json=selected_path_json or "{}",
+            selected_paths_json=selected_paths_json or "[]",
             selected_requirements_json=selected_requirements_json or "[]",
             chunk_refs_json=chunk_refs_json or "[]",
             section_refs_json=section_refs_json or "[]",
@@ -810,6 +817,73 @@ class LLMService:
             "token limit",
         ]
         return any(item in msg for item in checks)
+
+    @staticmethod
+    def _extract_json_object(text: str) -> str:
+        """Extract the first balanced JSON object from a model response."""
+        start = text.find("{")
+        if start < 0:
+            raise ValueError("No JSON object found in model response")
+
+        depth = 0
+        in_string = False
+        escape = False
+
+        for idx in range(start, len(text)):
+            ch = text[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start:idx + 1]
+
+        raise ValueError("Unbalanced JSON object in model response")
+
+    @staticmethod
+    def _clean_common_json_issues(text: str) -> str:
+        text = text.strip()
+        text = re.sub(r",(\s*[}\]])", r"\1", text)
+        return text
+
+    def _parse_model_json(self, raw: str, *, operation: str) -> Any:
+        """Parse JSON from an LLM response with light recovery for common formatting mistakes."""
+        candidates = []
+
+        text = (raw or "").strip()
+        if text.startswith("```"):
+            text = text.split("```", 2)[1] if text.count("```") >= 2 else text.strip("`")
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+
+        candidates.append(text)
+
+        try:
+            candidates.append(self._extract_json_object(text))
+        except Exception:
+            pass
+
+        for candidate in candidates:
+            for variant in (candidate, self._clean_common_json_issues(candidate)):
+                try:
+                    return json.loads(variant)
+                except json.JSONDecodeError:
+                    continue
+
+        preview = self._trim_text(text, 500)
+        raise ValueError(f"LLM returned invalid JSON for {operation}: {preview}")
 
     def _call_llm(
         self,
@@ -894,7 +968,6 @@ class LLMService:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=resolved_temperature,
                 max_tokens=resolved_max_tokens,
-                reasoning_effort=deepseek_reasoning_effort,
                 extra_body={"thinking": {"type": "enabled" if deepseek_thinking else "disabled"}},
             )
             text = self._extract_text_from_chat_response(response)
@@ -970,6 +1043,7 @@ class LLMService:
         constraints: str = "",
         team_members_json: str = "[]",
         selected_path_json: str = "{}",
+        selected_paths_json: str = "[]",
         selected_requirements_json: str = "[]",
         chunk_refs_json: str = "[]",
         section_refs_json: str = "[]",
@@ -983,6 +1057,7 @@ class LLMService:
             constraints=constraints or "",
             team_members_json=team_members_json or "[]",
             selected_path_json=selected_path_json or "{}",
+            selected_paths_json=selected_paths_json or "[]",
             selected_requirements_json=selected_requirements_json or "[]",
             chunk_refs_json=chunk_refs_json or "[]",
             section_refs_json=section_refs_json or "[]",
@@ -990,23 +1065,7 @@ class LLMService:
 
         raw = self._call_llm(prompt, temperature=0.4, ai_config=ai_config, operation="generate_stories")
 
-        # Parse JSON (handle markdown code blocks)
-        raw = raw.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-
-        try:
-            result = json.loads(raw)
-        except json.JSONDecodeError:
-            # Attempt to extract JSON from response
-            import re
-            match = re.search(r'\{.*\}', raw, re.DOTALL)
-            if match:
-                result = json.loads(match.group())
-            else:
-                raise ValueError(f"LLM returned invalid JSON: {raw[:200]}")
+        result = self._parse_model_json(raw, operation="generate_stories")
 
         if isinstance(result, dict) and isinstance(result.get("issues"), list):
             result = self._convert_issue_payload_to_backlog(result, module_name)
