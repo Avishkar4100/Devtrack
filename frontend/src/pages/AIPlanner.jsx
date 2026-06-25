@@ -66,6 +66,13 @@ const DEFAULT_PLANNER_CHAT = [
 const plannerTabButtonClass = (active) =>
   `px-4 py-1.5 text-[14px] font-semibold rounded-[10px] border transition-colors ${active ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-900/50 border-slate-700 text-slate-300'}`
 
+const normalizeBacklogDraft = (draft = {}) => ({
+  epics: Array.isArray(draft.epics) ? draft.epics : [],
+  stories: Array.isArray(draft.stories) ? draft.stories : [],
+  tasks: Array.isArray(draft.tasks) ? draft.tasks : [],
+  subtasks: Array.isArray(draft.subtasks) ? draft.subtasks : [],
+})
+
 const truncateLogValue = (value, maxChars = 1800) => {
   if (value === null || value === undefined) return ''
   const text = typeof value === 'string' ? value : (() => {
@@ -215,6 +222,12 @@ export default function AIPlannerPage() {
     refetchOnWindowFocus: true,
   })
 
+  const { data: backlogHistory = [], isFetching: isBacklogHistoryFetching } = useQuery({
+    queryKey: ['ai-planner-backlog-history', selectedProjectId],
+    enabled: !!selectedProjectId,
+    queryFn: async () => (await api.get(`/stories/backlog-history/${selectedProjectId}`)).data.data || [],
+  })
+
   const activeProject = useMemo(() => projects.find((p) => p._id === selectedProjectId) || null, [projects, selectedProjectId])
   const moduleName = useMemo(() => activeProject?.name || 'AI Planner', [activeProject])
   const selectedFileSummary = useMemo(() => {
@@ -247,6 +260,63 @@ export default function AIPlannerPage() {
     })
     return [...map.values()]
   }, [activeProject])
+
+  const normalizeDraftWithTeam = (draft = DEFAULT_BACKLOG_DRAFT) => {
+    const assignees = availableAssignees || []
+    const byLookup = new Map()
+    assignees.forEach((assignee) => {
+      byLookup.set(String(assignee.id).toLowerCase(), assignee.id)
+      byLookup.set(String(assignee.label).toLowerCase(), assignee.id)
+      byLookup.set(String(assignee.label).replace(/\s*\([^)]*\)\s*$/, '').toLowerCase(), assignee.id)
+    })
+
+    let cursor = 0
+    const normalizeRows = (rows, prefix) => normalizeGeneratedItems(rows || [], prefix).map((row) => {
+      const rawAssignee = String(row.assignee || '').trim().toLowerCase()
+      const resolved = rawAssignee ? byLookup.get(rawAssignee) : ''
+      const fallback = assignees.length ? assignees[cursor % assignees.length]?.id : ''
+      cursor += 1
+      return {
+        ...row,
+        assignee: resolved || fallback || '',
+      }
+    })
+
+    const normalized = {
+      epics: normalizeRows(draft.epics, 'epic'),
+      stories: normalizeRows(draft.stories, 'story'),
+      tasks: normalizeRows(draft.tasks, 'task'),
+      subtasks: normalizeRows(draft.subtasks, 'subtask'),
+    }
+
+    const epicIds = new Set(normalized.epics.map((epic) => epic.tempId))
+    const storyIds = new Set(normalized.stories.map((story) => story.tempId))
+    const taskIds = new Set(normalized.tasks.map((task) => task.tempId))
+    const firstEpic = normalized.epics[0]?.tempId || ''
+    const firstStory = normalized.stories[0]?.tempId || ''
+    const firstTask = normalized.tasks[0]?.tempId || ''
+
+    normalized.stories = normalized.stories.map((story) => ({
+      ...story,
+      epicTempId: epicIds.has(story.epicTempId) ? story.epicTempId : firstEpic,
+    }))
+    normalized.tasks = normalized.tasks.map((task) => ({
+      ...task,
+      parentTempId: storyIds.has(task.parentTempId) ? task.parentTempId : firstStory,
+      epicTempId: epicIds.has(task.epicTempId) ? task.epicTempId : (
+        normalized.stories.find((story) => story.tempId === (storyIds.has(task.parentTempId) ? task.parentTempId : firstStory))?.epicTempId || firstEpic
+      ),
+    }))
+    normalized.subtasks = normalized.subtasks.map((subtask) => ({
+      ...subtask,
+      parentTempId: taskIds.has(subtask.parentTempId) ? subtask.parentTempId : firstTask,
+      epicTempId: epicIds.has(subtask.epicTempId) ? subtask.epicTempId : (
+        normalized.tasks.find((task) => task.tempId === (taskIds.has(subtask.parentTempId) ? subtask.parentTempId : firstTask))?.epicTempId || firstEpic
+      ),
+    }))
+
+    return normalized
+  }
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -1010,15 +1080,11 @@ export default function AIPlannerPage() {
       return { data: response.data.data, resolvedProjectId, promptPreviewText }
     },
     onSuccess: ({ data, resolvedProjectId, promptPreviewText }) => {
-      const normalized = {
-        epics: normalizeGeneratedItems(data?.epics || [], 'epic'),
-        stories: normalizeGeneratedItems(data?.stories || [], 'story'),
-        tasks: normalizeGeneratedItems(data?.tasks || [], 'task'),
-        subtasks: normalizeGeneratedItems(data?.subtasks || [], 'subtask'),
-      }
+      const normalized = normalizeDraftWithTeam(data || DEFAULT_BACKLOG_DRAFT)
 
       // Set backlog draft state BEFORE switching tabs
       setBacklogDraft(normalized)
+      qc.invalidateQueries({ queryKey: ['ai-planner-backlog-history', resolvedProjectId] })
 
       const planningWarnings = data?.planningMeta?.warnings || []
       const isLowConfidence = data?.planningMeta?.contextQuality === 'low'
@@ -1042,7 +1108,7 @@ export default function AIPlannerPage() {
       })
 
       setPlannerChat((prev) => {
-        const next = [...prev, { role: 'assistant', text: `Backlog generated with ${normalized.epics.length} epics, ${normalized.stories.length} stories, ${normalized.tasks.length} tasks. Review on Backlog tab, then confirm push to Jira.` }]
+        const next = [...prev, { role: 'assistant', text: `Backlog generated with ${normalized.epics.length} epics, ${normalized.stories.length} stories, ${normalized.tasks.length} tasks. It was saved to backlog history; review on Backlog tab, then save to DB or push to Jira.` }]
         planningWarnings.forEach((warning) => {
           next.push({ role: 'assistant', text: `Warning: ${warning}` })
         })
@@ -1073,26 +1139,117 @@ export default function AIPlannerPage() {
   const llmActionLocked = fetchSuggestions.isPending || generateBacklog.isPending || generateRequirementMap.isPending
     || previewBacklogPrompt.isPending
 
-  const confirmAndPush = useMutation({
+  const buildSelectedBacklogPayload = () => {
+    const hasEpics = (backlogDraft.epics || []).length > 0
+    const hasStories = (backlogDraft.stories || []).length > 0
+    const hasTasks = (backlogDraft.tasks || []).length > 0
+
+    if (!hasEpics || !hasStories || !hasTasks) {
+      throw new Error('Backlog must have epics, stories, and tasks. Generate a backlog first.')
+    }
+
+    const selectedEpics = (backlogDraft.epics || []).filter((e) => e.selected !== false)
+    if (selectedEpics.length < 1) {
+      throw new Error('Select at least one epic')
+    }
+
+    const selectedEpicTempIds = new Set(selectedEpics.map((e) => e.tempId))
+    const selectedStories = (backlogDraft.stories || []).filter((s) =>
+      s.selected !== false && selectedEpicTempIds.has(s.epicTempId)
+    )
+    const selectedStoryTempIds = new Set(selectedStories.map((s) => s.tempId))
+    const selectedTasks = (backlogDraft.tasks || []).filter((t) =>
+      t.selected !== false && selectedEpicTempIds.has(t.epicTempId) && selectedStoryTempIds.has(t.parentTempId)
+    )
+    const selectedTaskTempIds = new Set(selectedTasks.map((t) => t.tempId))
+    const selectedSubtasks = (backlogDraft.subtasks || []).filter((st) =>
+      st.selected !== false && selectedEpicTempIds.has(st.epicTempId) && selectedTaskTempIds.has(st.parentTempId)
+    )
+
+    if (!selectedEpics.length && !selectedStories.length && !selectedTasks.length && !selectedSubtasks.length) {
+      throw new Error('Select at least one generated item')
+    }
+
+    const validationErrors = validateBacklogItems({
+      epics: selectedEpics,
+      stories: selectedStories,
+      tasks: selectedTasks,
+      subtasks: selectedSubtasks,
+    })
+    if (validationErrors.length > 0) {
+      const error = new Error(`Please fix the following issues:\n${validationErrors.join('\n')}`)
+      error.validationErrors = validationErrors
+      throw error
+    }
+
+    return {
+      epics: selectedEpics,
+      stories: selectedStories,
+      tasks: selectedTasks,
+      subtasks: selectedSubtasks,
+    }
+  }
+
+  const saveBacklogToDb = useMutation({
     mutationFn: async () => {
       const resolvedProjectId = await resolveProjectId()
       if (!resolvedProjectId) {
         throw new Error('No workspace project available. Create or select a project, then try again.')
       }
 
-      // Validate backlog has content
-      const hasEpics = (backlogDraft.epics || []).length > 0
-      const hasStories = (backlogDraft.stories || []).length > 0
-      const hasTasks = (backlogDraft.tasks || []).length > 0
+      const selectedPayload = buildSelectedBacklogPayload()
 
-      if (!hasEpics || !hasStories || !hasTasks) {
-        throw new Error('Backlog must have epics, stories, and tasks. Generate a backlog first.')
+      appendPlannerLog({
+        kind: 'request',
+        step: 'save_backlog_request',
+        title: 'Save backlog requested',
+        summary: 'Submitting selected backlog draft to local database.',
+        request: {
+          ...selectedPayload,
+        },
+      })
+
+      const saveResponse = await api.post(`/stories/save/${resolvedProjectId}`, selectedPayload)
+      const saved = saveResponse?.data?.data || {}
+      qc.invalidateQueries({ queryKey: ['workspace-stories', resolvedProjectId] })
+      qc.invalidateQueries({ queryKey: ['workspace-epics', resolvedProjectId] })
+
+      appendPlannerLog({
+        kind: 'response',
+        step: 'save_backlog_response',
+        title: 'Backlog saved to database',
+        summary: 'Selected backlog persisted locally.',
+        response: saved,
+      })
+
+      return { resolvedProjectId, saved }
+    },
+    onSuccess: ({ saved }) => {
+      const total = (saved.epics?.length || 0) + (saved.stories?.length || 0) + (saved.tasks?.length || 0) + (saved.subtasks?.length || 0)
+      toast.success(`Backlog saved to DB (${total} items)`)
+      setPlannerChat((prev) => [...prev, { role: 'assistant', text: `Backlog saved to database with ${total} items.` }])
+    },
+    onError: (error) => {
+      if (error?.validationErrors) {
+        toast.error(`Validation failed:\n${error.validationErrors.join('\n')}`, { duration: 5000 })
+        appLogger.error('Backlog validation errors:', error.validationErrors)
+        return
       }
+      const validationErrors = error?.response?.data?.errors
+      if (validationErrors && Array.isArray(validationErrors)) {
+        toast.error(`Validation failed:\n${validationErrors.join('\n')}`, { duration: 5000 })
+        appLogger.error('Backlog validation errors:', validationErrors)
+        return
+      }
+      toast.error(error?.message || 'Failed to save backlog', { duration: 4000 })
+    },
+  })
 
-      // Validate epic count
-      const selectedEpics = (backlogDraft.epics || []).filter((e) => e.selected !== false)
-      if (selectedEpics.length < 1) {
-        throw new Error('Select at least one epic to push')
+  const confirmAndPush = useMutation({
+    mutationFn: async () => {
+      const resolvedProjectId = await resolveProjectId()
+      if (!resolvedProjectId) {
+        throw new Error('No workspace project available. Create or select a project, then try again.')
       }
 
       const latest = latestDocumentStatus || documents[0] || null
@@ -1106,43 +1263,12 @@ export default function AIPlannerPage() {
         }
       }
 
-      const selectedEpicTempIds = new Set(selectedEpics.map((e) => e.tempId))
-      const selectedStories = (backlogDraft.stories || []).filter((s) =>
-        s.selected !== false && (!s.epicTempId || selectedEpicTempIds.has(s.epicTempId))
-      )
-      const selectedTasks = (backlogDraft.tasks || []).filter((t) =>
-        t.selected !== false && (!t.epicTempId || selectedEpicTempIds.has(t.epicTempId))
-      )
-      const selectedParentTempIds = new Set([
-        ...selectedStories.map((s) => s.tempId),
-        ...selectedTasks.map((t) => t.tempId),
-      ])
-      const selectedSubtasks = (backlogDraft.subtasks || []).filter((st) =>
-        st.selected !== false && (!st.parentTempId || selectedParentTempIds.has(st.parentTempId))
-      )
-
-      if (!selectedEpics.length && !selectedStories.length && !selectedTasks.length && !selectedSubtasks.length) {
-        throw new Error('Select at least one generated item before confirming push')
-      }
-
-      // Validate that all selected items have titles
-      const validationErrors = validateBacklogItems({
-        epics: selectedEpics,
-        stories: selectedStories,
-        tasks: selectedTasks,
-        subtasks: selectedSubtasks,
-      })
-      if (validationErrors.length > 0) {
-        const errorMsg = validationErrors.join('\n')
-        const error = new Error(`Please fix the following issues:\n${errorMsg}`)
-        error.validationErrors = validationErrors
-        throw error
-      }
-
       const jiraKey = selectedJiraProjectKey || project?.jiraProjectKey
       if (!jiraKey) {
         throw new Error('Select Jira project in sidebar first')
       }
+
+      const selectedPayload = buildSelectedBacklogPayload()
 
       appendPlannerLog({
         kind: 'request',
@@ -1150,29 +1276,26 @@ export default function AIPlannerPage() {
         title: 'Save and push requested',
         summary: 'Submitting selected backlog draft to save and Jira push.',
         request: {
-          epics: selectedEpics,
-          stories: selectedStories,
-          tasks: selectedTasks,
-          subtasks: selectedSubtasks,
+          ...selectedPayload,
           jiraKey,
         },
       })
 
-      await api.post(`/stories/save/${resolvedProjectId}`, {
-        epics: selectedEpics,
-        stories: selectedStories,
-        tasks: selectedTasks,
-        subtasks: selectedSubtasks,
-      })
+      const saveResponse = await api.post(`/stories/save/${resolvedProjectId}`, selectedPayload)
+      const saved = saveResponse?.data?.data || {}
 
-      const freshEpics = (await api.get(`/stories/epics/${resolvedProjectId}`)).data.data || []
-      const freshStories = (await api.get(`/stories/project/${resolvedProjectId}`)).data.data || []
+      const epicIds = saved.epicIds || (saved.epics || []).map((e) => e._id)
+      const storyIds = saved.storyIds || [
+        ...(saved.stories || []).map((s) => s._id),
+        ...(saved.tasks || []).map((s) => s._id),
+        ...(saved.subtasks || []).map((s) => s._id),
+      ]
 
       await api.post(`/jira/connect/${resolvedProjectId}`, { jiraProjectKey: jiraKey })
 
       await api.post(`/jira/push/${resolvedProjectId}`, {
-        epicIds: freshEpics.map((e) => e._id),
-        storyIds: freshStories.filter((s) => s.type !== 'subtask').map((s) => s._id),
+        epicIds,
+        storyIds,
       })
 
       appendPlannerLog({
@@ -1181,8 +1304,8 @@ export default function AIPlannerPage() {
         title: 'Backlog saved and pushed',
         summary: 'Backlog persisted and synced to Jira.',
         response: {
-          epicCount: freshEpics.length,
-          storyCount: freshStories.filter((s) => s.type !== 'subtask').length,
+          epicCount: epicIds.length,
+          storyCount: storyIds.length,
           jiraProjectKey: jiraKey,
         },
       })
@@ -1305,6 +1428,15 @@ export default function AIPlannerPage() {
       [collection]: [...(prev[collection] || []), item],
     }))
     setSelectedItem({ type, tempId: item.tempId })
+  }
+
+  const useBacklogHistoryEntry = (entry) => {
+    const normalized = normalizeDraftWithTeam(normalizeBacklogDraft(entry?.payload || {}))
+    setBacklogDraft(normalized)
+    setSelectedItem(normalized.epics[0] ? { type: 'epic', tempId: normalized.epics[0].tempId } : null)
+    setAiPlannerTab('backlog')
+    setPlannerChat((prev) => [...prev, { role: 'assistant', text: `Loaded backlog history: ${entry?.title || 'generated backlog'}.` }])
+    toast.success('Backlog history loaded')
   }
 
   const selectedBacklogItem = useMemo(() => {
@@ -1835,7 +1967,46 @@ export default function AIPlannerPage() {
         </div>
       ) : (
         <div className="space-y-3">
+          <div className="card p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-[20px] font-bold">Backlog History</h3>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  Every generated backlog is saved here. Load one to review, save to DB, or push to Jira.
+                </p>
+              </div>
+              {isBacklogHistoryFetching && (
+                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Refreshing...</span>
+              )}
+            </div>
+            <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+              {backlogHistory.map((entry) => {
+                const payload = normalizeBacklogDraft(entry.payload || {})
+                const itemCount = payload.epics.length + payload.stories.length + payload.tasks.length + payload.subtasks.length
+                return (
+                  <button
+                    key={entry._id}
+                    type="button"
+                    className="shrink-0 w-[260px] rounded-md border px-3 py-2 text-left"
+                    style={{ borderColor: 'var(--border-input)', background: 'var(--bg-input)' }}
+                    onClick={() => useBacklogHistoryEntry(entry)}
+                  >
+                    <p className="text-sm font-semibold line-clamp-1" style={{ color: 'var(--text-primary)' }}>{entry.title}</p>
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{itemCount} items</p>
+                    <p className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>{entry.createdAt ? new Date(entry.createdAt).toLocaleString() : ''}</p>
+                  </button>
+                )
+              })}
+              {!backlogHistory.length && (
+                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No generated backlog history yet.</p>
+              )}
+            </div>
+          </div>
+
           <div className="flex flex-wrap gap-2">
+            <button className="btn-secondary" onClick={() => saveBacklogToDb.mutate()} disabled={saveBacklogToDb.isPending || !backlogDraft.epics.length}>
+              {saveBacklogToDb.isPending ? 'Saving...' : 'Save to DB'}
+            </button>
             <button className="btn-primary" onClick={() => confirmAndPush.mutate()} disabled={confirmAndPush.isPending || !backlogDraft.epics.length || !selectedJiraProjectKey}>
               {confirmAndPush.isPending ? 'Pushing...' : 'Save and Push to Jira'}
             </button>

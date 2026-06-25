@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import ReactMarkdown from 'react-markdown'
 import api from '@/lib/api'
 import { useProjectStore } from '@/store/projectStore'
 import toast from 'react-hot-toast'
@@ -120,6 +121,28 @@ const getDueDateMeta = (dueDate) => {
     label: d.toLocaleDateString(),
     overdue,
   }
+}
+
+const markdownComponents = {
+  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+  strong: ({ children }) => <strong className="font-semibold text-slate-100">{children}</strong>,
+  em: ({ children }) => <em className="italic text-slate-200">{children}</em>,
+  ul: ({ children }) => <ul className="mb-2 ml-5 list-disc space-y-1 last:mb-0">{children}</ul>,
+  ol: ({ children }) => <ol className="mb-2 ml-5 list-decimal space-y-1 last:mb-0">{children}</ol>,
+  li: ({ children }) => <li className="pl-1">{children}</li>,
+  a: ({ href, children }) => (
+    <a className="text-indigo-300 underline underline-offset-2 hover:text-indigo-200" href={href} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  ),
+  code: ({ inline, children }) => (
+    inline ? (
+      <code className="rounded bg-slate-800 px-1 py-0.5 text-[0.85em] text-slate-100">{children}</code>
+    ) : (
+      <code className="block overflow-auto rounded-md border border-slate-700 bg-slate-950 p-3 text-xs text-slate-100">{children}</code>
+    )
+  ),
+  blockquote: ({ children }) => <blockquote className="mb-2 border-l-2 border-slate-600 pl-3 text-slate-400 last:mb-0">{children}</blockquote>,
 }
 
 export default function WorkspacePage() {
@@ -881,7 +904,9 @@ export default function WorkspacePage() {
                       onChange={(e) => setIssueDraft((prev) => ({ ...prev, description: e.target.value }))}
                     />
                   ) : (
-                    <p className="text-sm text-slate-300 whitespace-pre-wrap">{descriptionText}</p>
+                    <div className="text-sm leading-6 text-slate-300">
+                      <ReactMarkdown components={markdownComponents}>{descriptionText}</ReactMarkdown>
+                    </div>
                   )}
                 </section>
 

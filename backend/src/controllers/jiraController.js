@@ -542,6 +542,7 @@ const pushToJira = async (req, res) => {
         payload.fields.parent = { key: story.parentStory.jiraIssueKey };
       }
 
+      let currentJiraKey = story.jiraIssueKey || '';
       if (story.jiraIssueKey) {
         await axios.put(`${client.baseURL}/issue/${story.jiraIssueKey}`, { fields: payload.fields }, { auth: client.auth });
         await Story.findByIdAndUpdate(storyId, {
@@ -551,6 +552,7 @@ const pushToJira = async (req, res) => {
         results.stories.push({ id: storyId, jiraKey: story.jiraIssueKey, action: 'updated' });
       } else {
         const response = await axios.post(`${client.baseURL}/issue`, payload, { auth: client.auth });
+        currentJiraKey = response.data.key;
         await Story.findByIdAndUpdate(storyId, {
           jiraIssueId: response.data.id,
           jiraIssueKey: response.data.key,
@@ -559,6 +561,24 @@ const pushToJira = async (req, res) => {
           status: 'to_do',
         });
         results.stories.push({ id: storyId, jiraKey: response.data.key, action: 'created' });
+      }
+
+      if (story.type === 'task' && story.parentStory?.jiraIssueKey && currentJiraKey) {
+        try {
+          await jiraRequest(client, 'post', '/issueLink', {
+            data: {
+              type: { name: 'Relates' },
+              inwardIssue: { key: story.parentStory.jiraIssueKey },
+              outwardIssue: { key: currentJiraKey },
+            },
+          });
+        } catch (linkErr) {
+          results.errors.push({
+            id: storyId,
+            type: 'issue_link',
+            error: linkErr.response?.data?.errorMessages?.[0] || linkErr.message,
+          });
+        }
       }
     } catch (err) {
       results.errors.push({ id: storyId, type: 'story', error: err.response?.data?.errorMessages?.[0] || err.message });

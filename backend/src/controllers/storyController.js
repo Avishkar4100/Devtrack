@@ -10,6 +10,7 @@ const Sprint = require('../models/Sprint');
 const Commit = require('../models/Commit');
 const AuditLog = require('../models/AuditLog');
 const User = require('../models/User');
+const BacklogHistory = require('../models/BacklogHistory');
 const aiService = require('../services/aiService');
 const DocumentService = require('../services/documentService');
 const { buildProjectStateSnapshot } = require('../services/projectStateManager');
@@ -403,10 +404,23 @@ const generateStories = async (req, res) => {
     ipAddress: req.ip,
   });
 
+  const historyPayload = normalizeBacklogDraft(result);
+  const historyEntry = await BacklogHistory.create({
+    project: project._id,
+    user: req.user.id,
+    title: summarizeBacklogTitle(moduleName, historyPayload),
+    moduleName,
+    payload: historyPayload,
+    planningMeta: projectContext.planningMeta,
+    selectedPlanningPaths: paths,
+    source: 'generated',
+  });
+
   res.status(200).json({
     success: true,
     data: {
       ...result,
+      historyEntry,
       planningMeta: {
           ...projectContext.planningMeta,
       },
@@ -690,6 +704,47 @@ const normalizeGeneratedPayload = (body = {}) => ({
 
 const hasTitle = (row) => Boolean(String(row?.title || '').trim());
 
+const normalizeBacklogDraft = (draft = {}) => ({
+  epics: Array.isArray(draft.epics) ? draft.epics : [],
+  stories: Array.isArray(draft.stories) ? draft.stories : [],
+  tasks: Array.isArray(draft.tasks) ? draft.tasks : [],
+  subtasks: Array.isArray(draft.subtasks) ? draft.subtasks : [],
+});
+
+const summarizeBacklogTitle = (moduleName, payload) => {
+  const count = ['epics', 'stories', 'tasks', 'subtasks']
+    .reduce((total, key) => total + (Array.isArray(payload?.[key]) ? payload[key].length : 0), 0);
+  const stamp = new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+  return `${moduleName || 'Generated backlog'} - ${count} items - ${stamp}`;
+};
+
+const buildProjectAssigneeResolver = async (project) => {
+  const memberIds = [
+    project.owner,
+    ...(project.members || []).map((member) => member.user).filter(Boolean),
+  ].filter(Boolean);
+  const users = await User.find({ _id: { $in: memberIds } }).select('name email jiraEmail').lean();
+  const byId = new Map();
+  const byLookup = new Map();
+
+  users.forEach((user) => {
+    const id = String(user._id);
+    byId.set(id, id);
+    [id, user.name, user.email, user.jiraEmail]
+      .filter(Boolean)
+      .map((value) => String(value).trim().toLowerCase())
+      .forEach((value) => byLookup.set(value, id));
+  });
+
+  return (value) => {
+    if (!value) return undefined;
+    const text = String(value).trim();
+    if (!text) return undefined;
+    if (mongoose.Types.ObjectId.isValid(text) && byId.has(text)) return text;
+    return byLookup.get(text.toLowerCase()) || undefined;
+  };
+};
+
 const validateGeneratedPayload = ({ epics, stories, tasks, subtasks }) => {
   const errors = [];
 
@@ -711,30 +766,57 @@ const validateGeneratedPayload = ({ epics, stories, tasks, subtasks }) => {
   const taskIds = new Set(tasks.map((t, idx) => t.tempId || t.title || `task-${idx}`));
 
   stories.forEach((row, idx) => {
-    if (row.epicTempId && !epicIds.has(row.epicTempId)) {
+    if (!row.epicTempId) {
+      errors.push(`stories[${idx}] must reference an epicTempId`);
+    } else if (!epicIds.has(row.epicTempId)) {
       errors.push(`stories[${idx}] references missing epicTempId '${row.epicTempId}'`);
     }
   });
 
   tasks.forEach((row, idx) => {
-    if (row.epicTempId && !epicIds.has(row.epicTempId)) {
+    if (!row.epicTempId) {
+      errors.push(`tasks[${idx}] must reference an epicTempId`);
+    } else if (!epicIds.has(row.epicTempId)) {
       errors.push(`tasks[${idx}] references missing epicTempId '${row.epicTempId}'`);
     }
-    if (row.parentTempId && !storyIds.has(row.parentTempId)) {
+    if (!row.parentTempId) {
+      errors.push(`tasks[${idx}] must reference a parentTempId story`);
+    } else if (!storyIds.has(row.parentTempId)) {
       errors.push(`tasks[${idx}] references missing parentTempId '${row.parentTempId}'`);
     }
   });
 
   subtasks.forEach((row, idx) => {
-    if (row.epicTempId && !epicIds.has(row.epicTempId)) {
+    if (!row.epicTempId) {
+      errors.push(`subtasks[${idx}] must reference an epicTempId`);
+    } else if (!epicIds.has(row.epicTempId)) {
       errors.push(`subtasks[${idx}] references missing epicTempId '${row.epicTempId}'`);
     }
-    if (row.parentTempId && !taskIds.has(row.parentTempId)) {
+    if (!row.parentTempId) {
+      errors.push(`subtasks[${idx}] must reference a parentTempId task`);
+    } else if (!taskIds.has(row.parentTempId)) {
       errors.push(`subtasks[${idx}] references missing parentTempId '${row.parentTempId}'`);
     }
   });
 
   return errors;
+};
+
+const getBacklogHistory = async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(String(req.params.projectId || ''))) {
+    return res.status(400).json({ success: false, message: 'Invalid project id' });
+  }
+
+  const project = await Project.findById(req.params.projectId).lean();
+  if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+
+  const rows = await BacklogHistory.find({ project: project._id })
+    .sort({ createdAt: -1 })
+    .limit(30)
+    .populate('user', 'name email')
+    .lean();
+
+  res.status(200).json({ success: true, count: rows.length, data: rows });
 };
 
 // @desc    Save/approve generated stories
@@ -763,10 +845,6 @@ const saveGeneratedStories = async (req, res) => {
   const defaultDue = new Date(today);
   defaultDue.setDate(defaultDue.getDate() + 5);
 
-  const normalizeAssignee = (value) => (
-    value && mongoose.Types.ObjectId.isValid(value) ? value : undefined
-  );
-
   const normalizeDate = (value) => {
     if (!value) return undefined;
     const d = new Date(value);
@@ -775,6 +853,7 @@ const saveGeneratedStories = async (req, res) => {
 
   const project = await Project.findById(req.params.projectId);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+  const normalizeAssignee = await buildProjectAssigneeResolver(project);
 
   const savedEpics = [];
   const epicMap = {};
@@ -840,6 +919,7 @@ const saveGeneratedStories = async (req, res) => {
   }
 
   // Save subtasks linked to parent stories
+  const savedSubtasks = [];
   for (const sub of (subtasks || [])) {
     const subParentTempId = sub.parentTempId || sub.parentId;
     const parentId = subParentTempId ? storyTempMap[subParentTempId] : savedStories[0]?._id;
@@ -848,7 +928,7 @@ const saveGeneratedStories = async (req, res) => {
     const validPriorities = ['highest', 'high', 'medium', 'low', 'lowest'];
     const sprint = validSprints.includes(sub.sprint) ? sub.sprint : 'backlog';
     const priority = validPriorities.includes(sub.priority) ? sub.priority : 'medium';
-    await Story.create({
+    const subtask = await Story.create({
       project: project._id,
       epic: epicRef,
       parentStory: parentId,
@@ -870,6 +950,7 @@ const saveGeneratedStories = async (req, res) => {
       dueDate: normalizeDate(sub.dueDate) || defaultDue,
       reporter: req.user.id,
     });
+    savedSubtasks.push(subtask);
   }
 
   // Update project counts
@@ -888,7 +969,17 @@ const saveGeneratedStories = async (req, res) => {
 
   res.status(201).json({
     success: true,
-    data: { epics: savedEpics, stories: savedStories },
+    data: {
+      epics: savedEpics,
+      stories: savedStories.filter((story) => !story.type || story.type === 'story'),
+      tasks: savedStories.filter((story) => story.type === 'task'),
+      subtasks: savedSubtasks,
+      epicIds: savedEpics.map((epic) => epic._id),
+      storyIds: [
+        ...savedStories.map((story) => story._id),
+        ...savedSubtasks.map((story) => story._id),
+      ],
+    },
   });
 };
 
@@ -1190,6 +1281,7 @@ module.exports = {
   generateStories,
   previewGenerateStories,
   suggestStories,
+  getBacklogHistory,
   saveGeneratedStories,
   createStory,
   updateStory,

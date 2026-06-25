@@ -1070,7 +1070,7 @@ class LLMService:
         if isinstance(result, dict) and isinstance(result.get("issues"), list):
             result = self._convert_issue_payload_to_backlog(result, module_name)
 
-        return self._normalize_generated_backlog(result, module_name)
+        return self._normalize_generated_backlog(result, module_name, team_members_json)
 
     def _convert_issue_payload_to_backlog(self, payload: Dict[str, Any], module_name: str) -> Dict[str, Any]:
         issues = payload.get("issues") or []
@@ -1164,7 +1164,7 @@ class LLMService:
             "subtasks": subtasks,
         }
 
-    def _normalize_generated_backlog(self, result: Dict[str, Any], module_name: str) -> Dict[str, Any]:
+    def _normalize_generated_backlog(self, result: Dict[str, Any], module_name: str, team_members_json: str = "[]") -> Dict[str, Any]:
         epics = result.get("epics") if isinstance(result, dict) else []
         stories = result.get("stories") if isinstance(result, dict) else []
         tasks = result.get("tasks") if isinstance(result, dict) else []
@@ -1183,6 +1183,37 @@ class LLMService:
             val = str(v or "").lower()
             return val if val in {"high", "medium", "low"} else "medium"
 
+        try:
+            team_members = json.loads(team_members_json or "[]")
+        except Exception:
+            team_members = []
+        if not isinstance(team_members, list):
+            team_members = []
+
+        team_lookup = {}
+        team_ids = []
+        for member in team_members:
+            if not isinstance(member, dict):
+                continue
+            member_id = str(member.get("id") or "").strip()
+            if not member_id:
+                continue
+            team_ids.append(member_id)
+            for key in ("id", "name", "email", "jiraEmail", "role"):
+                value = str(member.get(key) or "").strip().lower()
+                if value:
+                    team_lookup[value] = member_id
+
+        def _assignee(value: Any, idx: int) -> Any:
+            raw = str(value or "").strip()
+            if raw and raw.lower() in team_lookup:
+                return team_lookup[raw.lower()]
+            if raw and raw in team_ids:
+                return raw
+            if team_ids:
+                return team_ids[idx % len(team_ids)]
+            return None
+
         def _normalize_item(item: Dict[str, Any], item_type: str, parent_id: str = None, idx: int = 0) -> Dict[str, Any]:
             temp_id = str(item.get("tempId") or f"{item_type}-{idx + 1}")
             title = str(item.get("title") or "").strip() or f"{item_type.title()} {idx + 1}"
@@ -1194,7 +1225,7 @@ class LLMService:
                 "type": item_type,
                 "module": str(item.get("module") or module_name or "core").strip(),
                 "priority": _priority(item.get("priority")),
-                "assignee": item.get("assignee") if item.get("assignee") else None,
+                "assignee": _assignee(item.get("assignee"), idx),
                 "status": "todo",
                 "startDate": item.get("startDate") if item.get("startDate") else None,
                 "dueDate": item.get("dueDate") if item.get("dueDate") else None,
