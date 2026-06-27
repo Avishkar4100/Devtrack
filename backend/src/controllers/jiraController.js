@@ -436,6 +436,9 @@ const connectProject = async (req, res) => {
 // @desc    Push stories to Jira
 // @route   POST /api/jira/push/:projectId
 // @access  Private
+// @desc    Push stories to Jira
+// @route   POST /api/jira/push/:projectId
+// @access  Private
 const pushToJira = async (req, res) => {
   const { epicIds, storyIds } = req.body;
   const project = await ensureProjectAccess(req.params.projectId, req.user);
@@ -447,10 +450,19 @@ const pushToJira = async (req, res) => {
   const client = await getJiraClient(req.user.id);
   const jiraFields = await fetchJiraFields(client);
   const storyPointsField = pickFieldId(jiraFields, ['story points', 'story point estimate']);
+  // gh-epic-link is for Company-managed. Team-managed will use the 'parent' field.
   const epicLinkField = jiraFields.find((f) => (f.schema?.custom || '').includes('gh-epic-link'))?.id;
+  console.log("\n================ JIRA CONFIG ================");
+  console.log({
+    projectKey: project.jiraProjectKey,
+    epicLinkField,
+  });
+  console.log("=============================================\n");
+  
   const results = { epics: [], stories: [], errors: [] };
+  const localToJiraKeyMap = new Map(); // Tracks keys created in this specific run to immediately link children
 
-  // Push epics
+  // 1. PUSH EPICS FIRST
   for (const epicId of (epicIds || [])) {
     try {
       const epic = await Epic.findById(epicId);
@@ -468,12 +480,9 @@ const pushToJira = async (req, res) => {
 
       if (epic.jiraEpicKey) {
         await axios.put(`${client.baseURL}/issue/${epic.jiraEpicKey}`, { fields: payload.fields }, { auth: client.auth });
-        await Epic.findByIdAndUpdate(epicId, {
-          pushedToJira: true,
-          pushedAt: new Date(),
-          status: 'approved',
-        });
+        await Epic.findByIdAndUpdate(epicId, { pushedToJira: true, pushedAt: new Date(), status: 'approved' });
         results.epics.push({ id: epicId, jiraKey: epic.jiraEpicKey, action: 'updated' });
+        localToJiraKeyMap.set(epicId.toString(), epic.jiraEpicKey);
       } else {
         const response = await axios.post(`${client.baseURL}/issue`, payload, { auth: client.auth });
         await Epic.findByIdAndUpdate(epicId, {
@@ -484,104 +493,116 @@ const pushToJira = async (req, res) => {
           status: 'approved',
         });
         results.epics.push({ id: epicId, jiraKey: response.data.key, action: 'created' });
+        localToJiraKeyMap.set(epicId.toString(), response.data.key);
       }
     } catch (err) {
       results.errors.push({ id: epicId, type: 'epic', error: err.response?.data?.errorMessages?.[0] || err.message });
     }
   }
 
-  // Push stories
-  for (const storyId of (storyIds || [])) {
-    try {
-      const story = await Story.findById(storyId)
-        .populate('epic')
-        .populate('assignee', 'email jiraEmail')
-        .populate('parentStory', 'jiraIssueKey title');
-      if (!story) continue;
+  // 2. FETCH AND SORT STORIES & TASKS (Parents first, Children second)
+  const allStories = await Story.find({ _id: { $in: storyIds || [] } })
+    .populate('epic')
+    .populate('assignee', 'email jiraEmail')
+    .populate('parentStory', 'jiraIssueKey title');
 
+  // Splitting ensures we push Stories before their Sub-tasks
+  const parentIssues = allStories.filter(s => !s.parentStory);
+  const childIssues = allStories.filter(s => !!s.parentStory);
+  const sortedStories = [...parentIssues, ...childIssues];
+
+  // 3. PUSH STORIES & TASKS IN CORRECT ORDER
+  for (const story of sortedStories) {
+    try {
       const acText = (story.acceptanceCriteria || []).map((a) => `- ${a.criterion}`).join('\n');
+      const isChild = !!story.parentStory;
+      
+      // Force Sub-task if it has a parent. Otherwise use its native type.
+      const issueTypeName = isChild ? 'Sub-task' : (story.type === 'task' ? 'Task' : (story.type === 'bug' ? 'Bug' : 'Story'));
 
       const payload = {
         fields: {
           project: { key: project.jiraProjectKey },
           summary: story.title,
           description: toAdfText(acText ? `${story.description || ''}\n\nAcceptance Criteria:\n${acText}` : story.description || ''),
-          issuetype: { name: story.type === 'task' ? 'Task' : story.type === 'subtask' ? 'Sub-task' : 'Story' },
+          issuetype: { name: issueTypeName },
           priority: { name: capitalize(story.priority || 'medium') },
         },
       };
 
       if (storyPointsField && story.storyPoints) payload.fields[storyPointsField] = story.storyPoints;
       if (story.dueDate) payload.fields.duedate = new Date(story.dueDate).toISOString().slice(0, 10);
-
       if (story.startDate) {
         const startDateValue = new Date(story.startDate).toISOString().slice(0, 10);
         payload.fields.labels = [...new Set([...(payload.fields.labels || []), `start_date_${startDateValue}`])];
       }
 
+      // Assignee lookup
       const assigneeEmail = story.assignee?.jiraEmail || story.assignee?.email;
       if (assigneeEmail) {
         try {
-          const assignees = await jiraRequest(client, 'get', '/user/search', {
-            params: { query: assigneeEmail, maxResults: 10 },
-          });
+          const assignees = await jiraRequest(client, 'get', '/user/search', { params: { query: assigneeEmail, maxResults: 10 } });
           const match = (assignees || []).find((u) => (u?.emailAddress || '').toLowerCase() === assigneeEmail.toLowerCase());
-          if (match?.accountId) {
-            payload.fields.assignee = { accountId: match.accountId };
+          if (match?.accountId) payload.fields.assignee = { accountId: match.accountId };
+        } catch { /* Ignore lookup failures */ }
+      }
+
+      // HIERARCHY MAPPING: Link to Epic OR Link to Parent Story
+      if (isChild) {
+        // It's a Sub-task: Link to Parent Story
+        const resolvedParentKey = story.parentStory.jiraIssueKey || localToJiraKeyMap.get(story.parentStory._id.toString());
+        if (resolvedParentKey) payload.fields.parent = { key: resolvedParentKey };
+      } else if (story.epic) {
+        // It's a standard Story/Task: Link to Epic
+        const resolvedEpicKey = story.epic.jiraEpicKey || localToJiraKeyMap.get(story.epic._id.toString());
+        console.log("\n============= STORY DEBUG =============");
+        console.log({
+          title: story.title,
+          type: story.type,
+          epicTitle: story.epic.title,
+          epicMongoId: story.epic._id.toString(),
+          jiraEpicKey: story.epic.jiraEpicKey,
+          resolvedEpicKey,
+          epicLinkField,
+        });
+        console.log("=======================================\n");
+        if (!resolvedEpicKey) {
+          console.log("❌ No Epic Key Found For:", story.title);
+        }
+        if (resolvedEpicKey) {
+          if (epicLinkField) {
+            payload.fields[epicLinkField] = resolvedEpicKey; // Company-managed
+          } else {
+            payload.fields.parent = { key: resolvedEpicKey }; // Team-managed fallback
           }
-        } catch {
-          // Keep payload valid even if assignee lookup fails.
         }
       }
 
-      if (story.epic?.jiraEpicKey) {
-        if (epicLinkField) payload.fields[epicLinkField] = story.epic.jiraEpicKey;
-      }
-
-      if (story.type === 'subtask' && story.parentStory?.jiraIssueKey) {
-        payload.fields.parent = { key: story.parentStory.jiraIssueKey };
-      }
-
+      // Execute Create or Update
       let currentJiraKey = story.jiraIssueKey || '';
       if (story.jiraIssueKey) {
         await axios.put(`${client.baseURL}/issue/${story.jiraIssueKey}`, { fields: payload.fields }, { auth: client.auth });
-        await Story.findByIdAndUpdate(storyId, {
-          pushedToJira: true,
-          pushedAt: new Date(),
-        });
-        results.stories.push({ id: storyId, jiraKey: story.jiraIssueKey, action: 'updated' });
+        await Story.findByIdAndUpdate(story._id, { pushedToJira: true, pushedAt: new Date() });
+        results.stories.push({ id: story._id, jiraKey: story.jiraIssueKey, action: 'updated' });
+        localToJiraKeyMap.set(story._id.toString(), story.jiraIssueKey);
       } else {
+        console.log("\n============= FINAL PAYLOAD =============");
+        console.dir(payload.fields, { depth: null });
+        console.log("=========================================\n");
         const response = await axios.post(`${client.baseURL}/issue`, payload, { auth: client.auth });
         currentJiraKey = response.data.key;
-        await Story.findByIdAndUpdate(storyId, {
+        await Story.findByIdAndUpdate(story._id, {
           jiraIssueId: response.data.id,
           jiraIssueKey: response.data.key,
           pushedToJira: true,
           pushedAt: new Date(),
           status: 'to_do',
         });
-        results.stories.push({ id: storyId, jiraKey: response.data.key, action: 'created' });
-      }
-
-      if (story.type === 'task' && story.parentStory?.jiraIssueKey && currentJiraKey) {
-        try {
-          await jiraRequest(client, 'post', '/issueLink', {
-            data: {
-              type: { name: 'Relates' },
-              inwardIssue: { key: story.parentStory.jiraIssueKey },
-              outwardIssue: { key: currentJiraKey },
-            },
-          });
-        } catch (linkErr) {
-          results.errors.push({
-            id: storyId,
-            type: 'issue_link',
-            error: linkErr.response?.data?.errorMessages?.[0] || linkErr.message,
-          });
-        }
+        results.stories.push({ id: story._id, jiraKey: currentJiraKey, action: 'created' });
+        localToJiraKeyMap.set(story._id.toString(), currentJiraKey);
       }
     } catch (err) {
-      results.errors.push({ id: storyId, type: 'story', error: err.response?.data?.errorMessages?.[0] || err.message });
+      results.errors.push({ id: story._id, type: 'story', error: err.response?.data?.errorMessages?.[0] || err.message });
     }
   }
 
