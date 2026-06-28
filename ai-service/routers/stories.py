@@ -247,21 +247,46 @@ Generated Jira JSON:
 async def generate_stories(req: GenerateStoriesRequest):
     """RAG-based story generation: retrieve context from KB → LLM → structured JSON."""
     try:
-        # FIX #4: SUPPORT MULTIPLE PATHS
         import os
         logger.info(f"=== GENERATE STORIES START ===")
         logger.info(f"Project: {req.project_id} | Module: {req.module_name}")
         
-        # Log input state - new multi-path support
         selected_paths = req.selected_paths or (req.selected_path and [req.selected_path] or [])
         logger.info(f"Input: paths={len(selected_paths)} | chunk_refs={len(req.chunk_refs or [])} | selected_requirements={len(req.selected_requirements or [])} | section_refs={len(req.section_refs or [])}")
         if selected_paths:
             logger.info(f"Selected paths: {[p.get('name') or p.get('id') for p in selected_paths]}")
+            for idx, path in enumerate(selected_paths):
+                if isinstance(path, dict):
+                    logger.info(
+                        "[Generate Backlog] ai-router:path[%s] id=%s name=%s requirements=%s",
+                        idx,
+                        path.get("id") or path.get("path_id"),
+                        path.get("name") or path.get("title"),
+                        len(path.get("requirements") or path.get("requirement_ids") or []),
+                    )
         
+        requirement_ids = []
+        for item in req.selected_requirements or []:
+            if isinstance(item, dict):
+                req_ids = item.get("requirements") or item.get("requirement_ids") or []
+                requirement_ids.extend(req_ids)
+            else:
+                requirement_ids.append(str(item))
+
+        if not requirement_ids and selected_paths:
+            for path in selected_paths:
+                if not isinstance(path, dict):
+                    continue
+                req_ids = path.get("requirements") or path.get("requirement_ids") or []
+                if isinstance(req_ids, list):
+                    requirement_ids.extend(req_ids)
+                elif req_ids:
+                    requirement_ids.append(str(req_ids))
+        logger.info("[Generate Backlog] ai-router:requirementIds count=%s ids=%s", len(requirement_ids), requirement_ids[:40])
+
         context_chunks = []
         retrieval_method = "none"
-        
-        # Stage 1: Attempt exact chunk reference retrieval
+
         if req.chunk_refs:
             retrieval_method = "chunk_refs"
             logger.info(f"[Stage 1] Retrieving by chunk_refs: {req.chunk_refs}")
@@ -270,18 +295,8 @@ async def generate_stories(req: GenerateStoriesRequest):
                 chunk_refs=req.chunk_refs,
             )
             logger.info(f"[Stage 1] Retrieved {len(context_chunks)} chunks from chunk_refs")
-            
-        # Stage 2: Attempt requirement ID retrieval
-        elif req.selected_requirements:
+        elif requirement_ids:
             retrieval_method = "requirement_ids"
-            requirement_ids = []
-            for item in req.selected_requirements:
-                if isinstance(item, dict):
-                    req_ids = item.get("requirements") or item.get("requirement_ids") or []
-                    requirement_ids.extend(req_ids)
-                else:
-                    requirement_ids.append(str(item))
-            
             logger.info(f"[Stage 2] Extracted requirement_ids: {requirement_ids}")
             context_chunks = rag_service.get_chunks_by_ids(
                 project_id=req.project_id,
@@ -291,17 +306,11 @@ async def generate_stories(req: GenerateStoriesRequest):
             logger.info(f"[Stage 2] Retrieved {len(context_chunks)} chunks for {len(requirement_ids)} requirements")
             if context_chunks:
                 logger.info(f"[Stage 2] First chunk preview: {context_chunks[0][:200]}...")
-            
-        # Stage 3: Fallback to similarity retrieval
         else:
-            retrieval_method = "similarity_search"
-            logger.info(f"[Stage 3] Fallback: similarity search on module_name '{req.module_name}'")
-            context_chunks = rag_service.retrieve(
-                query=req.module_name,
-                project_id=req.project_id,
-                top_k=int(os.getenv('TOP_K_RETRIEVAL', 5)),
+            raise HTTPException(
+                status_code=400,
+                detail="Generate backlog requires selected requirement IDs or chunk refs.",
             )
-            logger.info(f"[Stage 3] Retrieved {len(context_chunks)} chunks via similarity search")
 
         # Log context quality
         context_text = "\n\n".join(context_chunks) if context_chunks else ""
@@ -317,7 +326,14 @@ async def generate_stories(req: GenerateStoriesRequest):
         constraints = f"\n{budget_info}\n{deadline_info}".strip()
 
         # Generate via LLM
-        logger.info(f"[LLM] Starting generation with {context_chars} chars of context")
+        ai_config = req.ai_config or {}
+        logger.info(
+            "[Generate Backlog] ai-router:llm start context_chars=%s provider=%s model=%s maxTokens=%s",
+            context_chars,
+            ai_config.get("provider"),
+            ai_config.get("openrouterModel") or ai_config.get("deepseekModel") or ai_config.get("model"),
+            ai_config.get("maxTokens"),
+        )
         result = llm_service.generate_stories(
             project_name=req.project_name,
             module_name=req.module_name,
@@ -330,11 +346,18 @@ async def generate_stories(req: GenerateStoriesRequest):
             selected_requirements_json=json.dumps(req.selected_requirements or [], ensure_ascii=False),
             chunk_refs_json=json.dumps(req.chunk_refs or [], ensure_ascii=False),
             section_refs_json=json.dumps(req.section_refs or [], ensure_ascii=False),
-            ai_config=req.ai_config,
+            ai_config=ai_config,
         )
         meta = llm_service.get_last_call_meta()
 
-        logger.info(f"[LLM] Generation complete: {len(result.get('epics', []))} epics, {len(result.get('stories', []))} stories")
+        logger.info(
+            "[Generate Backlog] ai-router:llm complete epics=%s stories=%s tasks=%s subtasks=%s finishReason=%s",
+            len(result.get('epics', [])),
+            len(result.get('stories', [])),
+            len(result.get('tasks', [])),
+            len(result.get('subtasks', [])),
+            (meta or {}).get("finishReason"),
+        )
         logger.info(f"=== GENERATE STORIES END ===")
         return {"success": True, **result, "meta": meta, "_retrieval_method": retrieval_method, "_context_chars": context_chars}
     except Exception as err:
@@ -345,15 +368,30 @@ async def generate_stories(req: GenerateStoriesRequest):
 @router.post("/generate-prompt-preview")
 async def generate_prompt_preview(req: GeneratePromptPreviewRequest):
     try:
-        # FIX #2: Add logging to preview as well
-        # FIX #4: Support multiple paths
         import os
         logger.info(f"=== PROMPT PREVIEW START ===")
         logger.info(f"Project: {req.project_id} | Module: {req.module_name}")
         
         selected_paths = req.selected_paths or (req.selected_path and [req.selected_path] or [])
         logger.info(f"Paths: {len(selected_paths)} | chunk_refs={len(req.chunk_refs or [])} | selected_requirements={len(req.selected_requirements or [])}")
-        
+
+        requirement_ids = []
+        for item in req.selected_requirements or []:
+            if isinstance(item, dict):
+                requirement_ids.extend(item.get("requirements") or item.get("requirement_ids") or [])
+            else:
+                requirement_ids.append(str(item))
+
+        if not requirement_ids and selected_paths:
+            for path in selected_paths:
+                if not isinstance(path, dict):
+                    continue
+                req_ids = path.get("requirements") or path.get("requirement_ids") or []
+                if isinstance(req_ids, list):
+                    requirement_ids.extend(req_ids)
+                elif req_ids:
+                    requirement_ids.append(str(req_ids))
+
         context_chunks = []
         if req.chunk_refs:
             logger.info(f"Retrieving by chunk_refs: {len(req.chunk_refs)} refs")
@@ -362,13 +400,7 @@ async def generate_prompt_preview(req: GeneratePromptPreviewRequest):
                 chunk_refs=req.chunk_refs,
             )
             logger.info(f"Retrieved {len(context_chunks)} chunks")
-        elif req.selected_requirements:
-            requirement_ids = []
-            for item in req.selected_requirements:
-                if isinstance(item, dict):
-                    requirement_ids.extend(item.get("requirements") or item.get("requirement_ids") or [])
-                else:
-                    requirement_ids.append(str(item))
+        elif requirement_ids:
             logger.info(f"Extracting requirements: {requirement_ids}")
             context_chunks = rag_service.get_chunks_by_ids(
                 project_id=req.project_id,
@@ -377,13 +409,10 @@ async def generate_prompt_preview(req: GeneratePromptPreviewRequest):
             )
             logger.info(f"Retrieved {len(context_chunks)} chunks for {len(requirement_ids)} requirements")
         else:
-            logger.info(f"Fallback: similarity search")
-            context_chunks = rag_service.retrieve(
-                query=req.module_name,
-                project_id=req.project_id,
-                top_k=int(os.getenv('TOP_K_RETRIEVAL', 5)),
+            raise HTTPException(
+                status_code=400,
+                detail="Prompt preview requires selected requirement IDs or chunk refs.",
             )
-            logger.info(f"Retrieved {len(context_chunks)} chunks via similarity")
 
         context_text = "\n\n".join(context_chunks) if context_chunks else ""
         logger.info(f"Context: {len(context_chunks)} chunks, {len(context_text)} chars")

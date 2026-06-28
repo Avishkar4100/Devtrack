@@ -7,7 +7,7 @@ import { useProjectStore } from '@/store/projectStore'
 import { useNotificationStore } from '@/store/notificationStore'
 import api from '@/lib/api'
 import {
-  HomeIcon, FolderIcon, CogIcon, ArrowRightOnRectangleIcon,
+  FolderIcon, CogIcon, ArrowRightOnRectangleIcon,
   BellIcon, ChevronUpDownIcon, Bars3Icon, XMarkIcon,
   BoltIcon,
   SparklesIcon,
@@ -219,7 +219,6 @@ export default function Layout() {
         {/* Navigation */}
         <nav className="flex-1 px-2.5 py-3 overflow-y-auto no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {[
-            { to: '/overview', end: true, Icon: HomeIcon, label: 'Overview' },
             { to: '/projects', end: false, Icon: FolderIcon, label: 'Projects' },
             { to: '/ai-planner', end: false, Icon: SparklesIcon, label: 'AI Planner' },
             { to: '/workspace', end: false, Icon: FolderIcon, label: 'Workspace' },

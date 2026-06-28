@@ -348,7 +348,7 @@ export default function WorkspacePage() {
   const pushToJira = useMutation({
     mutationFn: async () => {
       const epicIds = epics.map((e) => e._id)
-      const storyIds = stories.filter((s) => s.type !== 'subtask').map((s) => s._id)
+      const storyIds = stories.map((s) => s._id)
       return (await api.post(`/jira/push/${selectedProjectId}`, { epicIds, storyIds })).data
     },
     onSuccess: () => toast.success('Pushed local backlog to Jira'),
@@ -730,7 +730,25 @@ export default function WorkspacePage() {
       {selectedJiraProjectKey && activeTab === 'backlog' && (
         <div className="grid lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] gap-3">
           <div className="card p-4">
-            <h3 className="text-base font-semibold mb-2">Backlog</h3>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-base font-semibold">Backlog</h3>
+              <button
+                type="button"
+                className="btn-secondary btn-sm text-[11px] text-rose-400 hover:text-rose-300"
+                onClick={async () => {
+                  if (!confirm(`Delete ALL Jira issues from project ${selectedJiraProjectKey}? This cannot be undone.`)) return
+                  try {
+                    const res = await api.delete(`/jira/server/issues/purge/${selectedJiraProjectKey}`)
+                    toast.success(res?.data?.message || 'All issues purged')
+                    qc.invalidateQueries({ queryKey: ['workspace-jira-issues', selectedJiraProjectKey] })
+                  } catch (err) {
+                    toast.error(err?.response?.data?.message || 'Failed to purge issues')
+                  }
+                }}
+              >
+                Purge All Issues
+              </button>
+            </div>
             <p className="text-xs text-slate-400 mb-3">
               Jira project: {selectedJiraProjectKey} • Total issues: {jiraIssueStats.total}
               {isJiraIssuesFetching ? ' • Refreshing…' : ''}
@@ -1304,7 +1322,7 @@ export default function WorkspacePage() {
             <div className="mt-3 pt-3 border-t border-slate-700 text-sm text-slate-300">
               <p className="text-xs text-slate-400 mb-2">Issue Types</p>
               <ul className="space-y-1">
-                {jiraIssueStats.typeDistribution.slice(0, 4).map((row) => (
+                {jiraIssueStats.typeDistribution.map((row) => (
                   <li key={row.type} className="flex items-center justify-between">
                     <span>{row.type}</span>
                     <span>{row.count}</span>

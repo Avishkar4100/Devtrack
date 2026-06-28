@@ -10,6 +10,21 @@ logger = logging.getLogger(__name__)
 _LAST_CALL_META: ContextVar[Dict[str, Any] | None] = ContextVar("_LAST_CALL_META", default=None)
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _count_selected_paths(selected_paths_json: str = "[]") -> int:
+    try:
+        selected_paths = json.loads(selected_paths_json or "[]")
+    except Exception:
+        selected_paths = []
+    return len(selected_paths) if isinstance(selected_paths, list) else 0
+
+
 STORY_GENERATION_PROMPT = """### [CONTEXT_CACHE_START]
 # EXACT REQUIREMENT CHUNKS:
 {full_srs_text}
@@ -17,11 +32,14 @@ STORY_GENERATION_PROMPT = """### [CONTEXT_CACHE_START]
 
 You are a Senior Technical Architect. Convert the selected requirements into the best Jira-ready hierarchy for implementation.
 
-# SELECTED PATH JSON:
+# SELECTED PATH JSON (legacy snapshot, keep only for compatibility):
 {selected_path_json}
 
 # SELECTED PATHS JSON:
 {selected_paths_json}
+
+# SELECTED PATHS OVERVIEW:
+{selected_paths_overview}
 
 # SELECTED REQUIREMENTS JSON:
 {selected_requirements_json}
@@ -42,20 +60,38 @@ You are a Senior Technical Architect. Convert the selected requirements into the
 # TASK:
 1. Generate the most appropriate hierarchy required to implement the selected requirements.
 2. Decide hierarchy depth dynamically using the selected requirements, exact chunks, project state, and user instructions.
-3. Use as many epics, stories, tasks, and subtasks as necessary. Do not use fixed counts.
-4. Map work items to team members by role, expertise, and likely ownership.
-5. If a new item depends on existing work or Jira IDs, add explicit dependency links.
-6. Use exact terms from the selected requirements, exact chunks, project state, and user instructions. Preserve domain terminology.
-7. Preserve requirement traceability. Every issue must map back to one or more source requirements when relevant.
-8. Write long, implementation-ready descriptions and rich, testable acceptance criteria.
-9. Place items in a sensible sprint or backlog position based on current progress, dependencies, and urgency.
-10. Preserve parent-child relationships explicitly and do not flatten nested work.
+3. Treat every object in SELECTED PATHS JSON as a mandatory planning lane.
+4. Use SELECTED PATHS JSON as the source of truth. The legacy SELECTED PATH JSON is only a compatibility snapshot.
+5. Generate exactly one epic for each selected path. Never collapse multiple selected paths into one epic.
+6. For each selected path, generate 3 to 5 stories and 3 to 5 tasks.
+7. For each story and each task, generate 2 to 3 subtasks.
+8. Stories and tasks are siblings under the epic. Do not place tasks under stories.
+9. Subtasks may belong to either a story or a task, but never to an epic.
+10. Keep each selected path isolated as its own lane. Do not dump all issues into the first path.
+11. Emit issues in path order. For each epic, list that epic's stories, tasks, and subtasks before moving to the next epic.
+12. Map work items to team members by role, expertise, and likely ownership.
+13. If a new item depends on existing work or Jira IDs, add explicit dependency links.
+14. Use exact terms from the selected requirements, exact chunks, project state, and user instructions. Preserve domain terminology.
+15. Preserve requirement traceability. Every issue must map back to one or more source requirements when relevant.
+16. Write long, implementation-ready descriptions and rich, testable acceptance criteria.
+17. Place items in a sensible sprint or backlog position based on current progress, dependencies, and urgency.
+18. Preserve parent-child relationships explicitly and do not flatten nested work.
 
 # OUTPUT RULES:
 - Return ONLY a JSON object.
+- Return compact JSON with no markdown fences and no commentary.
+- Keep descriptions and acceptance criteria implementation-ready but concise enough that the full JSON can close correctly.
+- Do not include literal newline characters inside JSON string values. Use normal sentence spacing inside strings.
 - Include "Acceptance Criteria" as a checklist for QA.
 - Ensure "summary" is concise and "description" is technical, detailed, and specific.
 - Do not optimize for brevity; optimize for complete coverage of the selected scope.
+- Keep all JSON values dynamic. Do not copy static example values into the final output.
+- Do not use hardcoded parent indices, fixed IDs, or repeated assignee names.
+- Balance assignee assignment evenly across the available team members.
+- If a field depends on hierarchy position, derive it from the current epic or item index.
+- Use the selected path order from SELECTED PATHS JSON when assigning planning_path_index values.
+- Every Story and Task must include a unique dynamic temp_id, such as a path-aware id derived from its own position.
+- Every Subtask parent_temp_id must exactly match an emitted Story temp_id or Task temp_id.
 
 # JSON STRUCTURE:
 {{
@@ -64,35 +100,46 @@ You are a Senior Technical Architect. Convert the selected requirements into the
             "type": "Epic",
             "summary": "...",
             "description": "...",
-            "assignee": "USER-ID",
+            "assignee": "<dynamic user id or empty>",
+            "planning_path_id": "<selected path id>",
+            "planning_path_index": "<zero-based selected path index>",
             "priority": "High",
-            "links": [{{ "type": "blocks", "outwardIssue": "PROJ-10" }}],
+            "links": [{{ "type": "<dynamic link type>", "outwardIssue": "<dynamic jira key or temp id>" }}],
             "acceptance_criteria": ["...", "..."]
         }},
         {{
             "type": "Story",
-            "parent_epic_index": 0,
+            "temp_id": "<dynamic story temp id>",
+            "parent_epic_index": "<zero-based epic index>",
+            "planning_path_id": "<selected path id>",
+            "planning_path_index": "<zero-based selected path index>",
             "summary": "...",
             "description": "...",
-            "assignee": "USER-ID",
+            "assignee": "<dynamic user id or empty>",
             "acceptance_criteria": ["..."]
         }},
         {{
             "type": "Task",
-            "parent_temp_id": "story-1",
+            "temp_id": "<dynamic task temp id>",
+            "parent_epic_index": "<zero-based epic index>",
+            "planning_path_id": "<selected path id>",
+            "planning_path_index": "<zero-based selected path index>",
             "summary": "...",
             "description": "...",
-            "assignee": "USER-ID",
+            "assignee": "<dynamic user id or empty>",
             "priority": "High",
-            "links": [{{ "type": "blocks", "outwardIssue": "PROJ-10" }}],
+            "links": [{{ "type": "<dynamic link type>", "outwardIssue": "<dynamic jira key or temp id>" }}],
             "acceptance_criteria": ["..."]
         }},
         {{
             "type": "Subtask",
-            "parent_temp_id": "task-1",
+            "temp_id": "<dynamic subtask temp id>",
+            "parent_temp_id": "<dynamic story or task temp id>",
+            "planning_path_id": "<selected path id>",
+            "planning_path_index": "<zero-based selected path index>",
             "summary": "...",
             "description": "...",
-            "assignee": "USER-ID",
+            "assignee": "<dynamic user id or empty>",
             "priority": "Medium",
             "acceptance_criteria": ["..."]
         }}
@@ -299,9 +346,9 @@ Return ONLY valid JSON:
 
 STANDUP_SUMMARY_PROMPT = """You are an engineering manager assistant.
 
-Create a concise standup summary from the following project context.
+Create a concise summary from the following project context.
 
-Return plain text only with 3 short sections:
+Follow the output format requested in the context. If the context asks for JSON, return ONLY valid JSON (no markdown fences, no extra text). If no specific format is requested, return plain text with 3 short sections:
 1) What moved
 2) What is pending
 3) Health and risk
@@ -688,19 +735,16 @@ class LLMService:
         for _ in range(6):
             compact_context = self._compact_rag_context(context, ctx_budget, module_name)
             compact_additional = self._extract_vectorless_summary(additional_context, module_name, add_budget)
-            selected_path = "\n".join(
-                part for part in [
-                    f"Project: {project_name}",
-                    f"Module: {module_name}",
-                    constraints or "",
-                    compact_additional or "",
-                ] if part
+            selected_paths_overview = self._build_selected_paths_overview(
+                selected_paths_json=selected_paths_json or "[]",
+                selected_requirements_json=selected_requirements_json or "[]",
             )
 
             prompt = STORY_GENERATION_PROMPT.format(
                 full_srs_text=compact_context or "No SRS document ingested yet.",
                 selected_path_json=self._trim_text(selected_path_json or "{}", 12000),
                 selected_paths_json=self._trim_text(selected_paths_json or "[]", 12000),
+                selected_paths_overview=self._trim_text(selected_paths_overview or "No selected paths provided.", 12000),
                 selected_requirements_json=self._trim_text(selected_requirements_json or "[]", 12000),
                 chunk_refs_json=self._trim_text(chunk_refs_json or "[]", 12000),
                 section_refs_json=self._trim_text(section_refs_json or "[]", 12000),
@@ -719,23 +763,75 @@ class LLMService:
         # Final defensive pass.
         compact_context = self._select_salient_lines(context or "", 5200, module_name)
         compact_additional = self._select_salient_lines(additional_context or "", 6200, module_name)
-        selected_path = "\n".join(
-            part for part in [
-                f"Project: {project_name}",
-                f"Module: {module_name}",
-                constraints or "",
-                compact_additional or "",
-            ] if part
+        selected_paths_overview = self._build_selected_paths_overview(
+            selected_paths_json=selected_paths_json or "[]",
+            selected_requirements_json=selected_requirements_json or "[]",
         )
         return STORY_GENERATION_PROMPT.format(
             full_srs_text=compact_context or "No SRS document ingested yet.",
             selected_path_json=self._trim_text(selected_path_json or "{}", 12000),
+            selected_paths_json=self._trim_text(selected_paths_json or "[]", 12000),
+            selected_paths_overview=self._trim_text(selected_paths_overview or "No selected paths provided.", 12000),
             selected_requirements_json=self._trim_text(selected_requirements_json or "[]", 12000),
             chunk_refs_json=self._trim_text(chunk_refs_json or "[]", 12000),
             section_refs_json=self._trim_text(section_refs_json or "[]", 12000),
             team_members_json=team_members_json or "[]",
             active_jira_state=compact_additional or "[]",
         )
+
+    def _build_selected_paths_overview(
+        self,
+        selected_paths_json: str = "[]",
+        selected_requirements_json: str = "[]",
+    ) -> str:
+        try:
+            selected_paths = json.loads(selected_paths_json or "[]")
+        except Exception:
+            selected_paths = []
+        if not isinstance(selected_paths, list):
+            selected_paths = []
+
+        try:
+            selected_requirements = json.loads(selected_requirements_json or "[]")
+        except Exception:
+            selected_requirements = []
+        if not isinstance(selected_requirements, list):
+            selected_requirements = []
+
+        requirements_by_path: Dict[str, List[str]] = {}
+        for item in selected_requirements:
+            if not isinstance(item, dict):
+                continue
+            path_id = str(item.get("planning_path_id") or item.get("path_id") or "").strip()
+            req_id = str(item.get("requirement_id") or item.get("id") or "").strip()
+            title = str(item.get("title") or "").strip()
+            label = req_id if req_id else title
+            if not path_id or not label:
+                continue
+            bucket = requirements_by_path.setdefault(path_id, [])
+            if label not in bucket:
+                bucket.append(label)
+
+        lines = []
+        for index, path in enumerate(selected_paths):
+            if not isinstance(path, dict):
+                continue
+            path_id = str(path.get("id") or path.get("path_id") or f"path-{index + 1}").strip()
+            name = str(path.get("name") or path.get("title") or path_id or f"Selected Path {index + 1}").strip()
+            reqs = path.get("requirements") or path.get("requirement_ids") or requirements_by_path.get(path_id, [])
+            if not isinstance(reqs, list):
+                reqs = [str(reqs)] if str(reqs).strip() else []
+            req_text = ", ".join([str(req).strip() for req in reqs if str(req).strip()]) or "none"
+            reason = str(path.get("reason") or "").strip()
+            dependency_notes = str(path.get("dependency_notes") or "").strip()
+            lane_line = f"{index}. id={path_id} | name={name} | requirements={req_text}"
+            if reason:
+                lane_line += f" | reason={reason}"
+            if dependency_notes:
+                lane_line += f" | dependency_notes={dependency_notes}"
+            lines.append(lane_line)
+
+        return "\n".join(lines) if lines else "No selected paths provided."
 
     def preview_generate_stories_prompt(
         self,
@@ -857,6 +953,54 @@ class LLMService:
         text = re.sub(r",(\s*[}\]])", r"\1", text)
         return text
 
+    @staticmethod
+    def _escape_control_chars_in_strings(text: str) -> str:
+        result = []
+        in_string = False
+        escape = False
+        for ch in text:
+            if in_string:
+                if escape:
+                    result.append(ch)
+                    escape = False
+                    continue
+                if ch == "\\":
+                    result.append(ch)
+                    escape = True
+                    continue
+                if ch == '"':
+                    result.append(ch)
+                    in_string = False
+                    continue
+                if ch == "\n":
+                    result.append("\\n")
+                    continue
+                if ch == "\r":
+                    result.append("\\r")
+                    continue
+                if ch == "\t":
+                    result.append("\\t")
+                    continue
+                result.append(ch)
+                continue
+
+            result.append(ch)
+            if ch == '"':
+                in_string = True
+        return "".join(result)
+
+    @staticmethod
+    def _chat_finish_reason(response: Any) -> str:
+        choices = getattr(response, "choices", None)
+        if isinstance(choices, list) and choices:
+            return str(getattr(choices[0], "finish_reason", "") or "")
+        if isinstance(response, dict):
+            choices = response.get("choices")
+            if isinstance(choices, list) and choices:
+                first = choices[0] or {}
+                return str(first.get("finish_reason") or "")
+        return ""
+
     def _parse_model_json(self, raw: str, *, operation: str) -> Any:
         """Parse JSON from an LLM response with light recovery for common formatting mistakes."""
         candidates = []
@@ -869,6 +1013,7 @@ class LLMService:
             text = text.strip()
 
         candidates.append(text)
+        candidates.append(self._escape_control_chars_in_strings(text))
 
         try:
             candidates.append(self._extract_json_object(text))
@@ -883,6 +1028,12 @@ class LLMService:
                     continue
 
         preview = self._trim_text(text, 500)
+        logger.error(
+            "LLM JSON parse failed operation=%s raw_chars=%s raw_tail=%s",
+            operation,
+            len(text),
+            self._trim_text(text[-500:], 500),
+        )
         raise ValueError(f"LLM returned invalid JSON for {operation}: {preview}")
 
     def _call_llm(
@@ -895,8 +1046,22 @@ class LLMService:
         cfg = ai_config or {}
         provider = cfg.get("provider") or "openrouter"
         resolved_temperature = float(cfg.get("temperature", temperature))
-        resolved_max_tokens = int(cfg.get("maxTokens", self.max_tokens))
+        configured_max_tokens = int(cfg.get("maxTokens", self.max_tokens))
+        if operation == "generate_stories":
+            generate_max_tokens = int(os.getenv("GENERATE_STORIES_MAX_TOKENS", 32768))
+            resolved_max_tokens = max(configured_max_tokens, generate_max_tokens)
+        else:
+            resolved_max_tokens = configured_max_tokens
         started_at = __import__("time").time()
+        prompt_chars = len(prompt or "")
+        logger.info(
+            "[LLM] call start operation=%s provider=%s temperature=%s max_tokens=%s prompt_chars=%s",
+            operation,
+            provider,
+            resolved_temperature,
+            resolved_max_tokens,
+            prompt_chars,
+        )
 
         if provider == "manual_bridge":
             timeout_seconds = int(cfg.get("manualBridgeTimeoutSeconds") or os.getenv("MANUAL_BRIDGE_TIMEOUT_SECONDS") or 1800)
@@ -912,7 +1077,7 @@ class LLMService:
             )
             self._set_last_call_meta({
                 "provider": provider,
-                "model": cfg.get("model") or cfg.get("openrouterModel") or cfg.get("deepseekModel") or "",
+                "model": (cfg.get("deepseekModel") if provider.startswith("deepseek") else cfg.get("openrouterModel")) or self.model,
                 "operation": operation,
                 "latencyMs": int((__import__("time").time() - started_at) * 1000),
                 "usage": None,
@@ -932,20 +1097,33 @@ class LLMService:
 
             deepseek_model = cfg.get("deepseekModel") or os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
             client = self._get_deepseek_client(deepseek_url)
-            response = client.chat.completions.create(
-                model=deepseek_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=resolved_temperature,
-                max_tokens=resolved_max_tokens,
-            )
+            request_kwargs = {
+                "model": deepseek_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": resolved_temperature,
+                "max_tokens": resolved_max_tokens,
+            }
+            if operation == "generate_stories":
+                request_kwargs["response_format"] = {"type": "json_object"}
+            response = client.chat.completions.create(**request_kwargs)
             text = self._extract_text_from_chat_response(response)
             if text:
+                finish_reason = self._chat_finish_reason(response)
+                logger.info(
+                    "[LLM] call complete operation=%s provider=%s model=%s output_chars=%s finish_reason=%s",
+                    operation,
+                    provider,
+                    deepseek_model,
+                    len(text),
+                    finish_reason,
+                )
                 self._set_last_call_meta({
                     "provider": provider,
                     "model": deepseek_model,
                     "operation": operation,
                     "latencyMs": int((__import__("time").time() - started_at) * 1000),
                     "usage": self._normalize_usage(response),
+                    "finishReason": finish_reason,
                     "request": {
                         "promptPreview": self._trim_meta_text(prompt),
                     },
@@ -963,21 +1141,34 @@ class LLMService:
                 deepseek_thinking = True
             deepseek_reasoning_effort = cfg.get("deepseekReasoningEffort") or "high"
             client = self._get_deepseek_official_client()
-            response = client.chat.completions.create(
-                model=deepseek_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=resolved_temperature,
-                max_tokens=resolved_max_tokens,
-                extra_body={"thinking": {"type": "enabled" if deepseek_thinking else "disabled"}},
-            )
+            request_kwargs = {
+                "model": deepseek_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": resolved_temperature,
+                "max_tokens": resolved_max_tokens,
+                "extra_body": {"thinking": {"type": "enabled" if deepseek_thinking else "disabled"}},
+            }
+            if operation in ("generate_stories", "standup_summary"):
+                request_kwargs["response_format"] = {"type": "json_object"}
+            response = client.chat.completions.create(**request_kwargs)
             text = self._extract_text_from_chat_response(response)
             if text:
+                finish_reason = self._chat_finish_reason(response)
+                logger.info(
+                    "[LLM] call complete operation=%s provider=%s model=%s output_chars=%s finish_reason=%s",
+                    operation,
+                    provider,
+                    deepseek_model,
+                    len(text),
+                    finish_reason,
+                )
                 self._set_last_call_meta({
                     "provider": provider,
                     "model": deepseek_model,
                     "operation": operation,
                     "latencyMs": int((__import__("time").time() - started_at) * 1000),
                     "usage": self._normalize_usage(response),
+                    "finishReason": finish_reason,
                     "request": {
                         "promptPreview": self._trim_meta_text(prompt),
                         "thinking": deepseek_thinking,
@@ -998,41 +1189,42 @@ class LLMService:
         client = self._get_openrouter_client(api_key)
         selected_model = cfg.get("openrouterModel") or self.model
 
-        # Try selected model first, then fallbacks
-        models_to_try = [selected_model] + [m for m in self.FREE_MODELS if m != selected_model]
-        last_error = None
-        for model in models_to_try:
-            try:
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=resolved_temperature,
-                    max_tokens=resolved_max_tokens,
-                )
-                text = self._extract_text_from_chat_response(response)
-                if text:
-                    self._set_last_call_meta({
-                        "provider": provider,
-                        "model": model,
-                        "operation": operation,
-                        "latencyMs": int((__import__("time").time() - started_at) * 1000),
-                        "usage": self._normalize_usage(response),
-                        "request": {
-                            "promptPreview": self._trim_meta_text(prompt),
-                        },
-                        "response": {
-                            "textPreview": self._trim_meta_text(text),
-                        },
-                    })
-                    return text
-                raise ValueError(f"Provider returned an empty or unsupported response shape for model {model}")
-            except Exception as e:
-                err = str(e)
-                if '429' in err or '404' in err or 'rate' in err.lower() or 'not found' in err.lower():
-                    last_error = e
-                    continue  # try next model
-                raise  # non-rate-limit error, re-raise immediately
-        raise last_error
+        request_kwargs = {
+            "model": selected_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": resolved_temperature,
+            "max_tokens": resolved_max_tokens,
+        }
+        if operation in ("generate_stories", "standup_summary"):
+            request_kwargs["response_format"] = {"type": "json_object"}
+        response = client.chat.completions.create(**request_kwargs)
+        text = self._extract_text_from_chat_response(response)
+        if text:
+            finish_reason = self._chat_finish_reason(response)
+            logger.info(
+                "[LLM] call complete operation=%s provider=%s model=%s output_chars=%s finish_reason=%s",
+                operation,
+                provider,
+                selected_model,
+                len(text),
+                finish_reason,
+            )
+            self._set_last_call_meta({
+                "provider": provider,
+                "model": selected_model,
+                "operation": operation,
+                "latencyMs": int((__import__("time").time() - started_at) * 1000),
+                "usage": self._normalize_usage(response),
+                "finishReason": finish_reason,
+                "request": {
+                    "promptPreview": self._trim_meta_text(prompt),
+                },
+                "response": {
+                    "textPreview": self._trim_meta_text(text),
+                },
+            })
+            return text
+        raise ValueError("Provider returned an empty or unsupported response shape")
 
     def generate_stories(
         self,
@@ -1049,6 +1241,15 @@ class LLMService:
         section_refs_json: str = "[]",
         ai_config: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
+        selected_path_count = _count_selected_paths(selected_paths_json)
+        logger.info(
+            "[generate_stories] start project=%s module=%s selected_paths=%s context_chars=%s additional_context_chars=%s",
+            project_name,
+            module_name,
+            selected_path_count,
+            len(context or ""),
+            len(additional_context or ""),
+        )
         prompt = self._build_generate_prompt_with_budget(
             project_name=project_name,
             module_name=module_name,
@@ -1062,18 +1263,52 @@ class LLMService:
             chunk_refs_json=chunk_refs_json or "[]",
             section_refs_json=section_refs_json or "[]",
         )
+        logger.info(
+            "[generate_stories] prompt ready selected_paths=%s prompt_chars=%s estimated_tokens=%s",
+            selected_path_count,
+            len(prompt or ""),
+            self._estimate_tokens(prompt or ""),
+        )
 
         raw = self._call_llm(prompt, temperature=0.4, ai_config=ai_config, operation="generate_stories")
+        logger.info("[generate_stories] raw response received chars=%s", len(raw or ""))
 
         result = self._parse_model_json(raw, operation="generate_stories")
+        logger.info(
+            "[generate_stories] parsed JSON type=%s keys=%s",
+            type(result).__name__,
+            list(result.keys()) if isinstance(result, dict) else [],
+        )
 
         if isinstance(result, dict) and isinstance(result.get("issues"), list):
-            result = self._convert_issue_payload_to_backlog(result, module_name)
+            logger.info("[generate_stories] converting issues payload issues=%s", len(result.get("issues") or []))
+            result = self._convert_issue_payload_to_backlog(result, module_name, selected_paths_json)
 
-        return self._normalize_generated_backlog(result, module_name, team_members_json)
+        normalized = self._normalize_generated_backlog(result, module_name, team_members_json, selected_paths_json)
+        logger.info(
+            "[generate_stories] normalized counts epics=%s stories=%s tasks=%s subtasks=%s",
+            len(normalized.get("epics", [])),
+            len(normalized.get("stories", [])),
+            len(normalized.get("tasks", [])),
+            len(normalized.get("subtasks", [])),
+        )
+        self._validate_backlog_distribution(
+            normalized=normalized,
+            selected_paths_json=selected_paths_json,
+        )
+        logger.info("[generate_stories] validation complete selected_paths=%s", selected_path_count)
+        return normalized
 
-    def _convert_issue_payload_to_backlog(self, payload: Dict[str, Any], module_name: str) -> Dict[str, Any]:
+    def _convert_issue_payload_to_backlog(self, payload: Dict[str, Any], module_name: str, selected_paths_json: str = "[]") -> Dict[str, Any]:
         issues = payload.get("issues") or []
+        try:
+            selected_paths = json.loads(selected_paths_json or "[]")
+        except Exception:
+            selected_paths = []
+        if not isinstance(selected_paths, list):
+            selected_paths = []
+
+        selected_path_count = max(1, len(selected_paths))
         epics = []
         stories = []
         tasks = []
@@ -1083,6 +1318,42 @@ class LLMService:
         story_count = 0
         task_count = 0
         subtask_count = 0
+        story_lane_cursor = 0
+        task_lane_cursor = 0
+        subtask_lane_cursor = 0
+        lane_parent_map: Dict[int, str] = {}
+
+        def _coerce_index(value: Any, default: int = 0) -> int:
+            if value is None:
+                return default
+            try:
+                text = str(value).strip()
+                if not text:
+                    return default
+                return int(text)
+            except Exception:
+                return default
+
+        def _safe_int_local(value: Any, default: int = 0) -> int:
+            try:
+                return int(str(value).strip())
+            except Exception:
+                return default
+
+        def _lane_index(issue: Dict[str, Any], fallback: int) -> int:
+            explicit = issue.get("planning_path_index")
+            if explicit is None:
+                explicit = issue.get("parent_epic_index")
+            if explicit is None:
+                explicit = issue.get("parentEpicIndex")
+            lane = _coerce_index(explicit, fallback)
+            if selected_path_count <= 0:
+                return max(0, lane)
+            return max(0, min(lane, selected_path_count - 1))
+
+        def _temp_id(issue: Dict[str, Any], prefix: str, counter: int) -> str:
+            raw = str(issue.get("temp_id") or issue.get("tempId") or "").strip()
+            return raw or f"{prefix}-{counter}"
 
         for issue in issues:
             if not isinstance(issue, dict):
@@ -1101,8 +1372,11 @@ class LLMService:
 
             if issue_type == "epic":
                 epic_count += 1
+                lane_index = _lane_index(issue, epic_count - 1)
                 epics.append({
                     "tempId": f"epic-{epic_count}",
+                    "planningPathIndex": lane_index,
+                    "planningPathId": str(issue.get("planning_path_id") or "").strip(),
                     "title": summary or f"Epic {epic_count}",
                     "description": description,
                     "type": "epic",
@@ -1113,19 +1387,18 @@ class LLMService:
                 })
                 continue
 
-            parent_epic_index = int(issue.get("parent_epic_index") or 0)
-            epic_temp_id = f"epic-{max(1, parent_epic_index + 1)}"
-
-            if issue_type in {"task", "subtask"}:
+            if issue_type == "task":
                 task_count += 1
-                parent_temp_id = str(issue.get("parent_temp_id") or issue.get("parentTempId") or "")
-                if not parent_temp_id:
-                    parent_temp_id = f"story-{max(1, min(story_count, 1))}"
-
-                row = {
-                    "tempId": f"task-{task_count}",
+                lane_index = _lane_index(issue, task_lane_cursor % selected_path_count)
+                task_lane_cursor += 1
+                epic_temp_id = f"epic-{max(1, lane_index + 1)}"
+                task_temp_id = _temp_id(issue, "task", task_count)
+                lane_parent_map[lane_index] = task_temp_id
+                tasks.append({
+                    "tempId": task_temp_id,
                     "epicTempId": epic_temp_id,
-                    "parentTempId": parent_temp_id,
+                    "planningPathIndex": lane_index,
+                    "planningPathId": str(issue.get("planning_path_id") or "").strip(),
                     "title": summary or f"Task {task_count}",
                     "description": description,
                     "type": "task",
@@ -1133,21 +1406,42 @@ class LLMService:
                     "priority": priority,
                     "assignee": assignee,
                     "acceptanceCriteria": [str(x).strip() for x in acceptance if str(x).strip()],
-                }
+                })
+                continue
 
-                if issue_type == "subtask":
-                    subtask_count += 1
-                    row["tempId"] = f"subtask-{subtask_count}"
-                    row["type"] = "subtask"
-                    subtasks.append(row)
-                else:
-                    tasks.append(row)
+            if issue_type == "subtask":
+                subtask_count += 1
+                parent_temp_id = str(issue.get("parent_temp_id") or issue.get("parentTempId") or "").strip()
+                lane_index = _lane_index(issue, subtask_lane_cursor % selected_path_count)
+                subtask_lane_cursor += 1
+                epic_temp_id = f"epic-{max(1, lane_index + 1)}"
+                subtasks.append({
+                    "tempId": _temp_id(issue, "subtask", subtask_count),
+                    "epicTempId": epic_temp_id,
+                    "parentTempId": parent_temp_id,
+                    "planningPathIndex": lane_index,
+                    "planningPathId": str(issue.get("planning_path_id") or "").strip(),
+                    "title": summary or f"Subtask {subtask_count}",
+                    "description": description,
+                    "type": "subtask",
+                    "module": module_name,
+                    "priority": priority,
+                    "assignee": assignee,
+                    "acceptanceCriteria": [str(x).strip() for x in acceptance if str(x).strip()],
+                })
                 continue
 
             story_count += 1
+            lane_index = _lane_index(issue, story_lane_cursor % selected_path_count)
+            story_lane_cursor += 1
+            epic_temp_id = f"epic-{max(1, lane_index + 1)}"
+            story_temp_id = _temp_id(issue, "story", story_count)
+            lane_parent_map[lane_index] = story_temp_id
             stories.append({
-                "tempId": f"story-{story_count}",
+                "tempId": story_temp_id,
                 "epicTempId": epic_temp_id,
+                "planningPathIndex": lane_index,
+                "planningPathId": str(issue.get("planning_path_id") or "").strip(),
                 "title": summary or f"Story {story_count}",
                 "description": description,
                 "type": "story",
@@ -1164,7 +1458,7 @@ class LLMService:
             "subtasks": subtasks,
         }
 
-    def _normalize_generated_backlog(self, result: Dict[str, Any], module_name: str, team_members_json: str = "[]") -> Dict[str, Any]:
+    def _normalize_generated_backlog(self, result: Dict[str, Any], module_name: str, team_members_json: str = "[]", selected_paths_json: str = "[]") -> Dict[str, Any]:
         epics = result.get("epics") if isinstance(result, dict) else []
         stories = result.get("stories") if isinstance(result, dict) else []
         tasks = result.get("tasks") if isinstance(result, dict) else []
@@ -1204,14 +1498,22 @@ class LLMService:
                 if value:
                     team_lookup[value] = member_id
 
+        assignee_index = 0
+        try:
+            selected_paths = json.loads(selected_paths_json or "[]")
+        except Exception:
+            selected_paths = []
+        if not isinstance(selected_paths, list):
+            selected_paths = []
+
+        path_count = max(1, len(selected_paths))
+
         def _assignee(value: Any, idx: int) -> Any:
-            raw = str(value or "").strip()
-            if raw and raw.lower() in team_lookup:
-                return team_lookup[raw.lower()]
-            if raw and raw in team_ids:
-                return raw
+            nonlocal assignee_index
             if team_ids:
-                return team_ids[idx % len(team_ids)]
+                assigned = team_ids[assignee_index % len(team_ids)]
+                assignee_index += 1
+                return assigned
             return None
 
         def _normalize_item(item: Dict[str, Any], item_type: str, parent_id: str = None, idx: int = 0) -> Dict[str, Any]:
@@ -1229,35 +1531,11 @@ class LLMService:
                 "status": "todo",
                 "startDate": item.get("startDate") if item.get("startDate") else None,
                 "dueDate": item.get("dueDate") if item.get("dueDate") else None,
-                "storyPoints": int(item.get("storyPoints") or 0),
+                "storyPoints": _safe_int(item.get("storyPoints"), 0),
                 "parentId": parent_id,
             }
 
         normalized_epics = [_normalize_item(e if isinstance(e, dict) else {}, "epic", None, i) for i, e in enumerate(epics)]
-        
-        # FALLBACK: If fewer than 3 epics, auto-generate missing ones
-        epic_templates = [
-            {"tempId": "epic-1", "title": "Core Infrastructure Setup", "description": "Foundation services, database models, and core systems", "priority": "high", "module": "core"},
-            {"tempId": "epic-2", "title": "Primary Domain Features", "description": "Main business workflows and user-facing functionality", "priority": "high", "module": "domain"},
-            {"tempId": "epic-3", "title": "Integrations & Advanced Features", "description": "External integrations, performance optimization, and advanced capabilities", "priority": "medium", "module": "integrations"},
-        ]
-        
-        if len(normalized_epics) < 3:
-            # Use generated epics first, then fill in from templates
-            used_indices = set()
-            for i, epic in enumerate(normalized_epics[:3]):
-                if i < len(epic_templates):
-                    epic["tempId"] = epic_templates[i]["tempId"]
-                    if not epic["title"] or epic["title"].startswith("Epic"):
-                        epic["title"] = epic_templates[i]["title"]
-                    if not epic["description"]:
-                        epic["description"] = epic_templates[i]["description"]
-                used_indices.add(i)
-            
-            # Add missing epics from templates
-            for i in range(len(normalized_epics), 3):
-                template = epic_templates[i]
-                normalized_epics.append(_normalize_item(template, "epic", None, i))
 
         epic_ids = {e["tempId"] for e in normalized_epics}
         normalized_stories = []
@@ -1266,9 +1544,17 @@ class LLMService:
                 continue
             epic_temp = str(s.get("epicTempId") or s.get("parentId") or "")
             if epic_temp not in epic_ids:
-                epic_temp = normalized_epics[0]["tempId"]
+                lane_index = _safe_int(s.get("planningPathIndex"), 0)
+                if normalized_epics:
+                    epic_temp = normalized_epics[max(0, min(lane_index, len(normalized_epics) - 1))]["tempId"]
+                else:
+                    epic_temp = None
+            if epic_temp not in epic_ids:
+                raise ValueError(f"Generated story '{s.get('title') or s.get('tempId') or i}' references missing epicTempId")
             item = _normalize_item(s, "story", epic_temp, i)
             item["epicTempId"] = epic_temp
+            item["planningPathIndex"] = _safe_int(s.get("planningPathIndex"), 0)
+            item["planningPathId"] = s.get("planningPathId") or ""
             item["acceptanceCriteria"] = s.get("acceptanceCriteria") or []
             normalized_stories.append(item)
 
@@ -1277,15 +1563,19 @@ class LLMService:
         for i, t in enumerate(tasks):
             if not isinstance(t, dict):
                 continue
-            parent_story = str(t.get("parentTempId") or t.get("parentId") or "")
-            if parent_story not in story_ids:
-                parent_story = normalized_stories[0]["tempId"] if normalized_stories else None
             epic_temp = str(t.get("epicTempId") or "")
             if epic_temp not in epic_ids:
-                epic_temp = normalized_epics[0]["tempId"]
-            item = _normalize_item(t, "task", parent_story, i)
-            item["parentTempId"] = parent_story
+                lane_index = _safe_int(t.get("planningPathIndex"), 0)
+                if normalized_epics:
+                    epic_temp = normalized_epics[max(0, min(lane_index, len(normalized_epics) - 1))]["tempId"]
+                else:
+                    epic_temp = None
+            if epic_temp not in epic_ids:
+                raise ValueError(f"Generated task '{t.get('title') or t.get('tempId') or i}' references missing epicTempId")
+            item = _normalize_item(t, "task", None, i)
             item["epicTempId"] = epic_temp
+            item["planningPathIndex"] = _safe_int(t.get("planningPathIndex"), 0)
+            item["planningPathId"] = t.get("planningPathId") or ""
             item["acceptanceCriteria"] = t.get("acceptanceCriteria") or []
             normalized_tasks.append(item)
 
@@ -1294,15 +1584,23 @@ class LLMService:
         for i, st in enumerate(subtasks):
             if not isinstance(st, dict):
                 continue
-            parent_task = str(st.get("parentTempId") or st.get("parentId") or "")
-            if parent_task not in task_ids:
-                parent_task = normalized_tasks[0]["tempId"] if normalized_tasks else None
+            parent_task = str(st.get("parentTempId") or st.get("parentId") or "").strip()
+            if parent_task not in story_ids and parent_task not in task_ids:
+                raise ValueError(f"Generated subtask '{st.get('title') or st.get('tempId') or i}' references missing parentTempId")
             epic_temp = str(st.get("epicTempId") or "")
             if epic_temp not in epic_ids:
-                epic_temp = normalized_epics[0]["tempId"]
+                lane_index = _safe_int(st.get("planningPathIndex"), 0)
+                if normalized_epics:
+                    epic_temp = normalized_epics[max(0, min(lane_index, len(normalized_epics) - 1))]["tempId"]
+                else:
+                    epic_temp = None
+            if epic_temp not in epic_ids:
+                raise ValueError(f"Generated subtask '{st.get('title') or st.get('tempId') or i}' references missing epicTempId")
             item = _normalize_item(st, "subtask", parent_task, i)
             item["parentTempId"] = parent_task
             item["epicTempId"] = epic_temp
+            item["planningPathIndex"] = _safe_int(st.get("planningPathIndex"), 0)
+            item["planningPathId"] = st.get("planningPathId") or ""
             item["acceptanceCriteria"] = st.get("acceptanceCriteria") or []
             normalized_subtasks.append(item)
 
@@ -1310,6 +1608,8 @@ class LLMService:
             raise ValueError("Generated backlog must include stories linked to epics")
         if not normalized_tasks:
             raise ValueError("Generated backlog must include tasks linked to stories")
+        if not normalized_epics:
+            raise ValueError("Generated backlog must include at least one epic")
 
         return {
             "epics": normalized_epics,
@@ -1317,6 +1617,39 @@ class LLMService:
             "tasks": normalized_tasks,
             "subtasks": normalized_subtasks,
         }
+
+    def _validate_backlog_distribution(self, normalized: Dict[str, Any], selected_paths_json: str = "[]") -> None:
+        try:
+            selected_paths = json.loads(selected_paths_json or "[]")
+        except Exception:
+            selected_paths = []
+
+        if not isinstance(selected_paths, list):
+            selected_paths = []
+
+        path_count = max(1, len(selected_paths))
+        epics = normalized.get("epics") if isinstance(normalized, dict) else []
+        stories = normalized.get("stories") if isinstance(normalized, dict) else []
+        tasks = normalized.get("tasks") if isinstance(normalized, dict) else []
+        subtasks = normalized.get("subtasks") if isinstance(normalized, dict) else []
+
+        if len(epics) < path_count:
+            raise ValueError(f"Generated backlog must include at least one epic per selected path (expected {path_count}, got {len(epics)})")
+        if not stories:
+            raise ValueError("Generated backlog must include at least one story")
+        if not tasks:
+            raise ValueError("Generated backlog must include at least one task")
+
+        story_ids = {str(item.get("tempId") or "").strip() for item in stories if isinstance(item, dict)}
+        task_ids = {str(item.get("tempId") or "").strip() for item in tasks if isinstance(item, dict)}
+
+        child_counts = {parent_id: 0 for parent_id in story_ids.union(task_ids)}
+        for subtask in subtasks:
+            if not isinstance(subtask, dict):
+                continue
+            parent_id = str(subtask.get("parentTempId") or "").strip()
+            if parent_id in child_counts:
+                child_counts[parent_id] += 1
 
     def validate_code_against_story(
         self,

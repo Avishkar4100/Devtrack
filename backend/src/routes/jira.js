@@ -12,6 +12,7 @@ const {
 	listServerProjectMembers,
 	getServerProjectActiveSprint,
 	listServerIssues,
+	purgeServerIssues,
 	getServerIssue,
 	createServerIssue,
 	updateServerIssue,
@@ -49,6 +50,7 @@ router.patch('/server/projects/:projectIdOrKey', updateServerProject);
 router.delete('/server/projects/:projectIdOrKey', deleteServerProject);
 
 router.get('/server/issues', listServerIssues);
+router.delete('/server/issues/purge/:projectKey', purgeServerIssues);
 router.get('/server/issues/summary/:projectKey', getJiraAISummary);
 router.get('/server/issues/:issueKey', getServerIssue);
 router.post('/server/issues', createServerIssue);

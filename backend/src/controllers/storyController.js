@@ -182,7 +182,6 @@ const buildGenerateStoriesContext = async (
   let contextQuality = 'high';
   if (!processedDoc) {
     contextQuality = 'low';
-    planningWarnings.push('No processed SRS found. Generated backlog is using project graph fallback context.');
   }
 
   const discoveredRequirementIds = Array.isArray(suggestContext?.discoveredRequirementIds)
@@ -352,6 +351,10 @@ const generateStories = async (req, res) => {
 
   // FIX #4: Support both selectedPath (legacy) and selectedPlanningPaths (new multi-select)
   const paths = selectedPlanningPaths || (selectedPath ? [selectedPath] : []);
+  logger.info(`[Generate Backlog] controller:start project=${req.params.projectId} module=${moduleName} paths=${Array.isArray(paths) ? paths.length : 0} selectedRequirements=${Array.isArray(selectedRequirements) ? selectedRequirements.length : 0} chunkRefs=${Array.isArray(chunkRefs) ? chunkRefs.length : 0} sectionRefs=${Array.isArray(sectionRefs) ? sectionRefs.length : 0}`);
+  if (Array.isArray(paths) && paths.length) {
+    logger.info(`[Generate Backlog] controller:selectedPaths ${paths.map((p, idx) => `${idx}:${p?.name || p?.id || 'unnamed'}`).join(' | ')}`);
+  }
 
   const projectContext = await buildGenerateStoriesContext(
     req.params.projectId,
@@ -363,11 +366,20 @@ const generateStories = async (req, res) => {
     chunkRefs || [],
     sectionRefs || []
   );
+  logger.info(`[Generate Backlog] controller:contextBuilt projectFound=${Boolean(projectContext.project)} processedDoc=${Boolean(projectContext.processedDoc)} teamMembers=${projectContext.teamMembers?.length || 0} enhancedContextChars=${String(projectContext.enhancedContext || '').length}`);
   const project = projectContext.project;
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+  if (!projectContext.processedDoc) {
+    return res.status(400).json({
+      success: false,
+      message: 'No processed SRS found for this project. Process the document before generating a backlog.',
+    });
+  }
 
+  logger.info('[Generate Backlog] controller:healthCheck start');
   const aiHealth = await aiService.checkHealth();
   const activeAiConfig = await aiService.getActiveAIConfigPayload();
+  logger.info(`[Generate Backlog] controller:healthCheck online=${aiHealth.online} provider=${activeAiConfig?.provider || 'unknown'} model=${activeAiConfig?.openrouterModel || activeAiConfig?.deepseekModel || activeAiConfig?.model || 'unknown'}`);
   if (!aiHealth.online) {
     return res.status(503).json({
       success: false,
@@ -379,6 +391,7 @@ const generateStories = async (req, res) => {
     });
   }
 
+  logger.info('[Generate Backlog] controller:aiService.generateStories start');
   const result = await aiService.generateStories({
     projectId: project._id.toString(),
     projectName: project.name,
@@ -393,6 +406,7 @@ const generateStories = async (req, res) => {
     chunkRefs: chunkRefs || [],
     sectionRefs: sectionRefs || [],
   });
+  logger.info(`[Generate Backlog] controller:aiService.generateStories complete epics=${result.epics?.length || 0} stories=${result.stories?.length || 0} tasks=${result.tasks?.length || 0} subtasks=${result.subtasks?.length || 0}`);
 
   await AuditLog.create({
     project: project._id,
@@ -415,6 +429,7 @@ const generateStories = async (req, res) => {
     selectedPlanningPaths: paths,
     source: 'generated',
   });
+  logger.info(`[Generate Backlog] controller:historySaved historyId=${historyEntry._id} title="${historyEntry.title}"`);
 
   res.status(200).json({
     success: true,
@@ -450,6 +465,12 @@ const previewGenerateStories = async (req, res) => {
   );
   const project = projectContext.project;
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+  if (!projectContext.processedDoc) {
+    return res.status(400).json({
+      success: false,
+      message: 'No processed SRS found for this project. Process the document before previewing a backlog prompt.',
+    });
+  }
 
   const preview = await aiService.previewGenerateStoriesPrompt({
     projectId: project._id.toString(),
@@ -486,6 +507,7 @@ const suggestStories = async (req, res) => {
 
   const project = await Project.findById(req.params.projectId);
   if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+  const activeAiConfig = await aiService.getActiveAIConfigPayload();
 
   const [requirements, stories, commits] = await Promise.all([
     Requirement.findOne({ project: project._id }).lean(),
@@ -555,18 +577,6 @@ const suggestStories = async (req, res) => {
     discoveryMeta = discovery?.meta || null;
   } catch (err) {
     logger.warn(`Suggest discovery failed project=${project._id}: ${err.message}`);
-  }
-
-  if (!discoveredPaths.length && Array.isArray(requirementMap?.items)) {
-    discoveredPaths = requirementMap.items.slice(0, 4).map((item, idx) => ({
-      id: `path-${idx + 1}`,
-      name: item.title || item.id || `Path ${idx + 1}`,
-      reason: 'Derived from requirement map fallback',
-      requirements: [item.id].filter(Boolean),
-      priority: 'medium',
-      dependency_notes: '',
-    }));
-    discoveredRequirementIds = discoveredPaths.flatMap((path) => Array.isArray(path.requirements) ? path.requirements : []);
   }
 
   let fetchedChunks = [];
@@ -676,12 +686,7 @@ const suggestStories = async (req, res) => {
         discoveredRequirementIds,
         fetchedChunks: fetchedChunks.length,
         fetchedChunkPreview: fetchedChunks.slice(0, 3).map((chunk) => String(chunk || '').replace(/\s+/g, ' ').slice(0, 220)),
-        warnings: [
-          ...planningWarnings,
-          ...(latestProcessedDoc
-            ? []
-            : ['No processed SRS found. Suggestions are generated from project graph fallback context.']),
-        ],
+        warnings: planningWarnings,
       },
       contextSummary: {
         source: 'requirements_structured',
@@ -779,11 +784,6 @@ const validateGeneratedPayload = ({ epics, stories, tasks, subtasks }) => {
     } else if (!epicIds.has(row.epicTempId)) {
       errors.push(`tasks[${idx}] references missing epicTempId '${row.epicTempId}'`);
     }
-    if (!row.parentTempId) {
-      errors.push(`tasks[${idx}] must reference a parentTempId story`);
-    } else if (!storyIds.has(row.parentTempId)) {
-      errors.push(`tasks[${idx}] references missing parentTempId '${row.parentTempId}'`);
-    }
   });
 
   subtasks.forEach((row, idx) => {
@@ -793,8 +793,8 @@ const validateGeneratedPayload = ({ epics, stories, tasks, subtasks }) => {
       errors.push(`subtasks[${idx}] references missing epicTempId '${row.epicTempId}'`);
     }
     if (!row.parentTempId) {
-      errors.push(`subtasks[${idx}] must reference a parentTempId task`);
-    } else if (!taskIds.has(row.parentTempId)) {
+      errors.push(`subtasks[${idx}] must reference a parentTempId story or task`);
+    } else if (!storyIds.has(row.parentTempId) && !taskIds.has(row.parentTempId)) {
       errors.push(`subtasks[${idx}] references missing parentTempId '${row.parentTempId}'`);
     }
   });
@@ -882,8 +882,16 @@ const saveGeneratedStories = async (req, res) => {
   for (const storyData of [...(stories || []), ...(tasks || [])]) {
     const epicRef = storyData.epicTempId
       ? epicMap[storyData.epicTempId]
-      : savedEpics[0]?._id;
-    const parentTempId = storyData.parentTempId || storyData.parentId;
+      : null;
+    if (!epicRef) {
+      return res.status(400).json({
+        success: false,
+        message: `Generated backlog item '${storyData.title || 'untitled'}' is missing a valid epicTempId`,
+      });
+    }
+    const parentTempId = storyData.type === 'subtask'
+      ? (storyData.parentTempId || storyData.parentId)
+      : null;
     const parentRef = parentTempId ? storyTempMap[parentTempId] : undefined;
 
     // Sanitize sprint/priority to valid enum values
@@ -922,8 +930,20 @@ const saveGeneratedStories = async (req, res) => {
   const savedSubtasks = [];
   for (const sub of (subtasks || [])) {
     const subParentTempId = sub.parentTempId || sub.parentId;
-    const parentId = subParentTempId ? storyTempMap[subParentTempId] : savedStories[0]?._id;
-    const epicRef = sub.epicTempId ? epicMap[sub.epicTempId] : savedEpics[0]?._id;
+    const parentId = subParentTempId ? storyTempMap[subParentTempId] : null;
+    if (!parentId) {
+      return res.status(400).json({
+        success: false,
+        message: `Generated backlog subtask '${sub.title || 'untitled'}' is missing a valid parentTempId`,
+      });
+    }
+    const epicRef = sub.epicTempId ? epicMap[sub.epicTempId] : null;
+    if (!epicRef) {
+      return res.status(400).json({
+        success: false,
+        message: `Generated backlog subtask '${sub.title || 'untitled'}' is missing a valid epicTempId`,
+      });
+    }
     const validSprints = ['S1', 'S2', 'S3', 'S4', 'backlog'];
     const validPriorities = ['highest', 'high', 'medium', 'low', 'lowest'];
     const sprint = validSprints.includes(sub.sprint) ? sub.sprint : 'backlog';

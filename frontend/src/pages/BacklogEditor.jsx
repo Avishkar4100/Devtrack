@@ -424,7 +424,7 @@ export default function BacklogEditorPage() {
 
       await api.post(`/jira/push/${id}`, {
         epicIds: freshEpics.map((e) => e._id),
-        storyIds: freshStories.filter((s) => s.type !== 'subtask').map((s) => s._id),
+        storyIds: freshStories.map((s) => s._id),
       })
     },
     onSuccess: () => {

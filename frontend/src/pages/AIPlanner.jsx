@@ -292,6 +292,7 @@ export default function AIPlannerPage() {
     const epicIds = new Set(normalized.epics.map((epic) => epic.tempId))
     const storyIds = new Set(normalized.stories.map((story) => story.tempId))
     const taskIds = new Set(normalized.tasks.map((task) => task.tempId))
+    const allParentIds = new Set([...storyIds, ...taskIds]) // subtasks can be children of stories OR tasks
     const firstEpic = normalized.epics[0]?.tempId || ''
     const firstStory = normalized.stories[0]?.tempId || ''
     const firstTask = normalized.tasks[0]?.tempId || ''
@@ -302,16 +303,18 @@ export default function AIPlannerPage() {
     }))
     normalized.tasks = normalized.tasks.map((task) => ({
       ...task,
-      parentTempId: storyIds.has(task.parentTempId) ? task.parentTempId : firstStory,
       epicTempId: epicIds.has(task.epicTempId) ? task.epicTempId : (
-        normalized.stories.find((story) => story.tempId === (storyIds.has(task.parentTempId) ? task.parentTempId : firstStory))?.epicTempId || firstEpic
+        normalized.stories.find((story) => story.tempId === task.parentTempId)?.epicTempId
+        || normalized.tasks.find((row) => row.tempId === task.parentTempId)?.epicTempId
+        || firstEpic
       ),
     }))
     normalized.subtasks = normalized.subtasks.map((subtask) => ({
       ...subtask,
-      parentTempId: taskIds.has(subtask.parentTempId) ? subtask.parentTempId : firstTask,
+      parentTempId: allParentIds.has(subtask.parentTempId) ? subtask.parentTempId : (subtask.parentTempId || firstStory),
       epicTempId: epicIds.has(subtask.epicTempId) ? subtask.epicTempId : (
-        normalized.tasks.find((task) => task.tempId === (taskIds.has(subtask.parentTempId) ? subtask.parentTempId : firstTask))?.epicTempId || firstEpic
+        // Look up the epic from the parent (story or task)
+        [...normalized.stories, ...normalized.tasks].find((item) => item.tempId === subtask.parentTempId)?.epicTempId || firstEpic
       ),
     }))
 
@@ -928,6 +931,7 @@ export default function AIPlannerPage() {
       const graphItem = currentRequirementGraphItems.find((item) => String(item?.requirement_id || '').toUpperCase() === String(reqId || '').toUpperCase())
       return {
         requirement_id: reqId,
+        planning_path_id: currentSelectedPaths.find((path) => Array.isArray(path?.requirements) && path.requirements.some((value) => String(value || '').toUpperCase() === String(reqId || '').toUpperCase()))?.id || '',
         title: graphItem?.title || reqId,
         module: graphItem?.module || '',
         type: graphItem?.type || '',
@@ -937,12 +941,15 @@ export default function AIPlannerPage() {
       }
     })
   // Aggregate chunk and section refs from all selected paths and their requirements
-  const currentSelectedChunkRefs = Array.isArray(currentSelectedPaths[0]?.chunk_refs)
-    ? currentSelectedPaths[0].chunk_refs
-    : currentSelectedRequirements.flatMap((item) => Array.isArray(item.chunk_refs) ? item.chunk_refs : [])
-  const currentSelectedSectionRefs = Array.isArray(currentSelectedPaths[0]?.section_refs)
-    ? currentSelectedPaths[0].section_refs
-    : currentSelectedRequirements.flatMap((item) => Array.isArray(item.section_refs) ? item.section_refs : [])
+  const currentSelectedChunkRefs = [
+    ...currentSelectedPaths.flatMap((path) => Array.isArray(path?.chunk_refs) ? path.chunk_refs : []),
+    ...currentSelectedRequirements.flatMap((item) => Array.isArray(item.chunk_refs) ? item.chunk_refs : []),
+  ].filter((value, index, array) => array.indexOf(value) === index)
+
+  const currentSelectedSectionRefs = [
+    ...currentSelectedPaths.flatMap((path) => Array.isArray(path?.section_refs) ? path.section_refs : []),
+    ...currentSelectedRequirements.flatMap((item) => Array.isArray(item.section_refs) ? item.section_refs : []),
+  ].filter((value, index, array) => array.indexOf(value) === index)
 
   const previewBacklogPrompt = useMutation({
     mutationFn: async () => {
@@ -1013,6 +1020,20 @@ export default function AIPlannerPage() {
       const resolvedProjectId = await resolveProjectId()
       if (!resolvedProjectId) throw new Error('No project available. Please create one first.')
       const combinedContext = buildCombinedPlanningContext()
+      appLogger.info('AI Planner generate backlog start', {
+        projectId: resolvedProjectId,
+        moduleName,
+        selectedPathCount: currentSelectedPaths.length,
+        selectedRequirementCount: currentSelectedRequirements.length,
+        chunkRefCount: currentSelectedChunkRefs.length,
+        sectionRefCount: currentSelectedSectionRefs.length,
+        selectedPaths: currentSelectedPaths.map((path, index) => ({
+          index,
+          id: path?.id,
+          name: path?.name,
+          requirementCount: Array.isArray(path?.requirements) ? path.requirements.length : 0,
+        })),
+      })
 
       appendPlannerLog({
         kind: 'request',
@@ -1076,6 +1097,13 @@ export default function AIPlannerPage() {
         sectionRefs: currentSelectedSectionRefs,
       }, {
         timeout: 0,
+      })
+      appLogger.info('AI Planner generate backlog response', {
+        projectId: resolvedProjectId,
+        epics: response.data?.data?.epics?.length || 0,
+        stories: response.data?.data?.stories?.length || 0,
+        tasks: response.data?.data?.tasks?.length || 0,
+        subtasks: response.data?.data?.subtasks?.length || 0,
       })
       return { data: response.data.data, resolvedProjectId, promptPreviewText }
     },
@@ -1159,11 +1187,12 @@ export default function AIPlannerPage() {
     )
     const selectedStoryTempIds = new Set(selectedStories.map((s) => s.tempId))
     const selectedTasks = (backlogDraft.tasks || []).filter((t) =>
-      t.selected !== false && selectedEpicTempIds.has(t.epicTempId) && selectedStoryTempIds.has(t.parentTempId)
+      t.selected !== false && selectedEpicTempIds.has(t.epicTempId)
     )
-    const selectedTaskTempIds = new Set(selectedTasks.map((t) => t.tempId))
     const selectedSubtasks = (backlogDraft.subtasks || []).filter((st) =>
-      st.selected !== false && selectedEpicTempIds.has(st.epicTempId) && selectedTaskTempIds.has(st.parentTempId)
+      st.selected !== false && selectedEpicTempIds.has(st.epicTempId) && (
+        selectedStoryTempIds.has(st.parentTempId) || selectedTasks.some((task) => task.tempId === st.parentTempId)
+      )
     )
 
     if (!selectedEpics.length && !selectedStories.length && !selectedTasks.length && !selectedSubtasks.length) {
@@ -1410,12 +1439,23 @@ export default function AIPlannerPage() {
       return { ...base, epicTempId: parentTempId }
     }
     if (type === 'task') {
+      const parentEpic = backlogDraft.epics.find((e) => e.tempId === parentTempId)
       const parentStory = backlogDraft.stories.find((s) => s.tempId === parentTempId)
-      return { ...base, parentTempId, epicTempId: parentStory?.epicTempId || '' }
+      const parentTask = backlogDraft.tasks.find((t) => t.tempId === parentTempId)
+      return {
+        ...base,
+        epicTempId: parentEpic?.tempId || parentStory?.epicTempId || parentTask?.epicTempId || parentTempId || '',
+      }
     }
     if (type === 'subtask') {
+      const parentEpic = backlogDraft.epics.find((e) => e.tempId === parentTempId)
       const parentTask = backlogDraft.tasks.find((t) => t.tempId === parentTempId)
-      return { ...base, parentTempId, epicTempId: parentTask?.epicTempId || '' }
+      const parentStory = backlogDraft.stories.find((s) => s.tempId === parentTempId)
+      return {
+        ...base,
+        parentTempId,
+        epicTempId: parentEpic?.tempId || parentTask?.epicTempId || parentStory?.epicTempId || '',
+      }
     }
     return base
   }
@@ -1460,26 +1500,11 @@ export default function AIPlannerPage() {
     return map
   }, [backlogDraft?.stories, backlogDraft?.tasks])
 
-  const tasksByStory = useMemo(() => {
+  const tasksByEpic = useMemo(() => {
     const map = new Map()
     const tasks = Array.isArray(backlogDraft?.tasks) ? backlogDraft.tasks : []
 
     tasks.forEach((task) => {
-      if (!task.parentTempId) return
-      const rows = map.get(task.parentTempId) || []
-      rows.push(task)
-      map.set(task.parentTempId, rows)
-    })
-
-    return map
-  }, [backlogDraft?.tasks])
-
-  const orphanTasksByEpic = useMemo(() => {
-    const map = new Map()
-    const tasks = Array.isArray(backlogDraft?.tasks) ? backlogDraft.tasks : []
-
-    tasks.forEach((task) => {
-      if (task.parentTempId) return
       const key = task.epicTempId || 'ungrouped'
       const rows = map.get(key) || []
       rows.push(task)
@@ -1489,14 +1514,15 @@ export default function AIPlannerPage() {
     return map
   }, [backlogDraft?.tasks])
 
-  const subtasksByTask = useMemo(() => {
+  const subtasksByParent = useMemo(() => {
     const map = new Map()
     const subtasks = Array.isArray(backlogDraft?.subtasks) ? backlogDraft.subtasks : []
 
     subtasks.forEach((subtask) => {
-      const rows = map.get(subtask.parentTempId) || []
+      const key = subtask.parentTempId || 'ungrouped'
+      const rows = map.get(key) || []
       rows.push(subtask)
-      map.set(subtask.parentTempId, rows)
+      map.set(key, rows)
     })
 
     return map
@@ -2024,65 +2050,89 @@ export default function AIPlannerPage() {
                       </button>
                       <div className="flex items-center gap-2">
                         <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('story', epic.tempId)}>+ Story</button>
+                        <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('task', epic.tempId)}>+ Task</button>
                         <button className="btn-danger btn-sm" onClick={() => removeByTempId('epics', epic.tempId)}>Delete</button>
                       </div>
                     </div>
 
-                    <div className="ml-4 mt-2 space-y-2">
-                      {(storiesByEpic.get(epic.tempId) || []).map((item) => (
-                        <div key={item.tempId} className="rounded-lg border p-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-card)' }}>
-                          <div className="flex items-center justify-between gap-2">
-                            <button className="text-left text-[14px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: item.type, tempId: item.tempId })}>
-                              {item.type === 'task' ? 'TASK' : 'STORY'}: {item.title}
-                            </button>
-                            <div className="flex items-center gap-2">
-                              <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('task', item.tempId)}>+ Task</button>
-                              <button className="btn-danger btn-sm" onClick={() => removeByTempId(item.type === 'task' ? 'tasks' : 'stories', item.tempId)}>Delete</button>
+                    <div className="ml-4 mt-3 space-y-3">
+                      <div className="space-y-2">
+                        <p className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Stories</p>
+                        {(storiesByEpic.get(epic.tempId) || []).map((story) => (
+                          <div key={story.tempId} className="rounded-lg border p-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-card)' }}>
+                            <div className="flex items-center justify-between gap-2">
+                              <button className="text-left text-[14px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'story', tempId: story.tempId })}>
+                                STORY: {story.title}
+                              </button>
+                              <div className="flex items-center gap-2">
+                                <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('subtask', story.tempId)}>+ Subtask</button>
+                                <button className="btn-danger btn-sm" onClick={() => removeByTempId('stories', story.tempId)}>Delete</button>
+                              </div>
                             </div>
-                          </div>
 
-                          <div className="ml-4 mt-2 space-y-2">
-                            {(tasksByStory.get(item.tempId) || []).map((task) => (
-                              <div key={task.tempId} className="rounded-lg border p-2" style={{ borderColor: 'rgba(148,163,184,0.2)', background: 'rgba(15,23,42,0.65)' }}>
+                            {(subtasksByParent.get(story.tempId) || []).map((st) => (
+                              <div key={st.tempId} className="ml-4 mt-2 rounded-lg border p-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-card)' }}>
                                 <div className="flex items-center justify-between gap-2">
-                                  <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'task', tempId: task.tempId })}>
-                                    TASK: {task.title}
+                                  <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'subtask', tempId: st.tempId })}>
+                                    SUBTASK: {st.title}
                                   </button>
-                                  <div className="flex items-center gap-2">
-                                    <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('subtask', task.tempId)}>+ Subtask</button>
-                                    <button className="btn-danger btn-sm" onClick={() => removeByTempId('tasks', task.tempId)}>Delete</button>
-                                  </div>
+                                  <button className="btn-danger btn-sm" onClick={() => removeByTempId('subtasks', st.tempId)}>Delete</button>
                                 </div>
-
-                                {(subtasksByTask.get(task.tempId) || []).map((st) => (
-                                  <div key={st.tempId} className="ml-4 mt-2 rounded-lg border p-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-card)' }}>
-                                    <div className="flex items-center justify-between gap-2">
-                                      <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'subtask', tempId: st.tempId })}>
-                                        SUBTASK: {st.title}
-                                      </button>
-                                      <button className="btn-danger btn-sm" onClick={() => removeByTempId('subtasks', st.tempId)}>Delete</button>
-                                    </div>
-                                  </div>
-                                ))}
                               </div>
                             ))}
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                        {!storiesByEpic.get(epic.tempId)?.length && (
+                          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No stories yet.</p>
+                        )}
+                      </div>
 
-                      {(orphanTasksByEpic.get(epic.tempId) || []).map((task) => (
-                        <div key={task.tempId} className="rounded-lg border p-2" style={{ borderColor: 'rgba(148,163,184,0.2)', background: 'rgba(15,23,42,0.65)' }}>
-                          <div className="flex items-center justify-between gap-2">
-                            <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'task', tempId: task.tempId })}>
-                              TASK: {task.title}
-                            </button>
-                            <div className="flex items-center gap-2">
-                              <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('subtask', task.tempId)}>+ Subtask</button>
-                              <button className="btn-danger btn-sm" onClick={() => removeByTempId('tasks', task.tempId)}>Delete</button>
+                      <div className="space-y-2">
+                        <p className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Tasks</p>
+                        {(tasksByEpic.get(epic.tempId) || []).map((task) => (
+                          <div key={task.tempId} className="rounded-lg border p-2" style={{ borderColor: 'rgba(148,163,184,0.2)', background: 'rgba(15,23,42,0.65)' }}>
+                            <div className="flex items-center justify-between gap-2">
+                              <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'task', tempId: task.tempId })}>
+                                TASK: {task.title}
+                              </button>
+                              <div className="flex items-center gap-2">
+                                <button className="btn-secondary btn-sm" onClick={() => addBacklogItem('subtask', task.tempId)}>+ Subtask</button>
+                                <button className="btn-danger btn-sm" onClick={() => removeByTempId('tasks', task.tempId)}>Delete</button>
+                              </div>
                             </div>
+
+                            {(subtasksByParent.get(task.tempId) || []).map((st) => (
+                              <div key={st.tempId} className="ml-4 mt-2 rounded-lg border p-2" style={{ borderColor: 'var(--border-input)', background: 'var(--bg-card)' }}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'subtask', tempId: st.tempId })}>
+                                    SUBTASK: {st.title}
+                                  </button>
+                                  <button className="btn-danger btn-sm" onClick={() => removeByTempId('subtasks', st.tempId)}>Delete</button>
+                                </div>
+                              </div>
+                            ))}
                           </div>
+                        ))}
+                        {!tasksByEpic.get(epic.tempId)?.length && (
+                          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>No tasks yet.</p>
+                        )}
+                      </div>
+
+                      {(subtasksByParent.get(epic.tempId) || []).length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Epic-Level Subtasks</p>
+                          {(subtasksByParent.get(epic.tempId) || []).map((st) => (
+                            <div key={st.tempId} className="rounded-lg border p-2" style={{ borderColor: 'var(--border-input)', background: 'rgba(15,23,42,0.65)' }}>
+                              <div className="flex items-center justify-between gap-2">
+                                <button className="text-left text-[13px] font-medium flex-1" style={{ color: 'var(--text-primary)' }} onClick={() => setSelectedItem({ type: 'subtask', tempId: st.tempId })}>
+                                  SUBTASK: {st.title}
+                                </button>
+                                <button className="btn-danger btn-sm" onClick={() => removeByTempId('subtasks', st.tempId)}>Delete</button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
                   </div>
                 ))}

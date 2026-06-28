@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import api from '@/lib/api'
 import { useProjectStore } from '@/store/projectStore'
@@ -57,45 +57,68 @@ function InsightsContent() {
     setSelectedJiraProjectKey,
   } = useProjectStore()
 
-  const [overviewSummary, setOverviewSummary] = useState(null)
-  const [projectInsights, setProjectInsights] = useState(null)
-  const [loadedProjectId, setLoadedProjectId] = useState('')
+  const queryClient = useQueryClient()
 
-  const loadInsights = useMutation({
-    mutationFn: async () => {
-      const projectId = selectedProjectId
-      const overviewPromise = api.get('/dashboard/overview-summary')
-      const projectPromise = projectId
-        ? api.get(`/insights/${projectId}`)
-        : Promise.resolve(null)
-
-      const [overviewResponse, projectResponse] = await Promise.all([overviewPromise, projectPromise])
-      return {
-        overview: overviewResponse?.data?.data || null,
-        project: projectResponse?.data?.data || null,
-        projectId,
-      }
+  // ── Auto-load overview summary on mount ──
+  const {
+    data: overviewSummary,
+    isLoading: loadingOverview,
+  } = useQuery({
+    queryKey: ['insights-overview-summary'],
+    queryFn: async () => {
+      const { data } = await api.get('/dashboard/overview-summary')
+      return data?.data || null
     },
-    onError: (err) => {
-      toast.error(err?.response?.data?.message || err?.message || 'Failed to load AI insights')
-    },
-    onSuccess: ({ overview, project, projectId }) => {
-      setOverviewSummary(overview)
-      setProjectInsights(project)
-      setLoadedProjectId(projectId || '')
-      if (!selectedProjectId && overview?.selectedProjectId) {
-        setSelectedProjectId(overview.selectedProjectId)
-        setSelectedJiraProjectKey(overview.selectedJiraProjectKey || '')
-      }
-    },
+    staleTime: 2 * 60 * 1000,
   })
 
-  const { data: jiraIssues = [] } = useQuery({
-    queryKey: ['insights-jira-issues', selectedJiraProjectKey],
-    enabled: !!selectedJiraProjectKey,
-    queryFn: async () => (await api.get('/jira/server/issues', {
-      params: { projectKey: selectedJiraProjectKey, maxResults: 40 },
-    })).data.data?.issues || [],
+  // Auto-select default project from overview
+  useEffect(() => {
+    if (!selectedProjectId && overviewSummary?.selectedProjectId) {
+      setSelectedProjectId(overviewSummary.selectedProjectId)
+      if (overviewSummary.selectedJiraProjectKey) {
+        setSelectedJiraProjectKey(overviewSummary.selectedJiraProjectKey)
+      }
+    }
+  }, [overviewSummary, selectedProjectId, setSelectedProjectId, setSelectedJiraProjectKey])
+
+  // ── Auto-load per-project insights when project is selected ──
+  const {
+    data: projectInsights,
+    isLoading: loadingProjectInsights,
+  } = useQuery({
+    queryKey: ['insights-project', selectedProjectId],
+    enabled: !!selectedProjectId,
+    queryFn: async () => {
+      const { data } = await api.get(`/insights/${selectedProjectId}`)
+      return data?.data || null
+    },
+    staleTime: 2 * 60 * 1000,
+  })
+
+  // Manual refresh
+  const refreshInsights = useMutation({
+    mutationFn: async () => {
+      const overviewRes = await api.get('/dashboard/overview-summary')
+      let projectRes = null
+      if (selectedProjectId) {
+        projectRes = await api.get(`/insights/${selectedProjectId}`)
+      }
+      return {
+        overview: overviewRes?.data?.data || null,
+        project: projectRes?.data?.data || null,
+      }
+    },
+    onSuccess: ({ overview, project }) => {
+      queryClient.setQueryData(['insights-overview-summary'], overview)
+      if (project) {
+        queryClient.setQueryData(['insights-project', selectedProjectId], project)
+      }
+      toast.success('Insights refreshed')
+    },
+    onError: (err) => {
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to refresh insights')
+    },
   })
 
   const projects = overviewSummary?.projects || storeProjects || []
@@ -118,11 +141,9 @@ function InsightsContent() {
   const overall = projectInsights?.overall || []
   const dailyReport = projectInsights?.dailyReport || []
   const moduleWise = projectInsights?.moduleWise || []
-  const issueWise = projectInsights?.issueWise || []
   const teamInsights = projectInsights?.teamInsights || []
   const dailySummary = projectInsights?.dailySummary || []
   const risks = projectInsights?.risks || []
-  const executive = projectInsights?.executiveSummary || null
 
   const dailyTrend = useMemo(() => {
     const created = dailyReport.map((row) => toNum(row.created))
@@ -130,48 +151,57 @@ function InsightsContent() {
     return { created, completed }
   }, [dailyReport])
 
-  const jiraIssueRows = useMemo(() => {
-    const mapped = jiraIssues.map((issue) => ({
-      id: issue.key,
-      title: issue.fields?.summary || 'Untitled issue',
-      owner: issue.fields?.assignee?.displayName || 'Unassigned',
-      status: issue.fields?.status?.name || 'Unknown',
-      severity: issue.fields?.priority?.name || issue.fields?.issuetype?.name || 'Medium',
-      eta: issue.fields?.duedate || issue.fields?.updated || '-',
-    }))
-    return mapped.slice(0, 8)
-  }, [jiraIssues])
-
-  const finalIssueRows = jiraIssueRows.length ? jiraIssueRows : issueWise
-
-  const executiveRows = useMemo(() => {
-    const fromExecutive = executive
-      ? [
-          { indicator: 'Automation Coverage', value: executive.automationCoverage || '-', trend: 'Up', meaning: 'Higher AI issue conversion in active stream' },
-          { indicator: 'Validation Trust', value: executive.validationTrust || '-', trend: 'Up', meaning: 'More commits linked to accepted stories' },
-          { indicator: 'Sync Reliability', value: executive.syncReliability || '-', trend: 'Stable', meaning: 'Lower Jira sync drift across boards' },
-          { indicator: 'Standup Overhead', value: executive.standupOverhead || '-', trend: 'Down', meaning: 'Fewer manual status collection meetings' },
-        ]
-      : []
-    return fromExecutive
-  }, [executive])
-
   const hasGlobalInsights = Boolean(overviewSummary)
-  const hasProjectInsights = Boolean(projectInsights && loadedProjectId === selectedProjectId)
+  const hasProjectInsights = Boolean(projectInsights)
+
+  const activeProjectName = projects.find((p) => String(p._id) === String(selectedProjectId))?.name || ''
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-[34px] font-bold tracking-tight text-slate-100">Insights</h1>
+        <div>
+          <h1 className="text-[34px] font-bold tracking-tight text-slate-100">Delivery Insights</h1>
+          {activeProjectName && (
+            <p className="text-sm text-slate-400 mt-1">
+              Viewing: <span className="text-indigo-300 font-medium">{activeProjectName}</span>
+            </p>
+          )}
+        </div>
         <button
           type="button"
-          className="btn-primary btn-sm"
-          onClick={() => loadInsights.mutate()}
-          disabled={loadInsights.isPending}
+          className="btn-secondary btn-sm"
+          onClick={() => refreshInsights.mutate()}
+          disabled={refreshInsights.isPending || loadingOverview || loadingProjectInsights}
         >
-          {loadInsights.isPending ? 'Loading AI Insights...' : 'Load AI Insights'}
+          {refreshInsights.isPending ? 'Refreshing...' : loadingOverview ? 'Loading...' : 'Refresh Insights'}
         </button>
       </div>
+
+      {/* Project selector for switching context */}
+      {projects.length > 1 && (
+        <div className="card p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-slate-400">Select Project:</span>
+            {projects.map((p) => (
+              <button
+                key={p._id}
+                type="button"
+                onClick={() => {
+                  setSelectedProjectId(p._id)
+                  if (p.jiraProjectKey) setSelectedJiraProjectKey(p.jiraProjectKey)
+                }}
+                className={`px-3 py-1 rounded-full text-xs border transition-colors ${
+                  String(p._id) === String(selectedProjectId)
+                    ? 'border-indigo-500 bg-indigo-500/20 text-indigo-200'
+                    : 'border-white/10 bg-white/5 text-slate-300 hover:border-white/20'
+                }`}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card p-4">
         <h2 className="text-base font-semibold mb-3 text-slate-100">Project Risk Board</h2>
@@ -212,9 +242,27 @@ function InsightsContent() {
         </div>
       </div>
 
-      {!hasGlobalInsights && (
+      {loadingOverview && !hasGlobalInsights && (
         <div className="card p-4 text-sm text-slate-400">
-          AI insights are loaded manually now. Use the button above to generate the project summary and delivery breakdown.
+          Loading project overview...
+        </div>
+      )}
+
+      {!loadingOverview && !hasGlobalInsights && (
+        <div className="card p-4 text-sm text-slate-400">
+          No projects found. Create a project to see delivery insights.
+        </div>
+      )}
+
+      {!selectedProjectId && hasGlobalInsights && (
+        <div className="card p-4 text-sm text-slate-400">
+          Select a project from the list above to view detailed delivery insights.
+        </div>
+      )}
+
+      {loadingProjectInsights && selectedProjectId && (
+        <div className="card p-4 text-sm text-slate-400">
+          Loading project insights...
         </div>
       )}
 
@@ -306,30 +354,11 @@ function InsightsContent() {
                 ))}
                 {!teamInsights.length && <p className="text-sm text-slate-400">No team indicators available.</p>}
               </div>
-
-              <div className="mt-3 rounded-lg border border-slate-700/80 overflow-hidden">
-                <div className="grid grid-cols-[1.2fr_0.8fr_0.8fr_1fr] gap-2 px-3 py-2 text-[11px] uppercase tracking-wide text-slate-400 bg-slate-800/50">
-                  <div>Indicator</div>
-                  <div>Value</div>
-                  <div>Trend</div>
-                  <div>Meaning</div>
-                </div>
-                {executiveRows.map((row) => (
-                  <div key={row.indicator} className="grid grid-cols-[1.2fr_0.8fr_0.8fr_1fr] gap-2 px-3 py-2 text-xs text-slate-200 border-t border-slate-700/80">
-                    <div>{row.indicator}</div>
-                    <div>{row.value}</div>
-                    <div>{row.trend}</div>
-                    <div className="text-slate-400">{row.meaning}</div>
-                  </div>
-                ))}
-                {!executiveRows.length && <div className="px-3 py-3 text-sm text-slate-400">No executive summary table yet.</div>}
-              </div>
             </div>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
-            <div className="card p-4 rounded-xl border border-slate-700/80">
-              <h2 className="text-[30px] font-bold tracking-tight text-slate-100">Daily Delivery Report</h2>
+          <div className="card p-4 rounded-xl border border-slate-700/80">
+            <h2 className="text-[30px] font-bold tracking-tight text-slate-100">Daily Delivery Report</h2>
               <p className="text-sm text-slate-400 mt-1">Day-level execution trend from practical sprint activity.</p>
               <div className="mt-3 rounded-lg border border-slate-700/80 overflow-hidden">
                 <table className="w-full text-sm">
@@ -364,38 +393,23 @@ function InsightsContent() {
               </div>
             </div>
 
-            <div className="card p-4 rounded-xl border border-slate-700/80">
-              <h2 className="text-[30px] font-bold tracking-tight text-slate-100">Issue-Wise Insights</h2>
-              <p className="text-sm text-slate-400 mt-1">Open and critical blockers with current ownership.</p>
-              <div className="space-y-2 mt-3">
-                {finalIssueRows.map((issue) => (
-                  <div key={`${issue.id}-${issue.title}`} className="rounded-lg border border-slate-700/80 p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-semibold text-slate-100">{issue.id}</p>
-                      <span className={`text-xs font-semibold uppercase ${riskTone(issue.severity)}`}>{issue.severity}</span>
-                    </div>
-                    <p className="text-sm text-slate-200 mt-1">{issue.title}</p>
-                    <div className="grid grid-cols-3 gap-2 text-xs text-slate-400 mt-2">
-                      <div>Owner: {issue.owner}</div>
-                      <div>Status: {issue.status}</div>
-                      <div>ETA: {issue.eta}</div>
-                    </div>
-                  </div>
-                ))}
-                {!finalIssueRows.length && <p className="text-sm text-slate-400">No issue-level insights yet.</p>}
-              </div>
-            </div>
-          </div>
-
           <div className="card p-4 rounded-xl border border-slate-700/80">
             <h2 className="text-[30px] font-bold tracking-tight text-slate-100">Module-Wise Insights</h2>
-            <p className="text-sm text-slate-400 mt-1">Health, velocity, risk, and quality indicators by module.</p>
+            <p className="text-sm text-slate-400 mt-1">Health, velocity, risk, and quality indicators by epic.</p>
             <div className="space-y-2 mt-3">
               {moduleWise.map((module) => (
                 <div key={module.module} className="rounded-lg border border-slate-700/80 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xl font-semibold text-slate-100">{module.module}</p>
-                    <p className="text-sm text-slate-400">Velocity {module.velocity}</p>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xl font-semibold text-slate-100">{module.module}</p>
+                      {module.epicKey && module.epicKey !== module.module && (
+                        <p className="text-xs text-slate-500 mt-0.5">{module.epicKey}</p>
+                      )}
+                      {module.summary && (
+                        <p className="text-xs text-slate-400 mt-1 leading-5">{module.summary}</p>
+                      )}
+                    </div>
+                    <p className="text-sm text-slate-400 shrink-0">Velocity {module.velocity}</p>
                   </div>
                   <div className="mt-2 h-2 rounded-full bg-slate-700/70 overflow-hidden">
                     <span className="block h-full bg-indigo-500" style={{ width: percentValue(module.progress) }} />

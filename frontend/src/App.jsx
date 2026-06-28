@@ -7,7 +7,6 @@ import RegisterPage from '@/pages/Register'
 import ResetPasswordPage from '@/pages/ResetPassword'
 import AuthCallbackPage from '@/pages/AuthCallback'
 import VerifyEmailPage from '@/pages/VerifyEmail'
-import OverviewPage from '@/pages/Overview'
 import ProjectsPage from '@/pages/Projects'
 import ProjectWorkspacePage from '@/pages/ProjectWorkspace'
 import BacklogEditorPage from '@/pages/BacklogEditor'
@@ -20,7 +19,7 @@ import AdminLoginPage from '@/pages/AdminLogin'
 import AdminOverviewPage from '@/pages/AdminOverview'
 import AdminAIConfigPage from '@/pages/AdminAIConfig'
 
-const getHomeByRole = (user) => (user?.role === 'admin' ? '/admin/overview' : '/overview')
+const getHomeByRole = (user) => (user?.role === 'admin' ? '/admin/overview' : '/projects')
 
 const UserRoute = ({ children }) => {
   const { token, user } = useAuthStore()
@@ -32,7 +31,7 @@ const UserRoute = ({ children }) => {
 const AdminRoute = ({ children }) => {
   const { token, user } = useAuthStore()
   if (!token) return <Navigate to="/admin/login" replace />
-  if (user?.role !== 'admin') return <Navigate to="/overview" replace />
+  if (user?.role !== 'admin') return <Navigate to="/projects" replace />
   return children
 }
 
@@ -68,7 +67,6 @@ export default function App() {
 
       {/* User application (non-admin roles only) */}
       <Route path="/" element={<UserRoute><Layout /></UserRoute>}>
-        <Route path="overview" element={<OverviewPage />} />
         <Route path="ai-planner" element={<AIPlannerPage />} />
         <Route path="workspace" element={<WorkspacePage />} />
         <Route path="projects" element={<ProjectsPage />} />
@@ -76,7 +74,8 @@ export default function App() {
         <Route path="projects/:id/backlog-editor" element={<BacklogEditorPage />} />
         <Route path="insights" element={<InsightsPage />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route path="dashboard" element={<Navigate to="/overview" replace />} />
+        <Route path="dashboard" element={<Navigate to="/projects" replace />} />
+        <Route index element={<Navigate to="/projects" replace />} />
       </Route>
 
       <Route path="/admin" element={<AdminRoute><AdminLayout /></AdminRoute>}>

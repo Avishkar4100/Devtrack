@@ -21,6 +21,9 @@ const normalizeDeepseekModels = (models) => (models || DEEPSEEK_OFFICIAL_MODELS)
   typeof model === 'string' ? { value: model, label: model } : model
 ))
 
+const DEEPSEEK_OFFICIAL_DEFAULT_MAX_TOKENS = 120000
+const MAX_TOKENS_LIMIT = 200000
+
 const defaultForm = {
   name: '',
   provider: 'openrouter',
@@ -44,7 +47,9 @@ const toForm = (cfg) => ({
   deepseekThinking: cfg.deepseekThinking ?? true,
   deepseekReasoningEffort: cfg.deepseekReasoningEffort || 'high',
   temperature: cfg.temperature ?? 0.2,
-  maxTokens: cfg.maxTokens ?? 4096,
+  maxTokens: (cfg.provider || 'openrouter') === 'deepseek_api'
+    ? Math.max(Number(cfg.maxTokens || 0), DEEPSEEK_OFFICIAL_DEFAULT_MAX_TOKENS)
+    : (cfg.maxTokens ?? 4096),
 })
 
 export default function AdminAIConfigPage() {
@@ -129,6 +134,16 @@ export default function AdminAIConfigPage() {
     setIsCreating(false)
   }
 
+  const updateProvider = (provider) => {
+    setAiForm((s) => ({
+      ...s,
+      provider,
+      maxTokens: provider === 'deepseek_api'
+        ? Math.max(Number(s.maxTokens || 0), DEEPSEEK_OFFICIAL_DEFAULT_MAX_TOKENS)
+        : s.maxTokens,
+    }))
+  }
+
   const startCreate = () => {
     setSelectedId(null)
     setAiForm({
@@ -208,7 +223,7 @@ export default function AdminAIConfigPage() {
           </div>
 
           <div className="grid md:grid-cols-2 gap-2">
-            <select className="input" value={aiForm.provider} onChange={(e) => setAiForm((s) => ({ ...s, provider: e.target.value }))}>
+            <select className="input" value={aiForm.provider} onChange={(e) => updateProvider(e.target.value)}>
               {(opts?.providers || ['openrouter', 'deepseek_local', 'deepseek_api', 'manual_bridge']).map((p) => (
                 <option key={p} value={p}>{PROVIDER_LABELS[p] || p}</option>
               ))}
@@ -278,9 +293,18 @@ export default function AdminAIConfigPage() {
 
           <div className="grid md:grid-cols-2 gap-2">
             <input className="input" type="number" min="0" max="2" step="0.1" placeholder="Temperature" value={aiForm.temperature} onChange={(e) => setAiForm((s) => ({ ...s, temperature: Number(e.target.value) }))} />
-            <input className="input" type="number" min="128" max="32768" step="1" placeholder="Max Tokens" value={aiForm.maxTokens} onChange={(e) => setAiForm((s) => ({ ...s, maxTokens: Number(e.target.value) }))} />
+            <input
+              className="input"
+              type="number"
+              min={aiForm.provider === 'deepseek_api' ? DEEPSEEK_OFFICIAL_DEFAULT_MAX_TOKENS : 128}
+              max={MAX_TOKENS_LIMIT}
+              step="1"
+              placeholder="Max Tokens"
+              value={aiForm.maxTokens}
+              onChange={(e) => setAiForm((s) => ({ ...s, maxTokens: Number(e.target.value) }))}
+            />
             <p className="text-xs text-slate-400 md:col-span-2">
-              Temperature controls creativity (0 = deterministic, 1+ = more creative). Max Tokens is the response length limit.
+              Temperature controls creativity (0 = deterministic, 1+ = more creative). DeepSeek Official uses at least 120000 max tokens.
             </p>
           </div>
 

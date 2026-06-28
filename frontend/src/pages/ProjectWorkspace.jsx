@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import api from '@/lib/api'
 import { useProjectStore } from '@/store/projectStore'
 import { useWorkspaceStateStore } from '@/store/workspaceStateStore'
+import {
+  IssueProgressSection,
+  SnapshotRollupSection,
+  SnapshotSummaryHero,
+} from '@/components/projectSnapshot/ProjectSnapshotComponents'
 
 const TABS = [
   { id: 'overview', label: 'Project Overview' },
@@ -70,6 +75,7 @@ const getActivityVisual = (item = {}) => {
 export default function ProjectWorkspacePage() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const setSelectedProjectId = useProjectStore((state) => state.setSelectedProjectId)
   const setSelectedJiraProjectKey = useProjectStore((state) => state.setSelectedJiraProjectKey)
 
@@ -145,22 +151,50 @@ export default function ProjectWorkspacePage() {
   const {
     data: scrumMarkdownInsights,
     isFetching: loadingScrumMarkdown,
-    refetch: loadScrumMarkdownInsights,
   } = useQuery({
     queryKey: ['project-scrum-markdown-insights', id],
     enabled: false,
-    queryFn: async () => (await api.get(`/insights/${id}/scrum-markdown`)).data.data,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    staleTime: Infinity,
+    queryFn: async () => (await api.get(`/insights/${id}/scrum-markdown`, { params: { refresh: 'true' }, timeout: 240000 })).data.data,
   })
 
-  const handleLoadScrumMarkdown = async () => {
+  // On mount: restore persisted snapshot from project data into query cache
+  useEffect(() => {
+    if (!project?.deliverySnapshot?.summary) return
+    const existing = queryClient.getQueryData(['project-scrum-markdown-insights', id])
+    if (!existing || !existing.summary) {
+      queryClient.setQueryData(['project-scrum-markdown-insights', id], {
+        ...project.deliverySnapshot,
+        cached: true,
+        cachedAt: project.deliverySnapshotAt,
+      })
+    }
+  }, [project?.deliverySnapshot, project?.deliverySnapshotAt, id, queryClient])
+
+  // Check if DB has persisted snapshot
+  const hasPersistedSnapshot = !!project?.deliverySnapshot
+  const snapshotAge = project?.deliverySnapshotAt
+    ? Math.round((Date.now() - new Date(project.deliverySnapshotAt).getTime()) / 60000)
+    : null
+
+  const [snapshotLoading, setSnapshotLoading] = useState(false)
+
+  const handleLoadSnapshot = async () => {
+    setSnapshotLoading(true)
     try {
-      const result = await loadScrumMarkdownInsights()
-      if (result?.isError || result?.status === 'error') {
-        throw result?.error || new Error('Failed to load AI snapshot')
+      const res = await api.get(`/insights/${id}/scrum-markdown`, { params: { refresh: 'true' }, timeout: 240000 })
+      const data = res?.data?.data
+      if (data) {
+        queryClient.setQueryData(['project-scrum-markdown-insights', id], data)
       }
-      toast.success('AI snapshot loaded')
+      toast.success('AI snapshot generated & saved')
     } catch (err) {
       toast.error(err?.response?.data?.message || err?.message || 'Failed to load AI snapshot')
+    } finally {
+      setSnapshotLoading(false)
     }
   }
 
@@ -218,6 +252,19 @@ export default function ProjectWorkspacePage() {
       .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
       .slice(0, 18)
   ), [recentJiraActivities, recentGithubActivities, recentPlatformActivities])
+
+  const snapshot = scrumMarkdownInsights || {}
+  const issueGroups = snapshot.issueGroups || {}
+  const epicIssues = issueGroups.epic || []
+  const storyIssues = issueGroups.story || []
+  const taskIssues = issueGroups.task || []
+  const subtaskIssues = issueGroups.subtask || []
+  const epicSummaries = snapshot.epicSummaries || []
+  const teamSummaries = snapshot.teamSummaries || []
+  const issueHighlights = snapshot.issueHighlights || []
+  const doneIssues = snapshot.doneIssues || []
+  const inProgressIssues = snapshot.inProgressIssues || []
+  const notStartedIssues = snapshot.notStartedIssues || []
 
   if (loadingProject) return <div className="p-6">Loading workspace...</div>
   if (projectLoadError) {
@@ -383,111 +430,121 @@ export default function ProjectWorkspacePage() {
         <div className="space-y-3">
           <div className="card p-4">
             <div className="flex items-center justify-between gap-2 mb-2">
-              <h3 className="text-base font-semibold">Delivery Snapshot AI Insights</h3>
+              <div>
+                <h3 className="text-base font-semibold text-slate-100">Delivery Snapshot AI Insights</h3>
+                <p className="text-xs text-slate-400 mt-1">Structured AI validation from Jira issues and matched GitHub commits</p>
+              </div>
               <button
                 type="button"
                 className="btn-secondary btn-sm"
-                onClick={handleLoadScrumMarkdown}
-                disabled={loadingScrumMarkdown}
+                onClick={handleLoadSnapshot}
+                disabled={snapshotLoading}
               >
-                {loadingScrumMarkdown ? 'Loading...' : 'Load AI Snapshot'}
+                {snapshotLoading ? 'Generating AI Snapshot...' : 'Load AI Snapshot'}
               </button>
             </div>
-            <p className="text-xs text-slate-400">Execution-first dashboard from Jira backlog + commit history</p>
-            <div className="grid sm:grid-cols-3 gap-3 mt-3 text-sm">
-              <ProgressMetric
-                label="Done"
-                value={scrumMarkdownInsights?.totals?.done || 0}
-                total={scrumMarkdownInsights?.totals?.total || 0}
-                percent={scrumMarkdownInsights?.totals?.completionPct || 0}
-                tone="emerald"
-              />
-              <ProgressMetric
-                label="In Progress"
-                value={scrumMarkdownInsights?.totals?.inProgress || 0}
-                total={scrumMarkdownInsights?.totals?.total || 0}
-                percent={
-                  (scrumMarkdownInsights?.totals?.total || 0)
-                    ? Math.round(((scrumMarkdownInsights?.totals?.inProgress || 0) / (scrumMarkdownInsights?.totals?.total || 1)) * 100)
-                    : 0
-                }
-                tone="amber"
-              />
-              <ProgressMetric
-                label="Not Started"
-                value={scrumMarkdownInsights?.totals?.notStarted || 0}
-                total={scrumMarkdownInsights?.totals?.total || 0}
-                percent={
-                  (scrumMarkdownInsights?.totals?.total || 0)
-                    ? Math.round(((scrumMarkdownInsights?.totals?.notStarted || 0) / (scrumMarkdownInsights?.totals?.total || 1)) * 100)
-                    : 0
-                }
-                tone="rose"
-              />
-            </div>
-            <div className="grid sm:grid-cols-2 gap-2 mt-3 text-xs">
-              <div className="rounded-md border border-slate-700 p-2 bg-slate-900/40">Comment Coverage: <strong>{scrumMarkdownInsights?.totals?.commentCoveragePct || 0}%</strong></div>
-              <div className="rounded-md border border-slate-700 p-2 bg-slate-900/40">Done Commit Trace Coverage: <strong>{scrumMarkdownInsights?.totals?.commitCoveragePct || 0}%</strong></div>
-            </div>
-          </div>
-
-          <div className="grid md:grid-cols-3 gap-3">
-            <div className="card p-4">
-              <h3 className="text-base font-semibold mb-2">Done Issues</h3>
-              <ul className="space-y-2 text-sm text-slate-300 max-h-80 overflow-auto pr-1">
-                {(scrumMarkdownInsights?.doneIssues || []).map((issue) => (
-                  <li key={issue.key} className="border border-emerald-700/70 rounded-md p-2 bg-emerald-900/20">
-                    <p className="font-medium text-slate-100">{issue.key} - {issue.title}</p>
-                    <p className="text-xs text-slate-400 mt-1">Owner: {issue.assignee} • Epic: {issue.epic}</p>
-                    <p className="text-xs text-slate-400">Commits: {issue.linkedCommitCount} • Comments: {issue.commentsCount}</p>
-                  </li>
-                ))}
-                {(scrumMarkdownInsights?.doneIssues || []).length === 0 && <li className="text-slate-400">No done issues yet.</li>}
-              </ul>
-            </div>
-
-            <div className="card p-4">
-              <h3 className="text-base font-semibold mb-2">In Progress Issues</h3>
-              <ul className="space-y-2 text-sm text-slate-300 max-h-80 overflow-auto pr-1">
-                {(scrumMarkdownInsights?.inProgressIssues || []).map((issue) => (
-                  <li key={issue.key} className="border border-amber-700/70 rounded-md p-2 bg-amber-900/20">
-                    <p className="font-medium text-slate-100">{issue.key} - {issue.title}</p>
-                    <p className="text-xs text-slate-400 mt-1">Owner: {issue.assignee} • Priority: {issue.priority}</p>
-                  </li>
-                ))}
-                {(scrumMarkdownInsights?.inProgressIssues || []).length === 0 && <li className="text-slate-400">No in-progress issues.</li>}
-              </ul>
-            </div>
-
-            <div className="card p-4">
-              <h3 className="text-base font-semibold mb-2">Not Started Issues</h3>
-              <ul className="space-y-2 text-sm text-slate-300 max-h-80 overflow-auto pr-1">
-                {(scrumMarkdownInsights?.notStartedIssues || []).map((issue) => (
-                  <li key={issue.key} className="border border-rose-700/70 rounded-md p-2 bg-rose-900/20">
-                    <p className="font-medium text-slate-100">{issue.key} - {issue.title}</p>
-                    <p className="text-xs text-slate-400 mt-1">Owner: {issue.assignee} • Priority: {issue.priority}</p>
-                  </li>
-                ))}
-                {(scrumMarkdownInsights?.notStartedIssues || []).length === 0 && <li className="text-slate-400">No not-started issues.</li>}
-              </ul>
-            </div>
-          </div>
-
-          <div className="card p-4">
-            <h3 className="text-base font-semibold mb-2">AI Scrum Master HTML Dashboard</h3>
-            {loadingScrumMarkdown ? (
-              <p className="text-sm text-slate-400">Generating HTML insights...</p>
-            ) : (
-              <div className="rounded-md border border-slate-700 p-3 bg-slate-900/40 max-h-[34rem] overflow-auto">
-                <div
-                  className="min-w-[320px]"
-                  dangerouslySetInnerHTML={{
-                    __html: scrumMarkdownInsights?.dashboardHtml || '<div class="text-sm text-slate-300">Click "Load AI Snapshot" to generate the dashboard.</div>',
-                  }}
-                />
-              </div>
+            {snapshot?.cached && (
+              <p className="text-[10px] text-slate-500 mt-1">Generated {new Date(snapshot.cachedAt).toLocaleString()}</p>
             )}
+            {!snapshot?.summary && hasPersistedSnapshot && (
+              <p className="text-[10px] text-slate-500 mt-1">Last snapshot saved {snapshotAge}m ago — click Load AI Snapshot to view</p>
+            )}
+            <SnapshotSummaryHero summary={snapshot.summary} totals={snapshot.totals || {}} sourceMeta={snapshot.sourceMeta || {}} />
           </div>
+
+          {/* Overall Delivery Insights - Dynamic aggregated summary */}
+          {snapshot.summary && (
+            <div className="card p-4 border border-indigo-500/20 bg-gradient-to-br from-indigo-950/30 via-slate-950 to-slate-950">
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-100">Overall Delivery Insights</h3>
+                  <p className="text-xs text-slate-400 mt-1">Comprehensive AI analysis: person-wise, epic-wise, and team-level rollups</p>
+                </div>
+              </div>
+
+              <div className="grid lg:grid-cols-3 gap-4">
+                {/* Done Summary */}
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-emerald-400 mb-2">What's Done</p>
+                  <p className="text-sm text-slate-200 leading-6">{snapshot.summary?.doneSummary || `${doneIssues.length} issues complete.`}</p>
+                  <div className="mt-3 flex items-center gap-2">
+                    <span className="text-2xl font-black text-emerald-300">{snapshot.totals?.completionPct || 0}%</span>
+                    <span className="text-xs text-slate-400">complete</span>
+                  </div>
+                </div>
+
+                {/* Remaining Summary */}
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-amber-400 mb-2">What's Left</p>
+                  <p className="text-sm text-slate-200 leading-6">{snapshot.summary?.remainingSummary || `${inProgressIssues.length + notStartedIssues.length} issues need attention.`}</p>
+                  <div className="mt-3 flex items-center gap-2">
+                    <span className="text-2xl font-black text-amber-300">{snapshot.totals?.inProgress || 0}</span>
+                    <span className="text-xs text-slate-400">in progress</span>
+                    <span className="text-2xl font-black text-rose-300 ml-2">{snapshot.totals?.notStarted || 0}</span>
+                    <span className="text-xs text-slate-400">not started</span>
+                  </div>
+                </div>
+
+                {/* Risk & Next Action */}
+                <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-4">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-rose-400 mb-2">Risk &amp; Next Action</p>
+                  <p className="text-sm text-slate-200 leading-6">{snapshot.summary?.topRisk || 'No major risk detected.'}</p>
+                  <p className="text-xs text-slate-300 mt-2 leading-5">{snapshot.summary?.nextAction || 'Continue reviewing commit evidence.'}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Epic Rollup Summaries - AI-generated epic grouping */}
+          <SnapshotRollupSection
+            title="Epic Rollup Summaries"
+            subtitle="AI-generated epic-level summaries from aggregated issue checks, showing progress per epic group."
+            items={epicSummaries}
+            emptyMessage="No epic summaries generated yet. Load the AI snapshot to see epic-level rollups."
+            kind="epic"
+          />
+
+          {/* Team Rollup Summaries - AI-generated person/owner summaries */}
+          <SnapshotRollupSection
+            title="Team &amp; Owner Summaries"
+            subtitle="AI-generated person-wise summaries: who did what, current focus, and next actions per team member."
+            items={teamSummaries}
+            emptyMessage="No team summaries generated yet. Load the AI snapshot to see owner-level rollups."
+            kind="team"
+          />
+
+          {/* Issue Highlights - Per-issue AI insights */}
+          <div className="space-y-2">
+            <IssueProgressSection
+              title="Epic Progress"
+              subtitle="Each epic is validated from the issue description and matched commit evidence."
+              items={epicIssues}
+              emptyMessage="No epic-level AI checks yet."
+              accent="emerald"
+            />
+            <IssueProgressSection
+              title="Story Progress"
+              subtitle="Story completion is scored from the strict AI check output."
+              items={storyIssues}
+              emptyMessage="No story-level AI checks yet."
+              accent="amber"
+            />
+            <IssueProgressSection
+              title="Task Progress"
+              subtitle="Tasks are grouped separately so small implementation work does not get lost."
+              items={taskIssues}
+              emptyMessage="No task-level AI checks yet."
+              accent="slate"
+            />
+            <IssueProgressSection
+              title="Sub-task Progress"
+              subtitle="Sub-tasks capture the smallest delivery slices."
+              items={subtaskIssues}
+              emptyMessage="No sub-task AI checks yet."
+              accent="slate"
+            />
+          </div>
+
         </div>
       )}
     </div>
@@ -518,3 +575,5 @@ function ProgressMetric({ label, value, total, percent, tone }) {
     </div>
   )
 }
+
+

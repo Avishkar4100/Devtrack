@@ -12,6 +12,8 @@ const { calculateCostUsd, normalizeModel } = require('../services/aiUsageService
 
 const SUPPORTED_AI_PROVIDERS = ['openrouter', 'deepseek_local', 'deepseek_api', 'manual_bridge'];
 const DEEPSEEK_OFFICIAL_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'];
+const DEFAULT_MAX_TOKENS = 4096;
+const DEEPSEEK_OFFICIAL_MIN_MAX_TOKENS = 120000;
 
 const getDefaultDeepseekModel = (provider) => (
   provider === 'deepseek_api'
@@ -69,8 +71,11 @@ const normalizeAIConfig = (cfg, userId, index = 0) => {
     cfg.deepseekBudgetUsd = 0;
     changed = true;
   }
-  if (!cfg.maxTokens || Number(cfg.maxTokens) < 4096) {
-    cfg.maxTokens = 4096;
+  const minMaxTokens = cfg.provider === 'deepseek_api'
+    ? DEEPSEEK_OFFICIAL_MIN_MAX_TOKENS
+    : DEFAULT_MAX_TOKENS;
+  if (!cfg.maxTokens || Number(cfg.maxTokens) < minMaxTokens) {
+    cfg.maxTokens = minMaxTokens;
     changed = true;
   }
   if (!cfg.manualBridgeTimeoutSeconds || Number(cfg.manualBridgeTimeoutSeconds) < 30) {
@@ -97,6 +102,7 @@ const ensureAIConfigs = async (userId = null) => {
       deepseekThinking: true,
       deepseekReasoningEffort: 'high',
       deepseekBudgetUsd: 0,
+      maxTokens: DEFAULT_MAX_TOKENS,
       isActive: true,
       updatedBy: userId || undefined,
     });
@@ -162,6 +168,15 @@ const buildAIConfigPayload = (body = {}) => {
     if (Number.isNaN(payload.deepseekBudgetUsd) || payload.deepseekBudgetUsd < 0) {
       throw new Error('Invalid deepseekBudgetUsd. Must be a non-negative number');
     }
+  }
+  if (payload.maxTokens !== undefined) {
+    payload.maxTokens = Number(payload.maxTokens);
+    if (Number.isNaN(payload.maxTokens) || payload.maxTokens < 128) {
+      throw new Error('Invalid maxTokens. Must be at least 128');
+    }
+  }
+  if (payload.provider === 'deepseek_api' && (!payload.maxTokens || payload.maxTokens < DEEPSEEK_OFFICIAL_MIN_MAX_TOKENS)) {
+    payload.maxTokens = DEEPSEEK_OFFICIAL_MIN_MAX_TOKENS;
   }
   return payload;
 };
@@ -268,6 +283,8 @@ const getAIConfig = async (req, res) => {
         deepseekDefaultThinking: true,
         deepseekReasoningEffortOptions: ['high', 'max'],
         deepseekDefaultBudgetUsd: 0,
+        deepseekOfficialDefaultMaxTokens: DEEPSEEK_OFFICIAL_MIN_MAX_TOKENS,
+        maxTokensLimit: 200000,
         manualBridgeDefaultTimeoutSeconds: Number(process.env.MANUAL_BRIDGE_TIMEOUT_SECONDS || 1800),
       },
     },

@@ -55,9 +55,45 @@ const getProjects = async (req, res) => {
   const projects = await Project.find(filter)
     .populate('owner', 'name email avatar')
     .populate('members.user', 'name email avatar')
-    .sort('-createdAt');
+    .sort('-createdAt')
+    .lean();
 
-  res.status(200).json({ success: true, count: projects.length, data: projects });
+  // Enrich each project with real stats from delivery snapshot or Story counts
+  const enrichedProjects = await Promise.all(projects.map(async (project) => {
+    // Prefer delivery snapshot totals if available
+    if (project.deliverySnapshot && project.deliverySnapshot.totals) {
+      const t = project.deliverySnapshot.totals;
+      return {
+        ...project,
+        totalStories: t.total || project.totalStories || 0,
+        completedStories: t.done || project.completedStories || 0,
+        inProgressStories: t.inProgress || project.inProgressStories || 0,
+        completionPercentage: t.completionPct ?? project.completionPercentage ?? 0,
+      };
+    }
+
+    // Fallback: count from Story model
+    try {
+      const Story = require('../models/Story');
+      const [total, completed, inProgress] = await Promise.all([
+        Story.countDocuments({ project: project._id }),
+        Story.countDocuments({ project: project._id, status: 'done' }),
+        Story.countDocuments({ project: project._id, status: 'in_progress' }),
+      ]);
+      const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+      return {
+        ...project,
+        totalStories: total || project.totalStories || 0,
+        completedStories: completed || project.completedStories || 0,
+        inProgressStories: inProgress || project.inProgressStories || 0,
+        completionPercentage: pct || project.completionPercentage || 0,
+      };
+    } catch {
+      return project;
+    }
+  }));
+
+  res.status(200).json({ success: true, count: enrichedProjects.length, data: enrichedProjects });
 };
 
 // @desc    Get single project
@@ -88,7 +124,30 @@ const getProject = async (req, res) => {
     return res.status(403).json({ success: false, message: 'Not authorized to view this project' });
   }
 
-  res.status(200).json({ success: true, data: project });
+  // Enrich with real stats
+  const projectObj = project.toObject();
+  if (project.deliverySnapshot && project.deliverySnapshot.totals) {
+    const t = project.deliverySnapshot.totals;
+    projectObj.totalStories = t.total || project.totalStories || 0;
+    projectObj.completedStories = t.done || project.completedStories || 0;
+    projectObj.inProgressStories = t.inProgress || project.inProgressStories || 0;
+    projectObj.completionPercentage = t.completionPct ?? project.completionPercentage ?? 0;
+  } else {
+    try {
+      const Story = require('../models/Story');
+      const [total, completed, inProgress] = await Promise.all([
+        Story.countDocuments({ project: project._id }),
+        Story.countDocuments({ project: project._id, status: 'done' }),
+        Story.countDocuments({ project: project._id, status: 'in_progress' }),
+      ]);
+      projectObj.totalStories = total || project.totalStories || 0;
+      projectObj.completedStories = completed || project.completedStories || 0;
+      projectObj.inProgressStories = inProgress || project.inProgressStories || 0;
+      projectObj.completionPercentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+    } catch { /* keep existing values */ }
+  }
+
+  res.status(200).json({ success: true, data: projectObj });
 };
 
 // @desc    Create project

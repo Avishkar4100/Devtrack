@@ -96,6 +96,15 @@ const ProjectSchema = new mongoose.Schema(
       default: '#6366f1',
     },
     tags: [String],
+    // Cached AI delivery snapshot
+    deliverySnapshot: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+    deliverySnapshotAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

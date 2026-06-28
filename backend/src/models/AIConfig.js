@@ -53,7 +53,7 @@ const AIConfigSchema = new mongoose.Schema(
       type: Number,
       default: 4096,
       min: 128,
-      max: 32768,
+      max: 200000,
     },
     manualBridgeTimeoutSeconds: {
       type: Number,

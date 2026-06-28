@@ -88,20 +88,6 @@ const checkHealth = async () => {
       data: response.data,
     };
   } catch (error) {
-    try {
-      const response = await aiClient.get('/', { timeout: 5000 });
-      return {
-        online: true,
-        data: {
-          status: 'healthy',
-          fallback: true,
-          root: response.data || null,
-        },
-      };
-    } catch (_) {
-      // fall through to offline handling below
-    }
-
     if (isServiceUnavailableError(error)) {
       return {
         online: false,
@@ -156,6 +142,16 @@ const generateStories = async ({
     const aiConfig = await getActiveAIConfigPayload();
     // FIX #4: Support both selectedPath (legacy) and selectedPlanningPaths (new)
     const paths = selectedPlanningPaths || (selectedPath ? [selectedPath] : []);
+    const generateMaxTokens = Number(process.env.GENERATE_STORIES_MAX_TOKENS || 32768);
+    const effectiveAiConfig = {
+      ...(aiConfig || {}),
+      maxTokens: Math.max(Number(aiConfig?.maxTokens || 0), generateMaxTokens),
+    };
+    logger.info(`AI Service - generateStories request project=${projectId} module=${moduleName} paths=${Array.isArray(paths) ? paths.length : 0} selectedRequirements=${Array.isArray(selectedRequirements) ? selectedRequirements.length : 0} chunkRefs=${Array.isArray(chunkRefs) ? chunkRefs.length : 0} sectionRefs=${Array.isArray(sectionRefs) ? sectionRefs.length : 0}`);
+    if (Array.isArray(paths) && paths.length) {
+      logger.info(`AI Service - generateStories selectedPaths ${paths.map((p, idx) => `${idx}:${p?.name || p?.id || 'unnamed'}`).join(' | ')}`);
+    }
+    logger.info(`AI Service - generateStories config provider=${effectiveAiConfig.provider || 'unknown'} model=${effectiveAiConfig.openrouterModel || effectiveAiConfig.deepseekModel || effectiveAiConfig.model || 'unknown'} maxTokens=${effectiveAiConfig.maxTokens}`);
     const requestSummary = buildUsageRequestSummary('generateStories', [
       `project=${projectName || projectId || 'unknown'}`,
       `module=${moduleName || 'unknown'}`,
@@ -176,11 +172,12 @@ const generateStories = async ({
       selected_requirements: Array.isArray(selectedRequirements) ? selectedRequirements : [],
       chunk_refs: Array.isArray(chunkRefs) ? chunkRefs : [],
       section_refs: Array.isArray(sectionRefs) ? sectionRefs : [],
-      ai_config: aiConfig,
+      ai_config: effectiveAiConfig,
     }, { timeout: 0 });
+    logger.info(`AI Service - generateStories response epics=${response.data?.epics?.length || 0} stories=${response.data?.stories?.length || 0} tasks=${response.data?.tasks?.length || 0} subtasks=${response.data?.subtasks?.length || 0}`);
     await recordUsageIfPresent({
       operation: 'generateStories',
-      aiConfig,
+      aiConfig: effectiveAiConfig,
       requestSummary,
       responseData: response.data,
       responseSummary: summarizeText(JSON.stringify(response.data?.epics || response.data?.stories || response.data || {}), 500),
@@ -413,7 +410,7 @@ const testLLM = async ({ prompt, aiConfig }) => {
     const response = await postWithRetry('/stories/standup-summary', {
       prompt: String(prompt || '').trim(),
       ai_config: resolvedConfig,
-    }, { timeout: 45000 }, 1);
+    }, { timeout: 90000 }, 1);
     await recordUsageIfPresent({
       operation: 'testLLM',
       aiConfig: resolvedConfig,
@@ -470,18 +467,6 @@ const extractRequirements = async ({ projectId, documentId, filePath, fileType }
 
     if (isServiceUnavailableError(error)) {
       throw asServiceUnavailable('extract requirements', error);
-    }
-
-    const status = Number(error?.response?.status || 0);
-    if (status >= 500) {
-      logger.warn('AI requirement extraction failed with upstream 5xx. Returning fallback extraction result.');
-      const fallback = getMockRequirementExtraction(fileType);
-      return {
-        ...fallback,
-        mock: true,
-        message: 'AI extraction service returned an internal error. Returning safe empty extraction so ingestion can continue.',
-        upstreamStatus: status,
-      };
     }
 
     throw error;

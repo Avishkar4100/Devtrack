@@ -21,6 +21,9 @@ const normalizeDeepseekModels = (models) => (models || DEEPSEEK_OFFICIAL_MODELS)
   typeof model === 'string' ? { value: model, label: model } : model
 ))
 
+const DEEPSEEK_OFFICIAL_DEFAULT_MAX_TOKENS = 120000
+const MAX_TOKENS_LIMIT = 200000
+
 export default function AdminControlPage() {
   const qc = useQueryClient()
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'manager' })
@@ -72,9 +75,21 @@ export default function AdminControlPage() {
       deepseekThinking: cfg.deepseekThinking ?? true,
       deepseekReasoningEffort: cfg.deepseekReasoningEffort || 'high',
       temperature: cfg.temperature,
-      maxTokens: cfg.maxTokens,
+      maxTokens: cfg.provider === 'deepseek_api'
+        ? Math.max(Number(cfg.maxTokens || 0), DEEPSEEK_OFFICIAL_DEFAULT_MAX_TOKENS)
+        : cfg.maxTokens,
       manualBridgeTimeoutSeconds: cfg.manualBridgeTimeoutSeconds || opts?.manualBridgeDefaultTimeoutSeconds || 1800,
     })
+  }
+
+  const updateProvider = (provider) => {
+    setAiForm((s) => ({
+      ...s,
+      provider,
+      maxTokens: provider === 'deepseek_api'
+        ? Math.max(Number(s.maxTokens || 0), DEEPSEEK_OFFICIAL_DEFAULT_MAX_TOKENS)
+        : s.maxTokens,
+    }))
   }
 
   return (
@@ -95,7 +110,7 @@ export default function AdminControlPage() {
         <div className="card p-4 space-y-3">
           <h2 className="text-base font-semibold text-gray-100">AI Configuration</h2>
           <div className="grid md:grid-cols-3 gap-2">
-            <select className="input" value={aiForm.provider} onChange={(e) => setAiForm((s) => ({ ...s, provider: e.target.value }))}>
+            <select className="input" value={aiForm.provider} onChange={(e) => updateProvider(e.target.value)}>
               {opts?.providers?.map((p) => <option key={p} value={p}>{PROVIDER_LABELS[p] || p}</option>)}
             </select>
             <select className="input" value={aiForm.openrouterKeyName} onChange={(e) => setAiForm((s) => ({ ...s, openrouterKeyName: e.target.value }))}>
@@ -132,7 +147,16 @@ export default function AdminControlPage() {
               <input className="input" placeholder="DeepSeek Model" value={aiForm.deepseekModel} onChange={(e) => setAiForm((s) => ({ ...s, deepseekModel: e.target.value }))} />
             )}
             <input className="input" type="number" placeholder="Temperature" value={aiForm.temperature} onChange={(e) => setAiForm((s) => ({ ...s, temperature: Number(e.target.value) }))} />
-            <input className="input" type="number" placeholder="Max Tokens" value={aiForm.maxTokens} onChange={(e) => setAiForm((s) => ({ ...s, maxTokens: Number(e.target.value) }))} />
+            <input
+              className="input"
+              type="number"
+              min={aiForm.provider === 'deepseek_api' ? DEEPSEEK_OFFICIAL_DEFAULT_MAX_TOKENS : 128}
+              max={MAX_TOKENS_LIMIT}
+              step="1"
+              placeholder="Max Tokens"
+              value={aiForm.maxTokens}
+              onChange={(e) => setAiForm((s) => ({ ...s, maxTokens: Number(e.target.value) }))}
+            />
             <input className="input" type="number" placeholder="Manual Bridge Timeout (seconds)" value={aiForm.manualBridgeTimeoutSeconds} onChange={(e) => setAiForm((s) => ({ ...s, manualBridgeTimeoutSeconds: Number(e.target.value) }))} />
           </div>
           <button className="btn-primary" onClick={() => saveAI.mutate(aiForm)} disabled={saveAI.isPending}>{saveAI.isPending ? 'Saving...' : 'Save AI Configuration'}</button>

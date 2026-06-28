@@ -452,12 +452,6 @@ const pushToJira = async (req, res) => {
   const storyPointsField = pickFieldId(jiraFields, ['story points', 'story point estimate']);
   // gh-epic-link is for Company-managed. Team-managed will use the 'parent' field.
   const epicLinkField = jiraFields.find((f) => (f.schema?.custom || '').includes('gh-epic-link'))?.id;
-  console.log("\n================ JIRA CONFIG ================");
-  console.log({
-    projectKey: project.jiraProjectKey,
-    epicLinkField,
-  });
-  console.log("=============================================\n");
   
   const results = { epics: [], stories: [], errors: [] };
   const localToJiraKeyMap = new Map(); // Tracks keys created in this specific run to immediately link children
@@ -550,24 +544,18 @@ const pushToJira = async (req, res) => {
       // HIERARCHY MAPPING: Link to Epic OR Link to Parent Story
       if (isChild) {
         // It's a Sub-task: Link to Parent Story
-        const resolvedParentKey = story.parentStory.jiraIssueKey || localToJiraKeyMap.get(story.parentStory._id.toString());
+        const parentDoc = story.parentStory;
+        const parentMongoId = parentDoc?._id?.toString?.() || (typeof parentDoc === 'string' ? parentDoc : '');
+        const resolvedParentKey = (parentDoc && typeof parentDoc === 'object' ? parentDoc.jiraIssueKey : null)
+          || localToJiraKeyMap.get(parentMongoId);
+        console.log(`[SUBTASK] ${story.title} → parentStory populated=${!!parentDoc} mongoId=${parentMongoId} resolvedKey=${resolvedParentKey}`);
         if (resolvedParentKey) payload.fields.parent = { key: resolvedParentKey };
+        else console.log(`❌ [SUBTASK] No parent key resolved for ${story.title}`);
       } else if (story.epic) {
         // It's a standard Story/Task: Link to Epic
         const resolvedEpicKey = story.epic.jiraEpicKey || localToJiraKeyMap.get(story.epic._id.toString());
-        console.log("\n============= STORY DEBUG =============");
-        console.log({
-          title: story.title,
-          type: story.type,
-          epicTitle: story.epic.title,
-          epicMongoId: story.epic._id.toString(),
-          jiraEpicKey: story.epic.jiraEpicKey,
-          resolvedEpicKey,
-          epicLinkField,
-        });
-        console.log("=======================================\n");
         if (!resolvedEpicKey) {
-          console.log("❌ No Epic Key Found For:", story.title);
+          console.log(`❌ No Epic Key Found For: ${story.title}`);
         }
         if (resolvedEpicKey) {
           if (epicLinkField) {
@@ -586,9 +574,6 @@ const pushToJira = async (req, res) => {
         results.stories.push({ id: story._id, jiraKey: story.jiraIssueKey, action: 'updated' });
         localToJiraKeyMap.set(story._id.toString(), story.jiraIssueKey);
       } else {
-        console.log("\n============= FINAL PAYLOAD =============");
-        console.dir(payload.fields, { depth: null });
-        console.log("=========================================\n");
         const response = await axios.post(`${client.baseURL}/issue`, payload, { auth: client.auth });
         currentJiraKey = response.data.key;
         await Story.findByIdAndUpdate(story._id, {
@@ -918,7 +903,10 @@ const listServerIssues = async (req, res) => {
   const resolvedJql = jql || (projectKey ? `project=${projectKey} ORDER BY updated DESC` : 'ORDER BY updated DESC');
 
   const fetchAll = String(req.query.fetchAll || 'false').toLowerCase() === 'true';
-  const fields = ['summary', 'description', 'priority', 'status', 'issuetype', 'parent', 'project', 'assignee', 'updated'];
+  const requestedFields = String(req.query.fields || '').trim();
+  const fields = requestedFields
+    ? requestedFields.split(',').map((field) => field.trim()).filter(Boolean)
+    : ['summary', 'description', 'priority', 'status', 'issuetype', 'parent', 'project', 'assignee', 'updated'];
 
   const data = fetchAll
     ? await jiraSearchAllIssues({
@@ -1009,6 +997,50 @@ const deleteServerIssue = async (req, res) => {
   const client = await getJiraClient(req.user.id);
   await jiraRequest(client, 'delete', `/issue/${req.params.issueKey}`);
   res.status(200).json({ success: true, message: 'Jira issue deleted' });
+};
+
+// @desc    Purge all Jira issues for a project
+// @route   DELETE /api/jira/server/issues/purge/:projectKey
+// @access  Private
+const purgeServerIssues = async (req, res) => {
+  const { projectKey } = req.params;
+  const client = await getJiraClient(req.user.id);
+
+  // Fetch all issue keys for the project
+  const searchData = await jiraSearchAllIssues({
+    client,
+    jql: `project=${projectKey} ORDER BY created DESC`,
+    fields: ['key'],
+    pageSize: 200,
+  });
+
+  const issueKeys = (searchData?.issues || []).map((issue) => issue.key);
+  if (!issueKeys.length) {
+    return res.status(200).json({ success: true, message: 'No issues to delete', deleted: 0, failed: 0 });
+  }
+
+  // Delete one by one sequentially (Jira rate-limits bulk deletes)
+  let deleted = 0;
+  let failed = 0;
+  const failures = [];
+  for (const key of issueKeys) {
+    try {
+      await jiraRequest(client, 'delete', `/issue/${key}`);
+      deleted++;
+    } catch (err) {
+      failed++;
+      failures.push({ key, error: err.message });
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    message: `Purged ${deleted}/${issueKeys.length} Jira issues from project ${projectKey}`,
+    deleted,
+    failed,
+    total: issueKeys.length,
+    failures: failures.slice(0, 10),
+  });
 };
 
 // @desc    List transitions for Jira issue
@@ -1320,6 +1352,7 @@ module.exports = {
   createServerIssue,
   updateServerIssue,
   deleteServerIssue,
+  purgeServerIssues,
   listServerIssueTransitions,
   transitionServerIssue,
   assignServerIssueToMe,

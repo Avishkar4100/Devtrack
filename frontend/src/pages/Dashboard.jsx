@@ -72,9 +72,11 @@ function StatCard({ label, value, Icon, accent, delay = 0, sub }) {
 
 /* ── Project Card ── */
 function ProjectCard({ project, index }) {
-  const progress = project.stats?.completedStories
-    ? Math.round((project.stats.completedStories / project.stats.totalStories) * 100)
-    : 0
+  const totalStories = project.stats?.totalStories || project.totalStories || 0
+  const completedStories = project.stats?.completedStories || project.completedStories || 0
+  const progress = totalStories
+    ? Math.round((completedStories / totalStories) * 100)
+    : (project.completionPercentage || 0)
   const color = project.color || '#6366f1'
 
   return (
@@ -106,8 +108,8 @@ function ProjectCard({ project, index }) {
                   transition={{ duration:1.2, delay: index * 0.1 + 0.3, ease:[0.16,1,0.3,1] }} />
               </div>
               <span style={{ fontSize:'11px', fontWeight:600, color:'var(--text-muted)', flexShrink:0 }}>{progress}%</span>
-              {project.stats?.totalStories > 0 && (
-                <span style={{ fontSize:'11px', color:'var(--text-faint)', flexShrink:0 }}>{project.stats.completedStories}/{project.stats.totalStories}</span>
+              {totalStories > 0 && (
+                <span style={{ fontSize:'11px', color:'var(--text-faint)', flexShrink:0 }}>{completedStories}/{totalStories}</span>
               )}
             </div>
           </div>
