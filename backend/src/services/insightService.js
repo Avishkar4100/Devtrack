@@ -110,16 +110,24 @@ const buildTeamInsights = (commits = []) => {
     byAuthor.set(name, (byAuthor.get(name) || 0) + 1);
   });
 
-  const max = Math.max(...byAuthor.values(), 1);
+  const totalCommits = [...byAuthor.values()].reduce((sum, v) => sum + v, 0) || 1;
   return [...byAuthor.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 6)
-    .map(([name, count], idx) => ({
-      name,
-      role: idx === 0 ? 'owner' : 'contributor',
-      score: Math.max(60, Math.min(95, Math.round((count / max) * 100))),
-      note: `${count} recent commits linked to project activity`,
-    }));
+    .slice(0, 8)
+    .map(([name, count], idx) => {
+      const contributionPct = Math.round((count / totalCommits) * 100);
+      // Dynamic score: base 10 + contribution % (0-80) + recency bonus (0-10)
+      const score = Math.min(99, 10 + contributionPct + (idx === 0 ? 10 : idx < 3 ? 5 : 0));
+      const role = idx === 0 ? 'Lead' : contributionPct >= 20 ? 'Core' : 'Contributor';
+      return {
+        name,
+        role,
+        score,
+        commits: count,
+        contributionPct,
+        note: `${count} commits · ${contributionPct}% of team activity`,
+      };
+    });
 };
 
 const buildModuleWise = (stories = [], epics = []) => {
@@ -127,30 +135,46 @@ const buildModuleWise = (stories = [], epics = []) => {
   const byModule = new Map();
 
   stories.forEach((s) => {
-    const module = epicMap.get(String(s.epic || '')) || 'General';
+    const epicTitle = epicMap.get(String(s.epic || ''));
+    // Only use 'Uncategorized' if no real epic mapping exists for this story
+    const module = epicTitle || (s.epic ? String(s.epic) : 'Uncategorized');
     if (!byModule.has(module)) {
-      byModule.set(module, { module, total: 0, done: 0, inProgress: 0, velocity: 0, defects: 0 });
+      byModule.set(module, { module, total: 0, done: 0, inProgress: 0, notStarted: 0, velocity: 0, defects: 0 });
     }
     const row = byModule.get(module);
     row.total += 1;
     row.velocity += s.storyPoints || 0;
     if (s.status === 'done') row.done += 1;
-    if (s.status === 'in_progress') row.inProgress += 1;
+    else if (s.status === 'in_progress') row.inProgress += 1;
+    else row.notStarted += 1;
     if (s.type === 'bug') row.defects += 1;
   });
 
-  return [...byModule.values()].map((row) => {
-    const progress = row.total ? Math.round((row.done / row.total) * 100) : 0;
-    const risk = row.defects > 2 || progress < 35 ? 'high' : progress < 65 ? 'medium' : 'low';
-    return {
-      module: row.module,
-      progress,
-      velocity: row.velocity,
-      defectLeakage: row.defects > 2 ? 'high' : row.defects > 0 ? 'medium' : 'low',
-      risk,
-      aiCoverage: progress > 65 ? 'high' : progress > 35 ? 'medium' : 'low',
-    };
-  });
+  return [...byModule.values()]
+    .filter((row) => {
+      // Filter out 'General' or 'Uncategorized' only if it has 0 stories with real data
+      if (row.module === 'General' || row.module === 'Uncategorized') {
+        return row.total > 0 && (row.done > 0 || row.inProgress > 0);
+      }
+      return true;
+    })
+    .map((row) => {
+      const progress = row.total ? Math.round((row.done / row.total) * 100) : 0;
+      const risk = row.defects > 2 || progress < 35 ? 'high' : progress < 65 ? 'medium' : 'low';
+      return {
+        module: row.module,
+        progress,
+        velocity: row.velocity,
+        total: row.total,
+        done: row.done,
+        inProgress: row.inProgress,
+        notStarted: row.notStarted,
+        defectLeakage: row.defects > 2 ? 'high' : row.defects > 0 ? 'medium' : 'low',
+        risk,
+        aiCoverage: progress > 65 ? 'high' : progress > 35 ? 'medium' : 'low',
+        summary: `${row.done} of ${row.total} issues done, ${row.inProgress} in progress, ${row.notStarted} not started`,
+      };
+    });
 };
 
 const callLLM = async (prompt, aiConfig = null) => {

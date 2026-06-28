@@ -687,26 +687,74 @@ const generateInsightsController = async (req, res) => {
 
     // Merge team summaries from snapshot
     if (Array.isArray(snap.teamSummaries) && snap.teamSummaries.length) {
-      data.teamInsights = snap.teamSummaries.map((t) => ({
-        name: t.owner || 'Unassigned',
-        role: t.doneCount > t.inProgressCount ? 'contributor' : 'owner',
-        score: Math.max(60, Math.min(95, t.progressPct || 0)),
-        note: t.summary || `${t.doneCount} done, ${t.inProgressCount} in progress, ${t.notStartedCount} not started`,
-      }));
+      data.teamInsights = snap.teamSummaries.map((t) => {
+        const doneCount = t.doneCount || 0;
+        const inProgressCount = t.inProgressCount || 0;
+        const notStartedCount = t.notStartedCount || 0;
+        const totalAssigned = doneCount + inProgressCount + notStartedCount;
+        // Dynamic score based on completion ratio + activity
+        const completionRatio = totalAssigned > 0 ? Math.round((doneCount / totalAssigned) * 100) : 0;
+        const activityBonus = inProgressCount > 0 ? 15 : 0;
+        const score = Math.min(99, Math.max(5, completionRatio + activityBonus + (doneCount >= 5 ? 10 : 0)));
+        // Role based on actual output
+        const role = doneCount >= 5 ? 'Lead' : doneCount >= 2 ? 'Core' : inProgressCount > 0 ? 'Active' : 'Contributor';
+        // Bullet-point style concise notes
+        const bullets = [];
+        if (doneCount > 0) bullets.push(`✅ ${doneCount} done`);
+        if (inProgressCount > 0) bullets.push(`🔄 ${inProgressCount} in progress`);
+        if (notStartedCount > 0) bullets.push(`⏳ ${notStartedCount} not started`);
+        if (t.currentFocus) bullets.push(`🎯 Focus: ${t.currentFocus}`);
+        if (t.risk) bullets.push(`⚠️ ${t.risk}`);
+        if (t.strengths) bullets.push(`💪 ${t.strengths}`);
+        const note = bullets.length ? bullets.join(' | ') : (t.summary || 'No activity tracked');
+        return {
+          name: t.owner || 'Unassigned',
+          role,
+          score,
+          doneCount,
+          inProgressCount,
+          notStartedCount,
+          currentFocus: t.currentFocus || '',
+          nextAction: t.nextAction || '',
+          strengths: t.strengths || '',
+          risk: t.risk || '',
+          issueKeys: t.issueKeys || [],
+          topDoneIssues: t.topDoneIssues || [],
+          note,
+        };
+      });
     }
 
     // Merge epic summaries into module-wise with Jira epic titles
     if (Array.isArray(snap.epicSummaries) && snap.epicSummaries.length) {
-      data.moduleWise = snap.epicSummaries.map((e) => ({
-        module: e.title || e.epic || 'General',
-        epicKey: (e.title && e.title !== e.epic) ? e.epic : (e.epic || 'General'),
-        summary: e.summary || '',
-        progress: e.progressPct || 0,
-        velocity: e.doneCount || 0,
-        defectLeakage: e.notStartedCount > 5 ? 'high' : e.notStartedCount > 2 ? 'medium' : 'low',
-        risk: e.progressPct < 30 ? 'high' : e.progressPct < 65 ? 'medium' : 'low',
-        aiCoverage: e.confidence > 60 ? 'high' : e.confidence > 30 ? 'medium' : 'low',
-      }));
+      data.moduleWise = snap.epicSummaries
+        .filter((e) => {
+          // Filter out 'General' only when it has no real epic title and minimal activity
+          const epicName = (e.title || e.epic || '').trim();
+          if (epicName === 'General' || epicName === 'Uncategorized') {
+            return (e.doneCount || 0) > 0 || (e.inProgressCount || 0) > 0;
+          }
+          return true;
+        })
+        .map((e) => {
+          const epicName = e.title || e.epic || 'General';
+          const isRealEpic = e.title && e.title !== e.epic;
+          return {
+            module: epicName,
+            epicKey: isRealEpic ? e.epic : (e.epic !== 'General' ? e.epic : null),
+            summary: e.summary || '',
+            progress: e.progressPct || 0,
+            velocity: e.doneCount || 0,
+            total: (e.doneCount || 0) + (e.inProgressCount || 0) + (e.notStartedCount || 0),
+            done: e.doneCount || 0,
+            inProgress: e.inProgressCount || 0,
+            notStarted: e.notStartedCount || 0,
+            defectLeakage: (e.notStartedCount || 0) > 5 ? 'high' : (e.notStartedCount || 0) > 2 ? 'medium' : 'low',
+            risk: (e.progressPct || 0) < 30 ? 'high' : (e.progressPct || 0) < 65 ? 'medium' : 'low',
+            aiCoverage: (e.confidence || 0) > 60 ? 'high' : (e.confidence || 0) > 30 ? 'medium' : 'low',
+            owners: e.owners || [],
+          };
+        });
     }
 
     // Merge issue highlights from snapshot

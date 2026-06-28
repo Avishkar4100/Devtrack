@@ -159,7 +159,7 @@ const getOverviewSummary = async (req, res) => {
     : { $or: [{ owner: req.user.id }, { 'members.user': req.user.id }] };
 
   const projects = await Project.find(projectFilter)
-    .select('_id name key status completionPercentage updatedAt color jiraProjectKey owner members')
+    .select('_id name key status completionPercentage updatedAt color jiraProjectKey owner members deliverySnapshot')
     .sort('-updatedAt')
     .lean();
 
@@ -170,20 +170,46 @@ const getOverviewSummary = async (req, res) => {
 
   const enrichedProjects = projects.map((project) => {
     const insight = insightByProjectId.get(project._id.toString()) || {};
+    const snap = project.deliverySnapshot || {};
+    const snapTotals = snap.totals || {};
+
+    // Priority: deliverySnapshot (Jira) > insight (MongoDB Stories) > Project model field
+    const totalStories = snapTotals.total || insight.totalStories || project.totalStories || 0;
+    const completedStories = snapTotals.done || insight.completedStories || project.completedStories || 0;
+    const completionPct = snapTotals.completionPct !== undefined
+      ? snapTotals.completionPct
+      : insight.progressPercentage !== undefined
+        ? insight.progressPercentage
+        : project.completionPercentage || 0;
+
+    // Risk: use insight risk, but override to 'high' if snapshot shows large backlog
+    let risk = insight.risk || 'low';
+    if (snapTotals.notStarted > 10 && (snapTotals.done || 0) < 5) risk = 'high';
+    else if (snapTotals.notStarted > 5 && completionPct < 30) risk = 'high';
+    else if (completionPct < 15 && totalStories > 5) risk = 'medium';
+
+    // Active developers from snapshot or insight
+    const activeDevs = (Array.isArray(snap.teamSummaries) && snap.teamSummaries.length)
+      ? snap.teamSummaries.filter((t) => (t.doneCount || 0) > 0 || (t.inProgressCount || 0) > 0).map((t) => t.owner)
+      : insight.activeDevelopers || [];
+
+    // Summary: prefer snapshot headline
+    const projectSummary = snap.overallSummary?.summary || snap.summaryText || insight.summary || '';
+
     return {
       _id: project._id.toString(),
       name: project.name,
       key: project.key,
       status: project.status,
-      completionPercentage: project.completionPercentage || 0,
+      completionPercentage: completionPct,
       updatedAt: project.updatedAt,
       color: project.color,
       jiraProjectKey: project.jiraProjectKey || null,
-      risk: insight.risk || 'low',
-      summary: insight.summary || '',
-      activeDevelopers: insight.activeDevelopers || [],
-      totalStories: insight.totalStories || 0,
-      completedStories: insight.completedStories || 0,
+      risk,
+      summary: projectSummary,
+      activeDevelopers: activeDevs,
+      totalStories,
+      completedStories,
     };
   });
 
@@ -193,6 +219,14 @@ const getOverviewSummary = async (req, res) => {
     ? Math.round(enrichedProjects.reduce((sum, p) => sum + (p.completionPercentage || 0), 0) / totalProjects)
     : 0;
   const highRiskProjects = enrichedProjects.filter((p) => p.risk === 'high').length;
+
+  // Build richer global summary from enriched data
+  const totalOpenStories = enrichedProjects.reduce((sum, p) => sum + Math.max((p.totalStories || 0) - (p.completedStories || 0), 0), 0);
+  const dynamicSummary = totalProjects === 0
+    ? 'No project activity found yet.'
+    : `${highRiskProjects} high-risk project${highRiskProjects !== 1 ? 's' : ''} detected. ` +
+      `Average progress is ${avgProgress}%. ` +
+      `${totalOpenStories} open stories across ${totalProjects} project${totalProjects !== 1 ? 's' : ''}.`;
 
   const defaultProject = enrichedProjects.find((p) => p.status === 'active') || enrichedProjects[0] || null;
 
@@ -205,7 +239,7 @@ const getOverviewSummary = async (req, res) => {
         avgProgress,
         highRiskProjects,
       },
-      summary: insights.summary,
+      summary: dynamicSummary,
       projects: enrichedProjects,
       selectedProjectId: defaultProject?._id?.toString?.() || defaultProject?._id || null,
       selectedJiraProjectKey: defaultProject?.jiraProjectKey || null,

@@ -255,7 +255,6 @@ export default function ProjectWorkspacePage() {
 
   const snapshot = scrumMarkdownInsights || {}
   const issueGroups = snapshot.issueGroups || {}
-  const epicIssues = issueGroups.epic || []
   const storyIssues = issueGroups.story || []
   const taskIssues = issueGroups.task || []
   const subtaskIssues = issueGroups.subtask || []
@@ -515,13 +514,6 @@ export default function ProjectWorkspacePage() {
 
           {/* Issue Highlights - Per-issue AI insights */}
           <div className="space-y-2">
-            <IssueProgressSection
-              title="Epic Progress"
-              subtitle="Each epic is validated from the issue description and matched commit evidence."
-              items={epicIssues}
-              emptyMessage="No epic-level AI checks yet."
-              accent="emerald"
-            />
             <IssueProgressSection
               title="Story Progress"
               subtitle="Story completion is scored from the strict AI check output."
